@@ -50,9 +50,19 @@ identified during adversarial review, and each is intended to be **tested**, not
 ```
 dsh/            # the plugin: provider and consumer rows (W2+)
 spike/          # W1 protocol spikes + recorded evidence
-  evidence/     # raw probe output — the primary record
-docs/           # design record and milestone results
+  evidence/     # raw session transcripts — the primary record
+docs/           # the design record
 ```
+
+## Design record
+
+| Document | What it holds |
+|---|---|
+| [docs/design.md](docs/design.md) | architecture, the eight invariants, scope, session lifecycle |
+| [docs/protocol.md](docs/protocol.md) | GPT-Live-1 over WebSocket — **everything verified live**, plus the traps that each cost a run |
+| [docs/decisions.md](docs/decisions.md) | ADRs — why client delegation, why two rows, why this repo is non-governed |
+| [docs/w1-entitlement-probe.md](docs/w1-entitlement-probe.md) | W1 milestone 1 — entitlement |
+| [docs/w1-delegation-envelope.md](docs/w1-delegation-envelope.md) | W1 milestone 2 — the delegation envelope |
 
 ## Roadmap
 

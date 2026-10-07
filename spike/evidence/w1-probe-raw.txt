@@ -1,0 +1,35 @@
+=== W1 entitlement probe — raw output ===
+command: node spike/probe-entitlement.mjs
+key source: VOICE_TOOLS_OPENAI_KEY (read from env; never printed)
+date: 2026-10-07
+
+[ 1204ms] socket open -> wss://api.openai.com/v1/live/sessions
+[ 1205ms] -> session.start (model=gpt-live-1, voice=marin, delegation=client)
+[ 3158ms] <- error
+[ 3159ms]    error: {"type":"invalid_request_error","code":"credit_balance_exhausted","message":"You have no credits remaining. Add credits to continue using the API at https://platform.openai.com/settings/organization/billing/."}
+PROBE FAIL — endpoint rejected the session (shape above is the diagnostic)
+probe exit=1
+
+=== GET /v1/models — entitlement check (free, no credit required) ===
+account model count: 150
+gpt-live-1            present   shutdown_date: null
+gpt-live-transcribe   present   shutdown_date: null
+gpt-realtime          present   shutdown_date: 2027-01-20
+gpt-realtime-2.1      present   shutdown_date: null
+gpt-realtime-whisper  present   shutdown_date: null
+
+=== key identity ===
+OPENAI_API_KEY          fp=REDACTED len=164
+VOICE_TOOLS_OPENAI_KEY  fp=REDACTED len=164
+verdict: same key
+
+=== gitignore verification (git check-ignore, not grep) ===
+.env YES | .env.local YES | secrets/x.yaml YES | foo.credentials.yaml YES
+node_modules/ws YES | lib/index.js YES | spike/out/t.wav YES | .DS_Store YES
+
+=== tracked files at first commit ===
+.gitignore
+package-lock.json
+package.json
+spike/probe-entitlement.mjs
+secret-ish tracked: none

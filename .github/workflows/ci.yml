@@ -1,0 +1,62 @@
+name: CI
+
+# Order matters: the secret scan runs FIRST, on the full history. A secret that reaches a remote is
+# irreversible, so the cheap catastrophic check goes before anything that could produce one.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # gitleaks scans the full history, not the working tree: a secret removed in a later commit
+          # is still published.
+          fetch-depth: 0
+
+      - name: Secret scan (full history)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      # --frozen-lockfile: CI must fail on a lockfile that does not match the manifests, rather than
+      # quietly resolving something else.
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Typecheck (src and tests)
+        run: pnpm typecheck
+
+      # Carries the per-file 100% threshold on all four axes. A suite that passes without it is not a gate.
+      - name: Test with the coverage gate
+        run: pnpm test:coverage
+
+      # The published artifact under plain node, booting a real cordis.yml through the real Loader.
+      # tsx and vitest both mask resolution and interop failures this catches.
+      - name: Built-artifact composition smoke
+        run: pnpm test:built
+
+      - name: Dependency audit
+        run: pnpm audit --audit-level high

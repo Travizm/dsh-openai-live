@@ -13,9 +13,14 @@
     "typecheck": "tsc -p tsconfig.tests.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "test:built": "node scripts/built-composition.mjs",
+    "gate": "pnpm build && pnpm typecheck && pnpm test:coverage && pnpm test:built"
   },
   "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.4",
+    "@deepseek-ai/cordis-plugin-include": "^1.0.9",
+    "@deepseek-ai/cordis-plugin-loader": "^1.0.5",
     "@types/node": "^26.6.4",
     "@types/ws": "^8.18.2",
     "@vitest/coverage-v8": "^5.0.3",

@@ -245,10 +245,8 @@ export class OpenAiLiveSession implements RealtimeSession {
       }
       case 'error': {
         const failure = toProviderError(event)
-        if (failure !== undefined) {
-          this.failPending(failure)
-          this.handlers.onError?.(failure)
-        }
+        this.failPending(failure)
+        this.handlers.onError?.(failure)
         return
       }
       case 'session.started':

@@ -178,10 +178,6 @@ describe('toStarted', () => {
 })
 
 describe('toProviderError', () => {
-  it('returns undefined for a non-error frame', () => {
-    expect(toProviderError({ type: 'session.started' })).toBeUndefined()
-  })
-
   it('preserves the field-naming detail, which is the fastest available specification', () => {
     const error = toProviderError({
       type: 'error',

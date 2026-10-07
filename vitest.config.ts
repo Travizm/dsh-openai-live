@@ -13,9 +13,9 @@ const pkg = (path: string) => fileURLToPath(new URL(path, import.meta.url))
  * through its package `exports` to built `lib/`, so the suite would test stale artifacts and load a
  * second copy of module singletons. The harness enforces the same rule via tsconfig paths.
  *
- * The coverage target matches the harness's: per-file 100% on `packages/*​/src`. Thresholds are
- * enforced once each package is complete, so a half-built package reads as unfinished rather than as
- * a passing suite.
+ * The coverage target is the harness's own: per-file 100% on `packages/*​/src`. It is ENFORCED, not
+ * merely reported — a half-built package must read as unfinished rather than as a passing suite, and
+ * a threshold nobody fails is not a gate.
  */
 export default defineConfig({
   resolve: {
@@ -30,7 +30,8 @@ export default defineConfig({
       provider: 'v8',
       include: ['packages/*/src/**/*.ts'],
       exclude: ['packages/*/src/types.ts'],
-      reporter: ['text', 'json-summary'],
+      reporter: ['text', 'json-summary', 'json'],
+      thresholds: { perFile: true, statements: 100, branches: 100, functions: 100, lines: 100 },
     },
   },
 })

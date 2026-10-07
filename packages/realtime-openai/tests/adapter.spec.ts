@@ -180,7 +180,7 @@ describe('handshake', () => {
   })
 
   it('sends the bearer header, the endpoint, and a client-delegation session.start', async () => {
-    const { factory, transport } = await openSession()
+    const { factory, transport, pending } = await openSession()
     expect(factory.urls).toEqual(['wss://example.test/v1/live/sessions'])
     expect(factory.headers[0]).toEqual({ Authorization: `Bearer ${KEY}` })
     expect(transport.parsed()[0]).toEqual({
@@ -191,6 +191,54 @@ describe('handshake', () => {
         delegation: { type: 'client' },
       },
     })
+    // Settle the attempt. A test that starts an async operation owns it through teardown: leaving the
+    // establishment timer to fire into an unawaited promise reports an unhandled rejection instead.
+    transport.deliver(STARTED_EVENT)
+    await pending
+  })
+
+  it('omits instructions the caller never gave, rather than sending an empty field', async () => {
+    // The endpoint rejects unknown fields, so an omitted instruction must be absent, not blank.
+    const { transport, pending } = await openSession()
+    const frame = transport.parsed()[0] as { session: Record<string, unknown> }
+    expect('instructions' in frame.session).toBe(false)
+    transport.deliver(STARTED_EVENT)
+    await pending
+  })
+
+  it('carries instructions when the caller supplies them', async () => {
+    const factory = new FakeFactory()
+    const adapter = new OpenAiLiveAdapter(config(), factory)
+    const pending = adapter.session({ provider: 'openai-live', model: 'gpt-live-1', instructions: 'Be brief.' })
+    await tick()
+    const frame = factory.transport?.parsed()[0] as { session: Record<string, unknown> }
+    expect(frame.session.instructions).toBe('Be brief.')
+    factory.transport?.deliver(STARTED_EVENT)
+    await pending
+  })
+
+  it('falls back to the configured model when the caller names none', async () => {
+    // The seam rejects an empty model before reaching an adapter; this covers a direct caller.
+    const factory = new FakeFactory()
+    const adapter = new OpenAiLiveAdapter(config(), factory)
+    const pending = adapter.session({ provider: 'openai-live', model: '' })
+    await tick()
+    const frame = factory.transport?.parsed()[0] as { session: { model: string } }
+    expect(frame.session.model).toBe('gpt-live-1')
+    factory.transport?.deliver(STARTED_EVENT)
+    await pending
+  })
+
+  it('names the failure generically when a provider error carries no message', async () => {
+    const { transport, pending } = await openSession()
+    transport.deliver({ type: 'error', error: {} })
+    await expect(pending).rejects.toMatchObject({ code: 'PROVIDER_ERROR' })
+  })
+
+  it('omits the reason when the transport closes with none before establishment', async () => {
+    const { transport, pending } = await openSession()
+    transport.drop(1006, '')
+    await expect(pending).rejects.toThrow('established (1006)')
   })
 
   it('resolves with the facts the provider accepted', async () => {
@@ -415,6 +463,23 @@ describe('the delegation path', () => {
     expect(() => transport.deliver({ type: 'session.commentary.appended' })).not.toThrow()
   })
 
+  it('does not settle an append of one kind with an acknowledgement of another', async () => {
+    // Kinds are not interchangeable: a `thinking` ack must leave a `commentary` append outstanding,
+    // otherwise a provider that acknowledges out of order would silently complete the wrong promise.
+    const { transport, session } = liveSession()
+    const pending = session.appendCommentary('two')
+    transport.deliver({ type: 'session.thinking.appended' })
+    transport.deliver({ type: 'session.commentary.appended' })
+    await expect(pending).resolves.toBeUndefined()
+  })
+
+  it('treats an empty echoed client id as absent, falling back to FIFO', async () => {
+    const { transport, session } = liveSession()
+    const pending = session.appendThinking('one')
+    transport.deliver({ type: 'session.thinking.appended', client_event_id: '' })
+    await expect(pending).resolves.toBeUndefined()
+  })
+
   it('fails loudly when the provider never acknowledges', async () => {
     const { session } = liveSession({}, 5)
     await expect(session.appendCommentary('anything')).rejects
@@ -483,6 +548,22 @@ describe('session callbacks', () => {
     expect(usage).toEqual([7])
   })
 
+  it('ignores a known frame whose payload is unusable, without throwing', () => {
+    // Each of these types IS one this adapter reads, so the frame is not filtered out — the payload
+    // is simply not usable. Returning undefined is the translation layer's way of saying "ignore
+    // this frame", and nothing may be surfaced or thrown.
+    const seen: unknown[] = []
+    const { transport } = liveSession({
+      onTranscript: t => seen.push(t),
+      onDelegation: d => seen.push(d),
+      onUsage: u => seen.push(u),
+    })
+    transport.deliver({ type: 'session.input_transcript.delta', delta: 5 })
+    transport.deliver({ type: 'session.delegation.created', delegation: { id: '', target: 'client' } })
+    transport.deliver({ type: 'session.usage.updated', usage: { seconds: 'seven' } })
+    expect(seen).toEqual([])
+  })
+
   it('ignores frames it does not know, rather than failing the session', () => {
     const { transport, session } = liveSession()
     expect(() => transport.deliver({ type: 'session.something.new' })).not.toThrow()
@@ -546,6 +627,17 @@ describe('session teardown', () => {
     const { session } = liveSession({ onClosed: r => reasons.push(r) })
     session.handleTransportClose()
     expect(reasons).toEqual([undefined])
+  })
+
+  it('is idempotent about finalising: a second close report does not re-notify', () => {
+    // `close()` returns early once closed, so nothing else reaches this guard. A transport that
+    // reports a close twice would otherwise notify the consumer twice and re-fail settled appends.
+    const closed = vi.fn()
+    const { session } = liveSession({ onClosed: closed })
+    session.handleTransportClose('first')
+    session.handleTransportClose('second')
+    expect(closed).toHaveBeenCalledTimes(1)
+    expect(closed).toHaveBeenCalledWith('first')
   })
 
   it('survives a session with no handlers at all', async () => {

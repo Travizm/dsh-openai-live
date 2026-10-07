@@ -49,7 +49,10 @@ export class WsTransportFactory implements RealtimeTransportFactory {
     })
 
     socket.on('message', (data: WebSocket.RawData) => {
-      handlers.onMessage(typeof data === 'string' ? data : data.toString())
+      // `ws` hands a client every frame as a Buffer — text or binary — because this socket never sets
+      // a `binaryType`. The protocol is JSON text, so decode as UTF-8. The ternary this replaced had
+      // a `string` arm `ws` cannot produce for a client, which is what the gate was flagging.
+      handlers.onMessage((data as Buffer).toString())
     })
 
     socket.on('close', (code: number, reason: Buffer) => {

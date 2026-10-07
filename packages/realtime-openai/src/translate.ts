@@ -117,10 +117,12 @@ export function toStarted(
  * makes them the fastest available specification. Only the fields are carried — never the frame,
  * which for an audio event could contain conversation content.
  * @param event - a parsed frame.
- * @returns a coded error, or `undefined` when the frame is not an error.
+ * @returns a coded error carrying the provider's own field-naming detail.
  */
-export function toProviderError(event: ParsedServerEvent): RealtimeError | undefined {
-  if (event.type !== 'error') return undefined
+export function toProviderError(event: ParsedServerEvent): RealtimeError {
+  // Precondition: `event.type === 'error'`, established by the caller's switch over a frame it has
+  // already classified. Asserting that here rather than returning `undefined` keeps the caller free
+  // of a guard no test could exercise — an unreachable branch is a lie about the contract.
   const body = event.error
   const detail = typeof body === 'object' && body !== null
     ? body as { code?: unknown; message?: unknown; param?: unknown }

@@ -29,3 +29,6 @@ spike/out/
 
 # macOS
 .DS_Store
+
+# pnpm owns the lockfile; an npm lockfile here is a stale duplicate.
+package-lock.json

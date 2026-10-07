@@ -32,3 +32,7 @@ spike/out/
 
 # pnpm owns the lockfile; an npm lockfile here is a stale duplicate.
 package-lock.json
+
+# npm writes a token into a project-level .npmrc when one is used, and a credential must never be
+# committable — not even by accident, and not even briefly.
+.npmrc

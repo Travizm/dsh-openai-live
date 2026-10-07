@@ -30,6 +30,10 @@ const PATTERNS = [
   { name: 'PEM private key block', re: /-----BEGIN [A-Z ]*PRIVATE KEY-----/g },
   { name: 'AWS access key id', re: /\bAKIA[0-9A-Z]{16}\b/g },
   { name: 'GitHub token', re: /\bgh[pousr]_[A-Za-z0-9]{20,}/g },
+  // A token written into a config file. `.npmrc` is ignored, so this only fires if one is force-added
+  // or a token is pasted into a tracked file — which is precisely when it needs to fire.
+  { name: 'npm auth token', re: /_authToken\s*=\s*(?!\s|\$)[^\s"'`]{8,}/g },
+  { name: 'legacy _auth secret', re: /\b_auth\s*=\s*(?!\s|\$)[A-Za-z0-9+/=]{16,}/g },
   // A recorded fingerprint of a real credential.
   { name: 'key fingerprint', re: /\bfp=[0-9a-f]{8,}\b/gi },
   // A credential assigned a literal value. `$VAR`, `${VAR}`, and an empty value are all fine, which is

@@ -44,7 +44,7 @@ export const inject = ['realtime']
  * without a credential — a replay or an offline profile — still composes, and the failure lands at
  * the session request as a coded error naming the setting rather than at boot with an opaque one.
  */
-export const Config: Schema<OpenAiLiveConfig> = Schema.object({
+export const Config = Schema.object({
   apiKey: Schema.string().required(false).description('OpenAI API key; supply it from the environment'),
   baseURL: Schema.string().default('wss://api.openai.com/v1/live/sessions').description('Live session endpoint'),
   provider: Schema.string().default('openai-live').description('Provider route to register on the seam'),

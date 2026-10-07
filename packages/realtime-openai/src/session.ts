@@ -254,8 +254,6 @@ export class OpenAiLiveSession implements RealtimeSession {
       case 'session.started':
         // Consumed at establishment; a repeat carries nothing new for an open session.
         return
-      default:
-        return
     }
   }
 

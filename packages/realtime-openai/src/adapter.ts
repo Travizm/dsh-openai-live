@@ -105,6 +105,10 @@ export class OpenAiLiveAdapter extends RealtimeAdapter {
     let established: OpenAiLiveSession | undefined
 
     const settleEstablish = Promise.withResolvers<RealtimeSession>()
+    // A transport that fails to open may report to these handlers before `connect` rejects, which
+    // would settle this promise with nobody awaiting it. Mark it handled: the rejection that reaches
+    // the caller is `connect`'s, and an unhandled-rejection warning would misreport a clean failure.
+    settleEstablish.promise.catch(() => undefined)
     const timer = setTimeout(() => {
       settleEstablish.reject(new RealtimeError(
         `the provider did not confirm the session within ${this.config.establishTimeoutMs}ms`,
@@ -174,6 +178,13 @@ export class OpenAiLiveAdapter extends RealtimeAdapter {
           { cause: error },
         ))
       },
+    })
+    // A failed open must not leave the establishment bound armed: the handshake never started, and a
+    // timer that outlives its operation is precisely the resource the harness requires be owned
+    // through teardown.
+    .catch((error: unknown) => {
+      clearTimeout(timer)
+      throw error
     })
 
     transport.send(sessionStart(target.model, target.instructions, target.voice))

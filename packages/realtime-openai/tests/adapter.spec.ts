@@ -270,6 +270,44 @@ describe('handshake', () => {
     transport.deliver(STARTED_EVENT)
     await expect(pending).resolves.toBeDefined()
   })
+
+  it('hands a post-establishment transport close to the session, with its reason', async () => {
+    // The transport-loss path after establishment is different from the one before it: a caller now
+    // holds a session, so the loss is a session event rather than a rejected request.
+    const reasons: Array<string | undefined> = []
+    const { transport, pending } = await openSession({}, { onClosed: r => reasons.push(r) })
+    transport.deliver(STARTED_EVENT)
+    await pending
+    transport.drop(1006, 'peer reset')
+    expect(reasons).toEqual(['peer reset'])
+  })
+
+  it('names the close code when the transport supplies no reason', async () => {
+    const reasons: Array<string | undefined> = []
+    const { transport, pending } = await openSession({}, { onClosed: r => reasons.push(r) })
+    transport.deliver(STARTED_EVENT)
+    await pending
+    transport.drop(1006, '')
+    expect(reasons[0]).toContain('transport closed (1006)')
+  })
+
+  it('hands a post-establishment transport error to the session', async () => {
+    const errors: string[] = []
+    const { transport, pending } = await openSession({}, { onError: e => errors.push(e.message) })
+    transport.deliver(STARTED_EVENT)
+    await pending
+    transport.fail(new Error('post-open failure'))
+    expect(errors).toEqual(['post-open failure'])
+  })
+
+  it('routes frames that arrive after establishment to the session, not the buffer', async () => {
+    const seen: string[] = []
+    const { transport, pending } = await openSession({}, { onTranscript: t => seen.push(t.text) })
+    transport.deliver(STARTED_EVENT)
+    await pending
+    transport.deliver({ type: 'session.input_transcript.delta', delta: 'after' })
+    expect(seen).toEqual(['after'])
+  })
 })
 
 /**
@@ -523,6 +561,16 @@ describe('session teardown', () => {
       session.sendAudio(new Uint8Array([1]))
       session.handleFrame(JSON.stringify({ type: 'session.input_transcript.delta', delta: 'x' }))
       session.handleFrame(JSON.stringify({ type: 'session.output_audio.delta', delta: 'AA==' }))
+      // Every callback is optional, so the no-handler path must cover all of them — not only the two
+      // that happen to be convenient elsewhere. An unhandled optional callback would throw here.
+      session.handleFrame(JSON.stringify({
+        type: 'session.delegation.created',
+        delegation: { id: 'i', target: 'client' },
+      }))
+      session.handleFrame(JSON.stringify({ type: 'session.usage.updated', usage: { seconds: 1 } }))
+      session.handleFrame(JSON.stringify({ type: 'session.instructions.appended' }))
+      session.handleFrame(JSON.stringify({ type: 'error', error: { message: 'boom' } }))
+      session.handleFrame(JSON.stringify({ type: 'session.closed', reason: 'bye', usage: { seconds: 2 } }))
     }).not.toThrow()
     await session.close()
   })

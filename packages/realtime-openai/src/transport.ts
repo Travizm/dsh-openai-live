@@ -29,34 +29,41 @@ export class WsTransportFactory implements RealtimeTransportFactory {
     headers: Readonly<Record<string, string>>,
     handlers: RealtimeTransportHandlers,
   ): Promise<RealtimeTransport> {
-    return await new Promise<RealtimeTransport>((resolve, reject) => {
-      const socket = new WebSocket(url, { headers: { ...headers } })
-      let opened = false
+    const settle = Promise.withResolvers<RealtimeTransport>()
+    const socket = new WebSocket(url, { headers: { ...headers } })
 
-      socket.on('open', () => {
-        opened = true
-        resolve({
-          send: (frame: string) => {
-            if (socket.readyState === WebSocket.OPEN) socket.send(frame)
-          },
-          close: () => {
-            if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) socket.close()
-          },
-        })
-      })
-
-      socket.on('message', (data: WebSocket.RawData) => {
-        handlers.onMessage(typeof data === 'string' ? data : data.toString())
-      })
-
-      socket.on('close', (code: number, reason: Buffer) => {
-        handlers.onClose(code, reason.toString())
-      })
-
-      socket.on('error', (error: Error) => {
-        if (opened) handlers.onError(error)
-        else reject(error)
+    socket.on('open', () => {
+      settle.resolve({
+        // A send on a socket that is no longer open is a no-op rather than a throw: the transport
+        // cannot know whether the session has noticed the close yet, and throwing here would surface
+        // as a session bug instead of as a transport event.
+        send: (frame: string) => {
+          if (socket.readyState === WebSocket.OPEN) socket.send(frame)
+        },
+        // Only an open socket is closable through this API. The factory hands out a transport only
+        // after open and rejects otherwise, so no caller can ever hold a connecting one.
+        close: () => {
+          if (socket.readyState === WebSocket.OPEN) socket.close()
+        },
       })
     })
+
+    socket.on('message', (data: WebSocket.RawData) => {
+      handlers.onMessage(typeof data === 'string' ? data : data.toString())
+    })
+
+    socket.on('close', (code: number, reason: Buffer) => {
+      handlers.onClose(code, reason.toString())
+    })
+
+    // One path, not two: always report to the handlers, always reject the pending connect.
+    // Rejecting an already-settled promise is a no-op, so a failure after open is reported exactly
+    // once — to the handlers — and a failure before open also reaches the caller as a rejection.
+    socket.on('error', (error: Error) => {
+      settle.reject(error)
+      handlers.onError(error)
+    })
+
+    return await settle.promise
   }
 }

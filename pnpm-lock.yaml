@@ -32,6 +32,9 @@ importers:
       vitest:
         specifier: ^5.0.3
         version: 5.0.3(@types/node@26.6.4)(@vitest/coverage-v8@5.0.3)(vite@8.3.3(@types/node@26.6.4))
+      ws:
+        specifier: ^8.22.0
+        version: 8.22.0
 
   packages/realtime:
     devDependencies:

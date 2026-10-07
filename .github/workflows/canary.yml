@@ -1,0 +1,40 @@
+name: Protocol canary
+
+# The only workflow that touches the live provider. Scheduled rather than per-PR, because it costs
+# credit and depends on a third party — and because the failure it detects (a vendor changing their
+# protocol) is a thing that happens on the vendor's schedule, not on ours.
+#
+# Without it, the first signal of protocol drift is a user bug report.
+on:
+  schedule:
+    # 21:15 UTC daily — 07:15 in Brisbane, so drift is waiting with the morning coffee.
+    - cron: '15 21 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # Self-skips when the secret is absent, so a fork or a PR from outside stays green rather than
+      # red for a reason its author cannot fix. The script itself owns that behaviour.
+      - name: Protocol drift canary
+        env:
+          OPENAI_LIVE_API_KEY: ${{ secrets.OPENAI_LIVE_API_KEY }}
+        run: pnpm canary

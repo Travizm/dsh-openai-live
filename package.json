@@ -15,6 +15,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:built": "node scripts/built-composition.mjs",
+    "canary": "node scripts/protocol-canary.mjs",
     "gate": "pnpm build && pnpm typecheck && pnpm test:coverage && pnpm test:built"
   },
   "devDependencies": {
@@ -25,6 +26,7 @@
     "@types/ws": "^8.18.2",
     "@vitest/coverage-v8": "^5.0.3",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.3"
+    "vitest": "^5.0.3",
+    "ws": "^8.22.0"
   }
 }

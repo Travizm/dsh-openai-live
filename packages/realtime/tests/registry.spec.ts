@@ -191,7 +191,7 @@ describe('model catalogue', () => {
       }
       override async listModels() {
         return [
-          { id: 'gpt-live-1', name: 'GPT Live 1', inputModalities: ['audio' as const] },
+          { id: 'gpt-live-1', name: 'GPT Live 1', inputModalities: ['audio' as const], outputModalities: ['audio', 'text'] as const },
           { id: 'gpt-live-1', name: 'duplicate' },
           { id: '', name: 'nameless' },
         ]
@@ -199,7 +199,48 @@ describe('model catalogue', () => {
     }
     service.registerAdapter(['openai-live'], new Catalogued())
     expect(await service.listModels('openai-live')).toEqual([
-      { id: 'gpt-live-1', name: 'GPT Live 1', inputModalities: ['audio'] },
+      { id: 'gpt-live-1', name: 'GPT Live 1', inputModalities: ['audio'], outputModalities: ['audio', 'text'] },
+    ])
+  })
+
+  it('returns an empty catalogue when an adapter declares none', async () => {
+    // The base-class default. Advisory by design: an adapter that advertises nothing must still be
+    // routable, because absence from a catalogue is never a reason to reject a request.
+    const { service } = mount()
+    service.registerAdapter(['openai-live'], new StubAdapter())
+    expect(await service.listModels('openai-live')).toEqual([])
+  })
+
+  it('falls back to the model id when an adapter omits or blanks a name', async () => {
+    const { service } = mount()
+    class Nameless extends RealtimeAdapter {
+      override async session(_options: RealtimeSessionOptions): Promise<RealtimeSession> {
+        throw new Error('not used')
+      }
+      override async listModels() {
+        return [{ id: 'gpt-live-1', name: '' }, { id: 'gpt-live-2' } as { id: string; name: string }]
+      }
+    }
+    service.registerAdapter(['openai-live'], new Nameless())
+    expect(await service.listModels('openai-live')).toEqual([
+      { id: 'gpt-live-1', name: 'gpt-live-1' },
+      { id: 'gpt-live-2', name: 'gpt-live-2' },
+    ])
+  })
+
+  it('carries an adapter-declared provider description through to the registry', async () => {
+    const { service } = mount()
+    class Described extends RealtimeAdapter {
+      override providerInfo(provider: string) {
+        return { id: provider, name: 'OpenAI Live', description: 'GPT-Live-1 full-duplex voice' }
+      }
+      override async session(_options: RealtimeSessionOptions): Promise<RealtimeSession> {
+        throw new Error('not used')
+      }
+    }
+    service.registerAdapter(['openai-live'], new Described())
+    expect(service.listProviders()).toEqual([
+      { id: 'openai-live', name: 'OpenAI Live', description: 'GPT-Live-1 full-duplex voice' },
     ])
   })
 })

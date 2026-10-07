@@ -1,0 +1,46 @@
+{
+  "name": "dsh-realtime",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Realtime voice capability seam for DeepSeek Harness: a provider registry plus the session adapter base.",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./types": {
+      "types": "./lib/types.d.ts",
+      "default": "./lib/types.js"
+    },
+    "./error": {
+      "types": "./lib/error.d.ts",
+      "default": "./lib/error.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/index.d.ts",
+    "lib/types.js",
+    "lib/types.d.ts",
+    "lib/error.js",
+    "lib/error.d.ts"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --dry"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.3"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.4"
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "name": "dsh-realtime-replay",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Keyless replay for the dsh-realtime seam: drives the real adapter and session from a recorded session, so CI needs no credential.",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/**/*.js",
+    "lib/**/*.d.ts"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --dry"
+  },
+  "dependencies": {
+    "dsh-realtime": "workspace:*",
+    "dsh-realtime-openai": "workspace:*"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.3",
+    "@deepseek-ai/schemastery": "^3.18.3"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.4",
+    "@deepseek-ai/schemastery": "^3.18.4"
+  }
+}

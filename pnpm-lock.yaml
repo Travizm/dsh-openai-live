@@ -46,6 +46,22 @@ importers:
         specifier: ^4.0.4
         version: 4.0.4
 
+  packages/realtime-replay:
+    dependencies:
+      dsh-realtime:
+        specifier: workspace:*
+        version: link:../realtime
+      dsh-realtime-openai:
+        specifier: workspace:*
+        version: link:../realtime-openai
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: ^4.0.4
+        version: 4.0.4
+      '@deepseek-ai/schemastery':
+        specifier: ^3.18.4
+        version: 3.18.4
+
 packages:
 
   '@babel/helper-string-parser@7.29.7':

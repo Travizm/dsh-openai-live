@@ -25,6 +25,8 @@ export const REALTIME_ERROR_CODES = Object.freeze({
   MISSING_CREDENTIAL: 'MISSING_CREDENTIAL',
   /** The provider reported a failure, or an operation it was expected to acknowledge never was. */
   PROVIDER_ERROR: 'PROVIDER_ERROR',
+  /** A recorded session could not be read as a recording. */
+  INVALID_RECORDING: 'INVALID_RECORDING',
 })
 
 /** One of {@link REALTIME_ERROR_CODES}. */

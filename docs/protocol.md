@@ -111,3 +111,29 @@ spending a session. A zero balance returns `credit_balance_exhausted` — a **bi
 entitlement one: by then authentication has already succeeded. Entitlement failure looks like
 `400 model_not_found`. OpenAI moved API orgs to prepaid credits on 2026-07-24, so an org that never
 topped up returns exactly the billing error.
+
+## Drift checking
+
+`scripts/protocol-canary.mjs` (`pnpm canary`) is the scheduled shape assertion against this endpoint.
+It exists because the first signal of a vendor protocol change should be a red build, not a user bug
+report.
+
+It is cheap because the endpoint hands the check over: rejecting an unknown **client** event returns an
+error that **enumerates the supported client events**. So one handshake — no audio, no conversation —
+verifies that all eight events this project sends are still supported, and that
+`session.input_audio.commit` still is not. Live: **11 client events reported, every one of ours among
+them.**
+
+Two limits, both found by running it rather than by reasoning about it:
+
+- **A context-append acknowledgement needs audio in flight.** A `session.instructions.append` sent
+  immediately after `session.started` — byte-identical to the frame that worked in W1 — elicits no
+  `session.instructions.appended` and no error, because the provider does not begin applying context at
+  a bare `session.start`. The canary therefore does not gate on an append ack: the recorded fixture
+  covers that path, and the canary stays audio-free and deterministic.
+- The provider's own **server → client** vocabulary is only partly reachable without audio. The canary
+  asserts the two events a handshake and a rejection elicit, and claims no more.
+
+The canary keeps its event list as a literal. A canary that read its expectations out of `wire.ts`
+could only ever agree with `wire.ts`.
+

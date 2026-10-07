@@ -27,10 +27,10 @@
     "testing",
     "keyless"
   ],
-  "homepage": "https://github.com/OWNER/dsh-openai-live",
+  "homepage": "https://github.com/Travizm/dsh-openai-live",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/OWNER/dsh-openai-live.git",
+    "url": "git+https://github.com/Travizm/dsh-openai-live.git",
     "directory": "packages/realtime-replay"
   },
   "engines": {

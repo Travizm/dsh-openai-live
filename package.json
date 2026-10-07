@@ -34,13 +34,13 @@
     "gpt-live",
     "delegation"
   ],
-  "homepage": "https://github.com/OWNER/dsh-openai-live",
+  "homepage": "https://github.com/Travizm/dsh-openai-live",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/OWNER/dsh-openai-live.git"
+    "url": "git+https://github.com/Travizm/dsh-openai-live.git"
   },
   "bugs": {
-    "url": "https://github.com/OWNER/dsh-openai-live/issues"
+    "url": "https://github.com/Travizm/dsh-openai-live/issues"
   },
   "engines": {
     "node": "^22.19.0 || >=24.0.0"

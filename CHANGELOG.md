@@ -44,5 +44,5 @@ First release. Verified against the live GPT-Live-1 API rather than against docu
   under client delegation, and client delegation has no `response.*` path at all.
 - `gpt-realtime` carries a published sunset date; `gpt-live-1` does not.
 
-[Unreleased]: https://github.com/OWNER/dsh-openai-live/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/OWNER/dsh-openai-live/releases/tag/v0.1.0
+[Unreleased]: https://github.com/Travizm/dsh-openai-live/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Travizm/dsh-openai-live/releases/tag/v0.1.0

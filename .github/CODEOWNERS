@@ -1,15 +1,15 @@
 # Default owners for everything in this repository.
 # Security-sensitive paths are called out so a review is not skipped by accident.
 
-*                                   @OWNER
+*                                   @Travizm
 
 # The credential invariant and everything that could carry a value into an artifact.
-/.gitignore                         @OWNER
-/SECURITY.md                        @OWNER
-/.github/workflows/                 @OWNER
-/scripts/built-composition.mjs      @OWNER
-/scripts/protocol-canary.mjs        @OWNER
+/.gitignore                         @Travizm
+/SECURITY.md                        @Travizm
+/.github/workflows/                 @Travizm
+/scripts/built-composition.mjs      @Travizm
+/scripts/protocol-canary.mjs        @Travizm
 
 # The wire protocol layer: translation and transport are where a provider change lands.
-/packages/realtime-openai/src/      @OWNER
-/packages/realtime/src/             @OWNER
+/packages/realtime-openai/src/      @Travizm
+/packages/realtime/src/             @Travizm

@@ -21,6 +21,10 @@ export const REALTIME_ERROR_CODES = Object.freeze({
   INVALID_APPEND: 'INVALID_APPEND',
   /** The session has already been closed. */
   SESSION_CLOSED: 'SESSION_CLOSED',
+  /** The credential an adapter needs is absent or unusable. Names the setting, never the value. */
+  MISSING_CREDENTIAL: 'MISSING_CREDENTIAL',
+  /** The provider reported a failure, or an operation it was expected to acknowledge never was. */
+  PROVIDER_ERROR: 'PROVIDER_ERROR',
 })
 
 /** One of {@link REALTIME_ERROR_CODES}. */

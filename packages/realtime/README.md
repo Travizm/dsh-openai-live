@@ -63,3 +63,7 @@ so it is withdrawn with the contributing fiber — HMR unmounts routes rather th
 - **No session resumption.** The protocol fixes provider, model, voice and delegation mode at
   startup; a seam-level `resume` would advertise a capability the wire cannot honour.
 - **The model catalogue is advisory.** Absence from `listModels` must never become request rejection.
+- **Build layout deviates from the harness's.** A `@deepseek-ai` package compiles to `lib/types` and
+  ships a separately bundled `lib/index.js`; this repo compiles flat to `lib/`. The `main`/`types`
+  entries and the `.ts`-extension import style match, so the source is portable — but packaging must
+  be reconciled before an upstream PR. Tracked here rather than silently diverging.

@@ -1,0 +1,19 @@
+{
+  "name": "dsh-openai-live",
+  "version": "0.0.0",
+  "private": true,
+  "description": "GPT-Live-1 full-duplex voice capability for DeepSeek Harness — provider row (openai-live) plus delegation consumer.",
+  "type": "module",
+  "main": "./dsh/index.js",
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "license": "MIT",
+  "scripts": {
+    "spike:entitlement": "node spike/probe-entitlement.mjs",
+    "spike:session": "node spike/live-session.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.21.0"
+  }
+}

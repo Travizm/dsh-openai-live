@@ -1,0 +1,31 @@
+# Secrets — never committed, in any branch, in any form
+.env
+.env.*
+*.credentials.yaml
+credentials*.yaml
+secrets/
+*.pem
+*.key
+*.p12
+
+# DSH runtime state — lives in $DSH_HOME, must never be vendored here
+.DSH_HOME/
+dsh-home/
+
+# Node
+node_modules/
+npm-debug.log*
+*.tsbuildinfo
+
+# Build output (shipped built at publish time, not tracked)
+lib/
+dist/
+coverage/
+
+# Spike artefacts: generated audio is reproducible and can embed a real voice;
+# recorded event fixtures ARE tracked (they are the keyless-replay evidence).
+spike/fixtures/audio/
+spike/out/
+
+# macOS
+.DS_Store

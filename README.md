@@ -2,9 +2,11 @@
 
 **GPT-Live-1 full-duplex voice for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).**
 
-> **Status: pre-alpha.** W1 (protocol spike) is in progress and currently blocked on OpenAI
-> account credit — see [`docs/w1-entitlement-probe.md`](docs/w1-entitlement-probe.md).
-> Not published. Not installable yet.
+> **Status: pre-alpha.** ✅ **W1 (protocol spike) PASSED 2026-10-07** — handshake, audio round-trip,
+> transcripts, and the client-delegation envelope are all verified against the live API.
+> See [`docs/w1-delegation-envelope.md`](docs/w1-delegation-envelope.md) and
+> [`docs/w1-entitlement-probe.md`](docs/w1-entitlement-probe.md).
+> Next: W2 (plugin skeleton). Not published. Not installable yet.
 
 ## Why this exists
 

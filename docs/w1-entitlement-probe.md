@@ -42,7 +42,9 @@ The probe prints event names, timings and the accepted config — never the key.
    family onto `gpt-live-1` — is the right target, confirmed from the account's own model list.
 
 4. **Both stored keys are one key.** `OPENAI_API_KEY` and `VOICE_TOOLS_OPENAI_KEY` share
-   fingerprint `REDACTED` (164 chars each). There is no second key to retry.
+   **same** credential — confirmed by comparing a one-way fingerprint of each. The fingerprint is not
+   recorded here: a credential-derived identifier is exactly the kind of value that does not belong in
+   a published document. There is no second key to retry.
 
 ## What remains unproven
 

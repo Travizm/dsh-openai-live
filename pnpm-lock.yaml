@@ -7,6 +7,16 @@ settings:
 importers:
 
   .:
+    dependencies:
+      dsh-realtime:
+        specifier: workspace:^
+        version: link:packages/realtime
+      dsh-realtime-openai:
+        specifier: workspace:^
+        version: link:packages/realtime-openai
+      dsh-realtime-replay:
+        specifier: workspace:^
+        version: link:packages/realtime-replay
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: ^4.0.4
@@ -48,7 +58,7 @@ importers:
         specifier: ^3.18.3
         version: 3.18.4
       dsh-realtime:
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../realtime
       ws:
         specifier: ^8.22.0
@@ -61,10 +71,10 @@ importers:
   packages/realtime-replay:
     dependencies:
       dsh-realtime:
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../realtime
       dsh-realtime-openai:
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../realtime-openai
     devDependencies:
       '@deepseek-ai/cordis':

@@ -1,7 +1,6 @@
 {
   "name": "dsh-realtime",
-  "version": "0.0.1",
-  "private": true,
+  "version": "0.1.0",
   "description": "Realtime voice capability seam for DeepSeek Harness: a provider registry plus the session adapter base.",
   "type": "module",
   "main": "lib/index.js",
@@ -30,8 +29,28 @@
     "lib/error.d.ts"
   ],
   "license": "MIT",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "realtime",
+    "voice",
+    "speech",
+    "seam"
+  ],
+  "homepage": "https://github.com/OWNER/dsh-openai-live",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OWNER/dsh-openai-live.git",
+    "directory": "packages/realtime"
+  },
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
   },
   "scripts": {
     "build": "tsc -b",

@@ -1,12 +1,58 @@
 {
   "name": "dsh-openai-live",
-  "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Full-duplex voice for DeepSeek Harness: a realtime capability seam, a GPT-Live-1 adapter, and a keyless replay backend.",
   "type": "module",
   "packageManager": "pnpm@11.7.0",
+  "main": "./dsh/index.js",
+  "exports": {
+    ".": "./dsh/index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dsh",
+    "cordis.patch.yml",
+    "docs",
+    "README.md",
+    "README.zh-CN.md",
+    "CHANGELOG.md",
+    "SECURITY.md",
+    "CONTRIBUTING.md",
+    "LICENSE"
+  ],
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "voice",
+    "realtime",
+    "speech",
+    "full-duplex",
+    "gpt-live",
+    "delegation"
+  ],
+  "homepage": "https://github.com/OWNER/dsh-openai-live",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OWNER/dsh-openai-live.git"
+  },
+  "bugs": {
+    "url": "https://github.com/OWNER/dsh-openai-live/issues"
+  },
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
   },
   "scripts": {
     "build": "pnpm -r run build",
@@ -15,8 +61,14 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:built": "node scripts/built-composition.mjs",
+    "leakscan": "node scripts/leak-scan.mjs",
     "canary": "node scripts/protocol-canary.mjs",
-    "gate": "pnpm build && pnpm typecheck && pnpm test:coverage && pnpm test:built"
+    "gate": "pnpm leakscan && pnpm build && pnpm typecheck && pnpm test:coverage && pnpm test:built"
+  },
+  "dependencies": {
+    "dsh-realtime": "workspace:^",
+    "dsh-realtime-openai": "workspace:^",
+    "dsh-realtime-replay": "workspace:^"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.4",

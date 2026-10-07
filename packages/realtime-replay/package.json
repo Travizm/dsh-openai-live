@@ -1,8 +1,7 @@
 {
   "name": "dsh-realtime-replay",
-  "version": "0.0.1",
-  "private": true,
-  "description": "Keyless replay for the dsh-realtime seam: drives the real adapter and session from a recorded session, so CI needs no credential.",
+  "version": "0.1.0",
+  "description": "Keyless replay for the dsh-realtime seam: drives the real adapter and session from a recording, so CI needs no credential.",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -18,16 +17,36 @@
     "lib/**/*.d.ts"
   ],
   "license": "MIT",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "realtime",
+    "replay",
+    "testing",
+    "keyless"
+  ],
+  "homepage": "https://github.com/OWNER/dsh-openai-live",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OWNER/dsh-openai-live.git",
+    "directory": "packages/realtime-replay"
+  },
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
   },
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --dry"
   },
   "dependencies": {
-    "dsh-realtime": "workspace:*",
-    "dsh-realtime-openai": "workspace:*"
+    "dsh-realtime": "workspace:^",
+    "dsh-realtime-openai": "workspace:^"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.3",

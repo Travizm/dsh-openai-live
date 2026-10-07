@@ -1,7 +1,6 @@
 {
   "name": "dsh-realtime-openai",
-  "version": "0.0.1",
-  "private": true,
+  "version": "0.1.0",
   "description": "GPT-Live-1 full-duplex voice adapter for the dsh-realtime seam, over the OpenAI Live WebSocket API.",
   "type": "module",
   "main": "lib/index.js",
@@ -18,15 +17,36 @@
     "lib/**/*.d.ts"
   ],
   "license": "MIT",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "realtime",
+    "voice",
+    "full-duplex",
+    "openai",
+    "gpt-live"
+  ],
+  "homepage": "https://github.com/OWNER/dsh-openai-live",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OWNER/dsh-openai-live.git",
+    "directory": "packages/realtime-openai"
+  },
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
   },
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --dry"
   },
   "dependencies": {
-    "dsh-realtime": "workspace:*",
+    "dsh-realtime": "workspace:^",
     "ws": "^8.22.0"
   },
   "peerDependencies": {

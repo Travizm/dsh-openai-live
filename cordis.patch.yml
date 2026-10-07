@@ -1,0 +1,35 @@
+# dsh-openai-live — bundle patch.
+#
+# Applied as one layer when this package is listed in a profile's `dsh.profile.bundles`, which
+# `dsh plugin add` reconciles automatically from the `dsh.bundle.patch` declaration in package.json.
+#
+# Two rows, both on the `realtime` seam this bundle also installs:
+#
+#   - `dsh-realtime`        the seam. A *service* package: it default-exports its class, takes no
+#                           config, and has no `apply` — so the row is id and name only.
+#   - `dsh-realtime-openai` the GPT-Live-1 adapter. A *function* plugin.
+#
+# `apiKey` is optional in the adapter's schema on purpose, so this composition works unchanged on a
+# machine with no credential: the route registers, the profile boots, and opening a session fails with
+# `MISSING_CREDENTIAL` — an error that names the setting and never the value. Failing here instead
+# would break a user's harness at startup for a configuration they have not made yet.
+#
+# The replay backend is deliberately NOT mounted. It plays a recorded session and is a CI tool; mount
+# it per-profile when you want a keyless run:
+#
+#   - insert:
+#       - id: dsh-realtime-replay
+#         name: 'dsh-realtime-replay'
+#         config:
+#           fixture: /absolute/path/to/session.jsonl
+- insert:
+    - id: dsh-realtime
+      name: 'dsh-realtime'
+
+    - id: dsh-realtime-openai
+      name: 'dsh-realtime-openai'
+      config:
+        provider: openai-live
+        model: gpt-live-1
+        voice: marin
+        apiKey: !!js process.env.OPENAI_LIVE_API_KEY

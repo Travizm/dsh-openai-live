@@ -14,6 +14,9 @@ importers:
       dsh-realtime-agent:
         specifier: workspace:^
         version: link:packages/realtime-agent
+      dsh-realtime-audio-ws:
+        specifier: workspace:^
+        version: link:packages/realtime-audio-ws
       dsh-realtime-openai:
         specifier: workspace:^
         version: link:packages/realtime-openai
@@ -76,6 +79,25 @@ importers:
       '@deepseek-ai/schemastery':
         specifier: ^3.18.4
         version: 3.18.4
+
+  packages/realtime-audio-ws:
+    dependencies:
+      dsh-realtime-agent:
+        specifier: workspace:^
+        version: link:../realtime-agent
+      ws:
+        specifier: ^8.22.0
+        version: 8.22.0
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: ^4.0.4
+        version: 4.0.4(@deepseek-ai/cordis-plugin-include@1.0.9)(@deepseek-ai/cordis-plugin-loader@1.0.5)
+      '@deepseek-ai/schemastery':
+        specifier: ^3.18.4
+        version: 3.18.4
+      '@types/ws':
+        specifier: ^8.18.2
+        version: 8.18.2
 
   packages/realtime-openai:
     dependencies:

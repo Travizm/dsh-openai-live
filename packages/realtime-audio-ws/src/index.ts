@@ -1,0 +1,106 @@
+/**
+ * The audio route: the host end of the client half's transport.
+ *
+ * A **function plugin**: named-exports `name` / `Config` / `apply`, and no default export — a default
+ * export makes the Loader discard the namespace, so the plugin loads and contributes nothing.
+ *
+ * It declares no top-level `inject` and defers its registration with `ctx.inject([...])` instead. The
+ * measured result is the same as a declared inject: the row's fiber waits until the web server and
+ * connection services exist, so a composition without a web stack gets a row that visibly waits rather
+ * than one that loads and silently claims nothing. `packages/realtime-audio-ws/tests/plugin.spec.ts` proves
+ * the functional path against a real socket with both services present.
+ */
+
+import Schema from '@deepseek-ai/schemastery'
+import type { Context } from '@deepseek-ai/cordis'
+import type { IncomingMessage } from 'node:http'
+import type { Duplex } from 'node:stream'
+// Type-only: pulls the `Events` augmentation that declares the two audio events this package bridges.
+import type {} from 'dsh-realtime-agent'
+import { attachAudioSocket } from './bridge.ts'
+import { createUpgradeAcceptor, rejectUpgrade } from './upgrade.ts'
+import {
+  DEFAULT_MAX_CONNECTIONS,
+  DEFAULT_MAX_FRAME_BYTES,
+  DEFAULT_PATH,
+  type AudioSocket,
+  type RealtimeAudioWsConfig,
+} from './types.ts'
+
+export * from './types.ts'
+export { attachAudioSocket, toBytes, type AudioSocketBridgeDeps } from './bridge.ts'
+export { createUpgradeAcceptor, rejectUpgrade, type UpgradeAcceptor } from './upgrade.ts'
+
+/** Plugin name. */
+export const name = 'realtime-audio-ws'
+
+export const Config = Schema.object({
+  path: Schema.string().default(DEFAULT_PATH),
+  maxFrameBytes: Schema.natural().default(DEFAULT_MAX_FRAME_BYTES),
+  maxConnections: Schema.natural().default(DEFAULT_MAX_CONNECTIONS),
+})
+
+/**
+ * The slice of the web server's route registry this package claims.
+ *
+ * Structural rather than imported: `@deepseek-ai/dsh-host-webserver` is a DeepSeek package, and importing
+ * it would both add a dependency edge for one shape and augment `Context` with another declaration of
+ * `webServer` — two declarations of one property with different types is a compile error.
+ */
+interface WebServerLike {
+  registerUpgrade(route: {
+    path: string
+    handler: (req: IncomingMessage, socket: Duplex, head: Buffer) => void | Promise<void>
+  }): () => void
+}
+
+/** The slice of the connection service that authenticates an upgrade. Structural for the same reason. */
+interface ConnectionLike {
+  requestRejection(request: { headers: IncomingMessage['headers'] }): 401 | 403 | undefined
+}
+
+export function apply(ctx: Context, config: RealtimeAudioWsConfig): void {
+  ctx.inject(['connection', 'webServer'], (injected) => {
+    const services = injected as unknown as { webServer: WebServerLike; connection: ConnectionLike }
+    const acceptor = createUpgradeAcceptor(config.maxFrameBytes)
+    const clients = new Set<AudioSocket>()
+
+    ctx.effect(() => {
+      const unregister = services.webServer.registerUpgrade({
+        path: config.path,
+        handler: (req, socket, head) => {
+          // Upgrade requests never reach the web server's HTTP route handlers, so nothing else answers for
+          // them. Without this check the route would be an unauthenticated loopback endpoint carrying
+          // microphone audio in and the agent's answers out. DSH's own transport asks the connection
+          // service in exactly this position, so this route asks the same question rather than inventing a
+          // second scheme that would drift from it.
+          const rejection = services.connection.requestRejection(req)
+          if (rejection !== undefined) {
+            rejectUpgrade(socket, rejection)
+            return
+          }
+          acceptor.handleUpgrade(req, socket, head, (client) => {
+            if (clients.size >= config.maxConnections) {
+              // 1013 = try again later. Closing the newcomer leaves the existing microphone live.
+              client.close(1013, 'busy')
+              return
+            }
+            clients.add(client)
+            attachAudioSocket(client, {
+              emitMic: (pcm16) => { ctx.emit('realtime-agent/mic', pcm16) },
+              subscribeAudio: (listener) => ctx.on('realtime-agent/audio', listener),
+              maxFrameBytes: config.maxFrameBytes,
+              onDetach: () => { clients.delete(client) },
+            })
+          })
+        },
+      })
+      return async () => {
+        unregister()
+        for (const client of clients) client.terminate()
+        clients.clear()
+        await acceptor.close()
+      }
+    }, `realtime-audio-ws: ${config.path}`)
+  })
+}

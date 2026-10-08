@@ -20,6 +20,9 @@ importers:
       dsh-realtime-replay:
         specifier: workspace:^
         version: link:packages/realtime-replay
+      dsh-realtime-responder:
+        specifier: workspace:^
+        version: link:packages/realtime-responder
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: ^4.0.4
@@ -101,6 +104,19 @@ importers:
       dsh-realtime-openai:
         specifier: workspace:^
         version: link:../realtime-openai
+    devDependencies:
+      '@deepseek-ai/cordis':
+        specifier: ^4.0.4
+        version: 4.0.4(@deepseek-ai/cordis-plugin-include@1.0.9)(@deepseek-ai/cordis-plugin-loader@1.0.5)
+      '@deepseek-ai/schemastery':
+        specifier: ^3.18.4
+        version: 3.18.4
+
+  packages/realtime-responder:
+    dependencies:
+      dsh-realtime-agent:
+        specifier: workspace:^
+        version: link:../realtime-agent
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: ^4.0.4

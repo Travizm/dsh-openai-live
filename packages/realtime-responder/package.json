@@ -1,0 +1,59 @@
+{
+  "name": "dsh-realtime-responder",
+  "version": "0.1.0",
+  "description": "Answers what the voice model delegates by admitting a turn to a DeepSeek Harness session and speaking the agent's reply.",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "src"
+  ],
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis",
+    "realtime",
+    "voice",
+    "delegation",
+    "responder"
+  ],
+  "homepage": "https://github.com/Travizm/dsh-openai-live",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Travizm/dsh-openai-live.git",
+    "directory": "packages/realtime-responder"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --dry"
+  },
+  "dependencies": {
+    "dsh-realtime-agent": "workspace:^"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.3",
+    "@deepseek-ai/schemastery": "^3.18.3"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.4",
+    "@deepseek-ai/schemastery": "^3.18.4"
+  }
+}

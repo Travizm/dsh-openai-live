@@ -3,7 +3,7 @@
 # Applied as one layer when this package is listed in a profile's `dsh.profile.bundles`, which
 # `dsh plugin add` reconciles automatically from the `dsh.bundle.patch` declaration in package.json.
 #
-# Three rows, all on the `realtime` seam this bundle also installs:
+# Four rows, all on the `realtime` seam this bundle also installs:
 #
 #   - `dsh-realtime`        the seam. A *service* package: it default-exports its class, takes no
 #                           config, and has no `apply` — so the row is id and name only.
@@ -12,10 +12,14 @@
 #                           `autoStart: false` is the default, stated explicitly because a patch's
 #                           `config` is replaced wholesale rather than deep-merged. Mounting the
 #                           bundle must not, by itself, open a socket or spend credit.
+#   - `dsh-realtime-responder` the application: it answers a delegation by admitting a turn to a real
+#                           DSH session and returning the agent's reply to be spoken. It injects
+#                           `sessionController`, so a profile without that service leaves this row
+#                           visibly waiting — which is the intended outcome, not a fault.
 #
 # `apiKey` is optional in the adapter's schema on purpose, so this composition works unchanged on a
 # machine with no credential: the route registers, the profile boots, and opening a session fails with
-# `MISSING_CREDENTIAL` — an error that names the setting and never the value. Failing here instead
+# `NOT_CONFIGURED` — an error that names the setting and never the value. Failing here instead
 # would break a user's harness at startup for a configuration they have not made yet.
 #
 # The replay backend is deliberately NOT mounted. It plays a recorded session and is a CI tool; mount
@@ -43,3 +47,24 @@
       config:
         provider: openai-live
         autoStart: false
+        # The voice model waits this long for an answer. The responder's own `answerTimeoutMs` is the
+        # other half of the same budget, and the smaller of the two decides what is actually heard.
+        delegationTimeoutMs: 45000
+
+    # The responder is an *application*, in the seam's vocabulary: it listens for what the model
+    # delegates and answers it by admitting a turn to a real DSH session. Without it the agent asks the
+    # bus and nobody replies, so the model says out loud that it cannot take care of the request.
+    #
+    # `sessionId` has no default on purpose — a responder attached to the wrong session would speak
+    # another conversation's reply, which is worse than not answering at all. Set it to the session you
+    # want the voice conversation to steer.
+    #
+    # Mounted last for a reason: it `inject`s `sessionController`, so it loads only where that service
+    # exists, and a profile without it gets a row that visibly waits rather than a plugin that silently
+    # never answers.
+    - id: dsh-realtime-responder
+      name: 'dsh-realtime-responder'
+      config:
+        sessionId: REPLACE_WITH_THE_SESSION_ID_TO_STEER
+        answerTimeoutMs: 45000
+        maxPromptChars: 4000

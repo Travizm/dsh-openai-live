@@ -11,6 +11,7 @@ import { parse } from 'yaml'
 import RealtimeRuntime from 'dsh-realtime'
 import * as realtimeAgent from 'dsh-realtime-agent'
 import { Config as AgentConfig } from 'dsh-realtime-agent'
+import { Config as ResponderConfig } from 'dsh-realtime-responder'
 import * as openaiLive from '../src/index.ts'
 import { Config } from '../src/index.ts'
 
@@ -150,8 +151,8 @@ async function withoutCredential<T>(run: () => Promise<T>): Promise<T> {
 describe('the shipped bundle patch', () => {
   it('inserts the seam, the adapter and the consumer, and nothing else', () => {
     const inserted = rows()
-    expect(inserted.map(row => row.id)).toEqual(['dsh-realtime', 'dsh-realtime-openai', 'dsh-realtime-agent'])
-    expect(inserted.map(row => row.name)).toEqual(['dsh-realtime', 'dsh-realtime-openai', 'dsh-realtime-agent'])
+    expect(inserted.map(row => row.id)).toEqual(['dsh-realtime', 'dsh-realtime-openai', 'dsh-realtime-agent', 'dsh-realtime-responder'])
+    expect(inserted.map(row => row.name)).toEqual(['dsh-realtime', 'dsh-realtime-openai', 'dsh-realtime-agent', 'dsh-realtime-responder'])
     // The seam is a *service* package: it default-exports its class, takes no config and has no
     // `apply`. A config block here would be a row that mounts and ignores everything in it.
     expect(inserted[0]).not.toHaveProperty('config')
@@ -161,6 +162,7 @@ describe('the shipped bundle patch', () => {
     const schemas: Record<string, Record<string, unknown>> = {
       'dsh-realtime-openai': Config.dict as Record<string, unknown>,
       'dsh-realtime-agent': AgentConfig.dict as Record<string, unknown>,
+      'dsh-realtime-responder': ResponderConfig.dict as Record<string, unknown>,
     }
     // This is the assertion that matters most, because the failure it prevents is SILENT: schemastery
     // KEEPS an undeclared key rather than rejecting it, so `api_key` boots clean and is ignored while
@@ -182,10 +184,14 @@ describe('the shipped bundle patch', () => {
   it('boots through the real Loader with no credential present', { timeout: 60_000 }, async () => {
     const loaded = await withoutCredential(() => boot(rows()))
 
+    // The responder is the one row that does NOT load here, and that is by design: it `inject`s
+    // `sessionController`, which this composition does not provide, so cordis leaves it waiting rather
+    // than loading a responder with no door. Asserting the exact set is stronger than asserting none —
+    // it pins the reason, and a row that started loading here would mean the inject had been dropped.
     const unloaded = [...loaded.loader.entries()]
       .filter(entry => entry.fiber === undefined && !entry.disabled)
       .map(entry => entry.options.name)
-    expect(unloaded).toEqual([])
+    expect(unloaded).toEqual(['dsh-realtime-responder'])
 
     expect(loaded.realtime).toBeInstanceOf(RealtimeRuntime)
     // The route name comes from the patch's `provider`, so this asserts the config was actually

@@ -6,6 +6,20 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.1]
+
+### Fixed
+
+- **Source maps now resolve.** `sourceMap` and `declarationMap` were on, but `files` excluded `*.map`,
+  so every published `.js` and `.d.ts` ended with a `sourceMappingURL` pointing at a map that was not
+  in the tarball — and those maps referenced `../src/*.ts`, which was not published either. The
+  packages now ship `lib` **and** `src`, and expose `./src/*`, so consumer tooling can step into the
+  real source instead of following a dead reference.
+
+  Found by installing the published packages from the registry and diffing them against the build.
+  Nothing failed to install, typecheck, or run: the references were simply dead, which is exactly the
+  class of defect that only an install-and-inspect pass catches.
+
 ## [0.1.0]
 
 First release. Verified against the live GPT-Live-1 API rather than against documentation.
@@ -44,5 +58,6 @@ First release. Verified against the live GPT-Live-1 API rather than against docu
   under client delegation, and client delegation has no `response.*` path at all.
 - `gpt-realtime` carries a published sunset date; `gpt-live-1` does not.
 
-[Unreleased]: https://github.com/Travizm/dsh-openai-live/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Travizm/dsh-openai-live/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/Travizm/dsh-openai-live/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Travizm/dsh-openai-live/releases/tag/v0.1.0

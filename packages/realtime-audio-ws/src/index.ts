@@ -22,6 +22,7 @@ import { createUpgradeAcceptor, rejectUpgrade } from './upgrade.ts'
 import {
   DEFAULT_MAX_CONNECTIONS,
   DEFAULT_MAX_FRAME_BYTES,
+  DEFAULT_OPEN_SESSION_ON_CONNECT,
   DEFAULT_PATH,
   type AudioSocket,
   type RealtimeAudioWsConfig,
@@ -38,6 +39,10 @@ export const Config = Schema.object({
   path: Schema.string().default(DEFAULT_PATH),
   maxFrameBytes: Schema.natural().default(DEFAULT_MAX_FRAME_BYTES),
   maxConnections: Schema.natural().default(DEFAULT_MAX_CONNECTIONS),
+  // True, and deliberately not the same decision as the agent's `autoStart`. That one opens a session at
+  // boot with nobody asking, which is why it is false. This one opens a session because someone connected a
+  // microphone: a connection takes an explicit action, an authenticated one, and its absence is silence.
+  openSessionOnConnect: Schema.boolean().default(DEFAULT_OPEN_SESSION_ON_CONNECT),
 })
 
 /**
@@ -86,11 +91,19 @@ export function apply(ctx: Context, config: RealtimeAudioWsConfig): void {
               return
             }
             clients.add(client)
+            // Ask for the session before the bridge goes in, so the first frames are written into a session
+            // that is being opened rather than dropped by the mic seam's no-session rule.
+            if (config.openSessionOnConnect) ctx.emit('realtime-agent/start')
             attachAudioSocket(client, {
               emitMic: (pcm16) => { ctx.emit('realtime-agent/mic', pcm16) },
               subscribeAudio: (listener) => ctx.on('realtime-agent/audio', listener),
               maxFrameBytes: config.maxFrameBytes,
-              onDetach: () => { clients.delete(client) },
+              onDetach: () => {
+                clients.delete(client)
+                // The last client leaving ends the session. This also covers the transport's own disposal,
+                // which terminates its clients — so a profile reload does not leave a session nobody holds.
+                if (config.openSessionOnConnect && clients.size === 0) ctx.emit('realtime-agent/stop')
+              },
             })
           })
         },

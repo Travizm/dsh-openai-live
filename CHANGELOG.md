@@ -6,6 +6,26 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **A connection opens the voice session.** `realtime-agent/start` and `realtime-agent/stop` are new bus
+  events; the audio route emits them when an authenticated client connects and when its last client leaves
+  (`openSessionOnConnect`, default true).
+
+  This exists because the microphone could not otherwise be heard. The agent ships `autoStart: false` so
+  that mounting the bundle does not open a socket and spend credit, and the mic seam drops frames while no
+  session is open. Both are correct, and together they meant a working microphone produced **silence that
+  looked like a fault anywhere but in the source**. Now connecting is enough: no profile option, and no
+  dependence on a model choosing to call `voice_start`.
+
+  The route defaults to true where the agent defaults to false, and the difference is the action.
+  `autoStart` opens a session at boot with nobody asking. This responds to a connection, which took an
+  explicit authenticated step — and a frame arriving before that session exists is still dropped, not queued,
+  because the mic seam's rule is unchanged.
+
+  Shipped as `dsh-realtime-agent` 0.2.2 and `dsh-realtime-audio-ws` 0.1.2. No bundle version accompanies
+  them: `dsh-openai-live` declares `^0.2.1` and `^0.1.0`, which admit both.
+
 ### Internal
 
 - **The gate now inspects the built client artefact, not only its source.** `scripts/client-artefact.mjs`

@@ -57,6 +57,21 @@ declare module '@deepseek-ai/cordis' {
      * only object that can write them. Emitted with no session open, this is dropped — not buffered.
      */
     'realtime-agent/mic'(pcm16: Uint8Array): void
+    /**
+     * Open the voice session.
+     *
+     * Emitted by a transport when an authenticated client arrives, so that connecting a microphone is
+     * enough to be heard — with no profile option and no dependence on a model choosing to call
+     * `voice_start`. The session belongs to the agent, so the transport asks rather than opens one itself.
+     */
+    'realtime-agent/start'(): void
+    /**
+     * Close the voice session.
+     *
+     * Emitted by a transport when its last client goes away, including when the transport itself is
+     * disposed — a session outliving the microphone that asked for it is a socket nobody is listening to.
+     */
+    'realtime-agent/stop'(): void
   }
 }
 
@@ -211,6 +226,22 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
     })
     yield () => { dispose() }
   }, 'realtime-agent.mic')
+
+  // Session requests from the transport. The route knows when an authenticated client connects and the
+  // agent owns the session, so one event is the whole of the wiring between them.
+  ctx.effect(function* () {
+    const disposers = [
+      ctx.on('realtime-agent/start', () => {
+        // Fire-and-forget for the same reason `autoStart` is: a listener has no caller to catch a
+        // rejection, and the failure is reported on the bus rather than thrown into one.
+        void open().catch((error: Error) => { ctx.emit('realtime-agent/error', error) })
+      }),
+      ctx.on('realtime-agent/stop', () => {
+        void stop().catch((error: Error) => { ctx.emit('realtime-agent/error', error) })
+      }),
+    ]
+    yield () => { for (const dispose of disposers) dispose() }
+  }, 'realtime-agent.session-requests')
 
   if (config.autoStart) {
     // `apply` is synchronous, so a failed open cannot be thrown from it — it is reported on the bus

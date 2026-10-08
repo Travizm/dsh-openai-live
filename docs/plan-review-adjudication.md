@@ -35,3 +35,8 @@ rather than its content.
 ## Still to do
 
 `docs/sprint-plan.md` needs republishing as **v2** carrying this table. The S0 patch is the first build.
+
+**Status 2026-10-09.** v2 is published — the table above is carried verbatim in
+`sprint-plan.md`, and the accepted dispositions are folded into the sprint structure (S0 inserted
+ahead of S1; Q3's redaction story, Q4's fault matrix, Q6's self-test, Q8's pulled-forward provider
+spike and Q10's field-level gate are all placed). The S0 build is in progress.

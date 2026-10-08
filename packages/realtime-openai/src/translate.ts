@@ -12,7 +12,7 @@
  * @module dsh-realtime-openai/translate
  */
 
-import { RealtimeError, type RealtimeDelegation, type RealtimeSessionStarted, type RealtimeTranscript, type RealtimeUsage, MAX_APPEND_CHARS } from 'dsh-realtime'
+import { RealtimeError, type RealtimeDelegation, type RealtimeErrorCode, type RealtimeSessionStarted, type RealtimeTranscript, type RealtimeUsage, MAX_APPEND_CHARS } from 'dsh-realtime'
 import type { ParsedServerEvent, WireUsage } from './wire.ts'
 
 /** A finite, non-negative number, or `undefined`. */
@@ -110,12 +110,44 @@ export function toStarted(
   }
 }
 
+/** One provider failure, mapped to the seam's class and what a caller should do about it. */
+interface ProviderFailure {
+  readonly code: RealtimeErrorCode
+  readonly retryable: boolean
+  readonly remedy: string
+}
+
+/**
+ * The provider's error codes, mapped to classes.
+ *
+ * A data table rather than a chain of conditionals: however many codes are added, this costs one
+ * branch to consult. The remedies are written to be relayed verbatim, because the whole point of
+ * classifying a failure is that whoever receives it can act without interpreting it.
+ *
+ * Only codes the provider documents are listed. An unrecognised code is **not** guessed into a class
+ * — see the caller.
+ */
+const PROVIDER_FAILURES: ReadonlyMap<string, ProviderFailure> = new Map([
+  ['invalid_api_key', { code: 'CREDENTIAL_REJECTED', retryable: false, remedy: 'replace the configured OpenAI credential — it was refused' }],
+  ['authentication_error', { code: 'CREDENTIAL_REJECTED', retryable: false, remedy: 'replace the configured OpenAI credential — it was refused' }],
+  ['insufficient_quota', { code: 'INSUFFICIENT_CREDIT', retryable: false, remedy: 'add credit to the OpenAI account — the quota is exhausted' }],
+  ['credit_balance_exhausted', { code: 'INSUFFICIENT_CREDIT', retryable: false, remedy: 'add credit to the OpenAI account — the balance is exhausted' }],
+  ['model_not_found', { code: 'NOT_ENTITLED', retryable: false, remedy: 'request a model this OpenAI account is entitled to use' }],
+  ['permission_denied', { code: 'NOT_ENTITLED', retryable: false, remedy: 'request a model this OpenAI account is entitled to use' }],
+  ['rate_limit_exceeded', { code: 'RATE_LIMITED', retryable: true, remedy: 'retry after a short pause — the provider is throttling' }],
+  ['too_many_requests', { code: 'RATE_LIMITED', retryable: true, remedy: 'retry after a short pause — the provider is throttling' }],
+])
+
 /**
  * Translate a provider error frame into a typed failure.
  *
  * The provider's `message`, `code` and `param` are preserved: they name the offending field, which
  * makes them the fastest available specification. Only the fields are carried — never the frame,
  * which for an audio event could contain conversation content.
+ *
+ * The code is additionally **classified**, because it is the only thing that separates a credential
+ * the provider refused from an account that cannot pay, and a caller that cannot tell those apart
+ * cannot tell the user what to do.
  * @param event - a parsed frame.
  * @returns a coded error carrying the provider's own field-naming detail.
  */
@@ -135,7 +167,18 @@ export function toProviderError(event: ParsedServerEvent): RealtimeError {
     codeText === undefined ? undefined : `code=${codeText}`,
     param === undefined ? undefined : `param=${param}`,
   ].filter(part => part !== undefined).join(' — ')
-  return new RealtimeError(summary, 'PROVIDER_ERROR')
+
+  // The provider's code is the only thing that distinguishes "add credit" from "replace the key", so
+  // it is classified rather than described. An unrecognised code keeps the generic class: guessing a
+  // class would be worse than admitting we do not know which one it is.
+  const known = codeText === undefined ? undefined : PROVIDER_FAILURES.get(codeText)
+  return new RealtimeError(summary, known?.code ?? 'PROVIDER_ERROR', {
+    detail: {
+      ...codeText === undefined ? {} : { providerCode: codeText },
+      retryable: known?.retryable ?? false,
+      ...known === undefined ? {} : { remedy: known.remedy },
+    },
+  })
 }
 
 /**

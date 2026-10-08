@@ -6,6 +6,36 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **A failure taxonomy on the realtime seam.** `REALTIME_ERROR_CODES` gains `NOT_CONFIGURED`,
+  `CREDENTIAL_REJECTED`, `NOT_ENTITLED`, `INSUFFICIENT_CREDIT`, `RATE_LIMITED`, `PROVIDER_TIMEOUT`,
+  `NETWORK` and `NO_SESSION`, and `RealtimeError` carries an optional structured `detail` —
+  `{ remedy?, setting?, retryable?, providerCode? }` — so a consumer can act on a failure rather than
+  interpret its prose. Purely additive: `MISSING_CREDENTIAL` remains exported and no existing code
+  changed meaning, per the file's own contract.
+
+### Changed
+
+- **An absent credential is `NOT_CONFIGURED`, not `MISSING_CREDENTIAL`.** One code had meant *absent
+  or unusable*, which are a setup state and a failure with opposite responses. The error now names
+  the setting and carries a remedy written to be relayed verbatim.
+- **The provider's own error code is classified, not paraphrased.** It was previously preserved only
+  inside the human-readable message, so `invalid_api_key`, `insufficient_quota` and
+  `rate_limit_exceeded` all arrived as `PROVIDER_ERROR`. They now map to `CREDENTIAL_REJECTED`,
+  `INSUFFICIENT_CREDIT` and `RATE_LIMITED` respectively, each with a remedy and a `retryable` flag.
+  An unrecognised code deliberately keeps `PROVIDER_ERROR` — guessing a class is worse than admitting
+  we do not know which one it is.
+- **A provider that goes silent is `PROVIDER_TIMEOUT`, not `PROVIDER_ERROR`.** An unacknowledged
+  append and a reported failure were indistinguishable to a caller branching on `code`.
+- **A session opening the provider refused is classified** through the same translator, so a present
+  but wrong key surfaces as `CREDENTIAL_REJECTED` rather than a generic failure.
+- **`voice_say` without a session throws a typed `NO_SESSION`** carrying a remedy, instead of a bare
+  `Error`. Its message is unchanged.
+
+  These were found by installing through the DeepSeek Harness plugin portal and then using it with no
+  credential configured. The plugin loaded correctly; how it *failed* was the defect.
+
 ## [0.1.3]
 
 ### Fixed

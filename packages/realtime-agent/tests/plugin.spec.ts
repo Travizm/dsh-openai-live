@@ -10,9 +10,12 @@ import type { DelegationRequest, RealtimeAgentConfig } from '../src/types.ts'
 /** An adapter that records what the consumer appended, and lets a test raise a delegation. */
 class RecordingAdapter extends RealtimeAdapter {
   readonly appends: Array<{ kind: 'commentary' | 'thinking'; text: string; delegationId: string | undefined }> = []
+  readonly sentAudio: Uint8Array[] = []
   handlers: RealtimeSessionHandlers | undefined
   opened = 0
   closed = 0
+  /** Make the next audio write fail, as a session that closed mid-flight does. */
+  refuseAudio = false
 
   session(options: RealtimeSessionOptions): Promise<RealtimeSession> {
     // Wire the handlers exactly as a real adapter does: a substitute that drops them makes every
@@ -29,7 +32,10 @@ class RecordingAdapter extends RealtimeAdapter {
         inputAudio: { sampleRate: 24_000, channels: 1, encoding: 'pcm16' },
         outputAudio: { sampleRate: 24_000, channels: 1, encoding: 'pcm16' },
       },
-      sendAudio(): void {},
+      sendAudio(pcm16: Uint8Array): void {
+        if (adapter.refuseAudio) throw new Error('the session closed mid-write')
+        adapter.sentAudio.push(pcm16)
+      },
       muteInput(): void {},
       unmuteInput(): void {},
       appendCommentary(text, delegationId) {
@@ -105,7 +111,7 @@ describe('plugin shape', () => {
 
 describe('createHandlers', () => {
   const deps = (overrides: Partial<Parameters<typeof createHandlers>[0]> = {}) => {
-    const calls: { closed: number; errors: Error[] } = { closed: 0, errors: [] }
+    const calls: { closed: number; errors: Error[]; audio: Uint8Array[] } = { closed: 0, errors: [], audio: [] }
     const transcript = new TranscriptBuffer(100)
     return {
       calls,
@@ -117,10 +123,18 @@ describe('createHandlers', () => {
         timeoutMs: 50,
         onClosed: () => { calls.closed += 1 },
         onSessionError: (error) => { calls.errors.push(error) },
+        onAudio: (pcm16) => { calls.audio.push(pcm16) },
         ...overrides,
       }),
     }
   }
+
+  it('forwards output audio to the caller, frame for frame', () => {
+    const { handlers, calls } = deps()
+    const pcm16 = new Uint8Array([1, 2])
+    handlers.onAudio?.(pcm16)
+    expect(calls.audio).toEqual([pcm16])
+  })
 
   it('records transcripts, coalescing as it goes', () => {
     const { handlers, transcript } = deps()
@@ -257,6 +271,62 @@ describe('apply', () => {
     adapter.handlers?.onDelegation?.({ id: 'item_2', target: 'client', offsetMs: 0 })
     await tick()
     expect(adapter.appends).toHaveLength(1)
+  })
+})
+
+describe('the audio seams', () => {
+  /** A context with a live session, so the microphone seam has somewhere to write. */
+  const live = async () => {
+    const { ctx: context, adapter } = harness()
+    const out: Uint8Array[] = []
+    const failures: Error[] = []
+    context.on('realtime-agent/audio', (pcm16: Uint8Array) => { out.push(pcm16) })
+    context.on('realtime-agent/error', (error: Error) => { failures.push(error) })
+    apply(context, Config({ provider: 'fake', autoStart: true }) as RealtimeAgentConfig)
+    await tick()
+    return { context, adapter, out, failures }
+  }
+
+  it('writes captured frames to the open session, in order', async () => {
+    const { context, adapter } = await live()
+    const first = new Uint8Array([1, 2, 3])
+    const second = new Uint8Array([4, 5])
+    context.emit('realtime-agent/mic', first)
+    context.emit('realtime-agent/mic', second)
+    expect(adapter.sentAudio).toEqual([first, second])
+  })
+
+  it('drops capture frames with no session open, rather than buffering or throwing', async () => {
+    const { ctx: context, adapter } = harness()
+    apply(context, Config({ provider: 'fake' }) as RealtimeAgentConfig)
+    // No `autoStart`, so nothing is open. A capture device may well start first.
+    expect(() => { context.emit('realtime-agent/mic', new Uint8Array([9])) }).not.toThrow()
+    expect(adapter.sentAudio).toEqual([])
+  })
+
+  it('reports a failed audio write on the bus instead of throwing from the listener', async () => {
+    const { context, adapter, failures } = await live()
+    adapter.refuseAudio = true
+    // A write into a session that closed a moment ago is a race, not a fault — and raising from inside
+    // a listener is the worst place to raise one.
+    expect(() => { context.emit('realtime-agent/mic', new Uint8Array([7])) }).not.toThrow()
+    expect(failures).toHaveLength(1)
+    expect(failures[0]!.message).toBe('the session closed mid-write')
+  })
+
+  it('carries provider output audio onto the bus, unbuffered', async () => {
+    const { adapter, out } = await live()
+    const pcm16 = new Uint8Array([10, 11])
+    adapter.handlers?.onAudio?.(pcm16)
+    expect(out).toEqual([pcm16])
+  })
+
+  it('stops writing capture frames once the fiber that registered the seam is disposed', async () => {
+    const { context, adapter } = await live()
+    await context.fiber.dispose()
+    ctx = undefined
+    context.emit('realtime-agent/mic', new Uint8Array([1]))
+    expect(adapter.sentAudio).toEqual([])
   })
 })
 

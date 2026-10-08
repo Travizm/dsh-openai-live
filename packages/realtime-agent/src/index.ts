@@ -41,6 +41,22 @@ declare module '@deepseek-ai/cordis' {
     'realtime-agent/delegation'(request: DelegationRequest): DelegationAnswer | undefined | Promise<DelegationAnswer | undefined>
     /** A session-scoped failure the adapter contained rather than throwing. */
     'realtime-agent/error'(error: Error): void
+    /**
+     * Output audio: PCM16 in the session's declared output format.
+     *
+     * Emitted once per provider delta, in order, with no buffering. A consumer that cannot keep up is
+     * expected to drop frames rather than queue them — a queue that grows while nothing drains it
+     * presents first as latency and then as an unbounded allocation.
+     */
+    'realtime-agent/audio'(pcm16: Uint8Array): void
+    /**
+     * Input audio: capture frames to write to the open session.
+     *
+     * The host-side half of the microphone path. A capture device belongs in a client half, which
+     * cannot reach this context directly, so frames arrive here as an event and the agent keeps the
+     * only object that can write them. Emitted with no session open, this is dropped — not buffered.
+     */
+    'realtime-agent/mic'(pcm16: Uint8Array): void
   }
 }
 
@@ -86,6 +102,8 @@ export interface HandlerDeps {
   readonly onClosed: () => void
   /** Where a session-scoped failure is reported. */
   readonly onSessionError: (error: Error) => void
+  /** Where output audio is delivered. Called once per provider delta. */
+  readonly onAudio: (pcm16: Uint8Array) => void
 }
 
 /**
@@ -108,6 +126,7 @@ export function createHandlers(deps: HandlerDeps): RealtimeSessionHandlers {
       void answerDelegation(session, delegation, deps.transcript.lines(), deps.ask, deps.timeoutMs)
         .catch(deps.onSessionError)
     },
+    onAudio: (pcm16: Uint8Array): void => { deps.onAudio(pcm16) },
     onClosed: (): void => { deps.onClosed() },
     onError: (error: Error): void => { deps.onSessionError(error) },
   }
@@ -129,6 +148,7 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
     timeoutMs: config.delegationTimeoutMs,
     onClosed: () => { session = undefined },
     onSessionError: (error) => { ctx.emit('realtime-agent/error', error) },
+    onAudio: (pcm16) => { ctx.emit('realtime-agent/audio', pcm16) },
   })
 
   /**
@@ -170,6 +190,27 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
       .map(definition => ctx.tools.register(definition))
     yield () => { for (const dispose of disposers) dispose() }
   }, 'realtime-agent.tools')
+
+  // The microphone seam. Output audio leaves through a handler the adapter already calls; input had no
+  // such route, because the object that captures it — a client half — cannot reach this context. So the
+  // frames arrive as an event, and the agent keeps the only object that can write them.
+  ctx.effect(function* () {
+    const dispose = ctx.on('realtime-agent/mic', (pcm16: Uint8Array) => {
+      const current = session
+      // No session: a capture device that starts before `voice_start` must not throw from inside a
+      // listener, and must not buffer either — see the event's own contract.
+      if (current === undefined) return
+      try {
+        current.sendAudio(pcm16)
+      } catch (error) {
+        // A write into a session that closed a moment ago is a race, not a fault, and the adapter's own
+        // close handler decides what it means. Reporting beats throwing from a listener, which is the
+        // worst place to raise one.
+        ctx.emit('realtime-agent/error', error as Error)
+      }
+    })
+    yield () => { dispose() }
+  }, 'realtime-agent.mic')
 
   if (config.autoStart) {
     // `apply` is synchronous, so a failed open cannot be thrown from it — it is reported on the bus

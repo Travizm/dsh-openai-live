@@ -6,9 +6,26 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-### Added
+### Fixed
 
-- **A connection opens the voice session.** `realtime-agent/start` and `realtime-agent/stop` are new bus
+- **The client face's registration shape — and the guard that should have caught it.** `dsh-realtime-audio-ws`
+  0.1.3. Version 0.1.1 replaced the ESM failure by compiling the client face to CommonJS, and shipped a
+  second failure in its place: `Uncaught ReferenceError: exports is not defined`, which stopped the harness
+  booting just as thoroughly.
+
+  The contract, quoted from the module table's own source: *"executing a plugin bundle only **REGISTERS its
+  factory** (`window.__ModuleLoader__.load({id, factory})`) … Materialization (`factory(require) → exports`)
+  happens on first import"*. A client bundle is therefore neither ESM nor plain CommonJS — it is a script
+  that registers a factory which **returns** its exports, which is why a compiled CommonJS body needs a
+  local `exports` object to assign onto. The build now performs that wrap after compiling.
+
+  **The corrected guard is the more important half.** The one shipped with 0.1.1 asserted "CommonJS and
+  nothing else" — inferred from the words *lazy-CJS* rather than read from the contract — and so it
+  returned a confident pass while the application was broken. It now asserts the registration, and keeps
+  the plain-CommonJS artefact as a fixture that **must fail** it. A guard that encodes a guess is worse
+  than no guard, and this one demonstrated why.
+
+## [0.3.0] — 2026-10-08 `realtime-agent/start` and `realtime-agent/stop` are new bus
   events; the audio route emits them when an authenticated client connects and when its last client leaves
   (`openSessionOnConnect`, default true).
 

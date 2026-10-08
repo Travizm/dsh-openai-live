@@ -2,18 +2,25 @@
 /**
  * The client-face artefact guard.
  *
- * A client face is served to the browser through the harness's **lazy-CJS module table**, so the bundle it
- * emits must be CommonJS. Nothing else in this repository can see that. Coverage measures the SOURCE, and
- * the source and its emitted artefact can disagree about module format without a single test noticing —
- * which is precisely how `dsh-realtime-audio-ws@0.1.0` shipped ESM into a CJS loader, produced
- * `Uncaught SyntaxError: Unexpected token 'export'` in the renderer, and took the entire harness boot down
- * with it.
+ * A client face is served to the browser and executed by the harness's **lazy-CJS module table**, which
+ * does not evaluate it as ESM and does not provide an `exports` binding: the bundle must be a script that
+ * REGISTERS A FACTORY —
  *
- * So this inspects what was actually built, for every package that declares `dsh.client`.
+ *     window.__ModuleLoader__.load({ id: '<package>', factory: (require) => { … return exports } })
  *
- * It proves its own detector first, against one fixture that must be rejected and one that must be
- * accepted: a guard that has never failed is unproven, and a format detector that has silently stopped
- * detecting is worse than no guard at all.
+ * — and the factory returns the bundle's exports. Getting this wrong is a total failure, not a subtle one:
+ *
+ *     ESM       → `Uncaught SyntaxError: Unexpected token 'export'`
+ *     plain CJS → `Uncaught ReferenceError: exports is not defined`
+ *
+ * Both were shipped by this repository, each stopping the entire harness from booting, because the web
+ * boot fails loudly on one bad entry. Neither was visible to any test: coverage measures the SOURCE, and
+ * the source and its emitted artefact can disagree about module shape silently.
+ *
+ * The first version of this guard enforced "CommonJS and nothing else" — a rule inferred from the words
+ * "lazy-CJS" rather than read from the table's contract. It passed while the application was broken. Hence
+ * the self-test below: a guard that encodes a guess is worse than no guard, because it returns confident
+ * passes.
  */
 
 import { readFileSync, readdirSync, existsSync } from 'node:fs'
@@ -23,8 +30,7 @@ import { fileURLToPath } from 'node:url'
 const root = fileURLToPath(new URL('..', import.meta.url))
 
 /**
- * Strip comments before scanning, so a doc block that merely says the word "export" is not a finding.
- * Crude on purpose: this asks a question about module syntax, not about JavaScript.
+ * Strip comments before scanning, so a doc block that merely discusses `export` is not a finding.
  *
  * @param source - the emitted file.
  * @returns the file with comments removed.
@@ -34,47 +40,45 @@ function withoutComments(source) {
 }
 
 /**
- * Find top-level ESM syntax in an emitted bundle.
+ * Find top-level ESM syntax, which the table's script evaluation cannot parse.
+ *
+ * The word boundary is load-bearing: without it `exports.apply` reads as the `export` keyword.
  *
  * @param source - the emitted file.
  * @returns the offending constructs, empty when there are none.
  */
 export function findEsmSyntax(source) {
-  // The word boundary is load-bearing: without it `exports.apply` reads as the `export` keyword, which is
-  // the false positive the self-test below exists to catch.
   return withoutComments(source).match(/(?:^|\n)[ \t]*(?:export|import)\b/gu) ?? []
 }
 
 /**
- * Does the file expose a plugin entry point at all?
+ * Does the file register a module-table factory, which is the only shape that executes?
  *
  * @param source - the emitted file.
- * @returns true when the module seems to export `apply`.
+ * @returns true when the registration is present.
  */
-export function exportsApply(source) {
-  return /exports\.apply\b|\bmodule\.exports\b/u.test(source)
+export function registersFactory(source) {
+  return /__ModuleLoader__\s*\.\s*load\s*\(/u.test(withoutComments(source))
+    && /\bfactory\s*:/u.test(withoutComments(source))
 }
 
 // ---- prove the detector can fail -----------------------------------------------------------------------
 
-const detectorCases = [
-  { name: 'esm: export const', source: 'export const inject = []', esm: true },
-  { name: 'esm: export function', source: '\nexport function apply(ctx) {}', esm: true },
-  { name: 'esm: import statement', source: "import x from 'y'", esm: true },
-  { name: 'cjs: exports.apply', source: '"use strict";\nexports.apply = apply;', esm: false },
-  { name: 'esm word inside a comment', source: '/**\n * exporting its built bundle\n */\nexports.apply = apply;', esm: false },
+const cases = [
+  { name: 'esm: export const', source: 'export const inject = []', esm: true, factory: false },
+  { name: 'esm: import statement', source: "import x from 'y'", esm: true, factory: false },
+  { name: 'plain cjs: exports.apply only', source: '"use strict";\nexports.apply = apply;', esm: false, factory: false },
+  { name: 'registration', source: 'window.__ModuleLoader__.load({ id: "p", factory: (require) => { return {} } })', esm: false, factory: true },
+  { name: 'esm word inside a comment', source: '/**\n * exporting its bundle\n */\nwindow.__ModuleLoader__.load({ factory: () => ({}) })', esm: false, factory: true },
 ]
 
-for (const testCase of detectorCases) {
-  const found = findEsmSyntax(testCase.source).length > 0
-  if (found !== testCase.esm) {
-    console.error(`SELF-TEST FAILED: detector called "${testCase.name}" esm=${String(found)}, expected esm=${String(testCase.esm)}`)
+for (const testCase of cases) {
+  const esm = findEsmSyntax(testCase.source).length > 0
+  const factory = registersFactory(testCase.source)
+  if (esm !== testCase.esm || factory !== testCase.factory) {
+    console.error(`SELF-TEST FAILED: "${testCase.name}" → esm=${String(esm)} factory=${String(factory)}, expected esm=${String(testCase.esm)} factory=${String(testCase.factory)}`)
     process.exit(1)
   }
-}
-if (!exportsApply('"use strict";\nexports.apply = apply;') || exportsApply('"use strict";\nconst x = 1;')) {
-  console.error('SELF-TEST FAILED: the entry-point detector cannot tell a module with apply from one without')
-  process.exit(1)
 }
 
 // ---- scan every declared client face -------------------------------------------------------------------
@@ -88,8 +92,7 @@ for (const entry of readdirSync(packagesDir, { withFileTypes: true })) {
   const manifestPath = join(packagesDir, entry.name, 'package.json')
   if (!existsSync(manifestPath)) continue
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
-  const client = manifest.dsh?.client
-  if (client === undefined) continue
+  if (manifest.dsh?.client === undefined) continue
 
   const exported = manifest.exports?.['./client']
   const target = typeof exported === 'string' ? exported : exported?.default
@@ -101,22 +104,21 @@ for (const entry of readdirSync(packagesDir, { withFileTypes: true })) {
   const artefact = join(packagesDir, entry.name, target)
   const shown = relative(root, artefact)
   if (!existsSync(artefact)) {
-    findings.push(`${manifest.name}: ${shown} is missing — did the client build run?`)
+    findings.push(`${manifest.name}: ${shown} is missing — did the client bundle step run?`)
     continue
   }
 
   const source = readFileSync(artefact, 'utf8')
   const esm = findEsmSyntax(source)
   if (esm.length > 0) {
-    const first = esm[0].trim().slice(0, 60)
-    findings.push(`${manifest.name}: ${shown} carries ESM syntax (${String(esm.length)} site(s), e.g. "${first}") — the module table materialises CommonJS, so the boot will fail`)
+    findings.push(`${manifest.name}: ${shown} carries ESM syntax ("${esm[0].trim().slice(0, 50)}") — the table evaluates a script, so the boot fails with Unexpected token 'export'`)
     continue
   }
-  if (!exportsApply(source)) {
-    findings.push(`${manifest.name}: ${shown} is CommonJS but exposes no "apply" — the plugin would load and contribute nothing`)
+  if (!registersFactory(source)) {
+    findings.push(`${manifest.name}: ${shown} does not register a module-table factory (no __ModuleLoader__.load({ id, factory })) — the boot fails, with "exports is not defined" when it is plain CommonJS`)
     continue
   }
-  checked.push(`${manifest.name} → ${shown} (CommonJS, ${String(esm.length)} ESM sites)`)
+  checked.push(`${manifest.name} → ${shown}`)
 }
 
 if (findings.length > 0) {

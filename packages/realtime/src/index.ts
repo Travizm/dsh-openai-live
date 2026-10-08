@@ -22,6 +22,7 @@ import type {
 
 export * from './types.ts'
 export * from './error.ts'
+export * from './redact.ts'
 export { RealtimeError, REALTIME_ERROR_CODES } from './error.ts'
 
 declare module '@deepseek-ai/cordis' {

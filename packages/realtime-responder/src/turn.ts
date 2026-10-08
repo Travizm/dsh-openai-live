@@ -5,6 +5,18 @@
  * The two impure edges arrive as `admit` and `subscribe`, which is the whole reason this is a separate
  * module from the plugin that supplies them.
  *
+ * ## Why this returns an outcome and not `undefined`
+ *
+ * The plugin's foundational failure was that **it could not say why a turn produced nothing**.
+ * A refused admission, a declined empty prompt and a turn that was admitted and never answered all
+ * left this function as the same `undefined`, so from outside the plugin the three most different
+ * failures in the system were one indistinguishable silence — and the controller's own reason was
+ * discarded in a `catch {}` on the way out.
+ *
+ * {@link TurnOutcome} is that reason, preserved. It is the smallest change that answers the open
+ * question, and everything that reports on a turn downstream — the journal, the diagnostics route,
+ * the spoken failure — reads it rather than re-deriving it.
+ *
  * @module dsh-realtime-responder/turn
  */
 
@@ -24,6 +36,24 @@ export interface TurnDeps {
   /** Observe session events; returns the disposer that stops observing. */
   readonly subscribe: (listener: (event: SessionEventLike) => void) => () => void
 }
+
+/**
+ * How one turn ended.
+ *
+ * A discriminated union rather than `string | undefined`, because the four cases call for four
+ * different responses and only one of them is a bug. `refused` carries the controller's own words;
+ * the other three carry nothing, because there is nothing to carry and a fabricated reason would be
+ * worse than an honest absence.
+ */
+export type TurnOutcome =
+  /** The agent answered. `text` is non-empty. */
+  | { readonly kind: 'answered'; readonly text: string }
+  /** There was nothing to ask — the transcript carried no text. Declined before the admission. */
+  | { readonly kind: 'declined' }
+  /** The controller refused the admission. `reason` is what the controller said. */
+  | { readonly kind: 'refused'; readonly reason: string }
+  /** The admission was accepted and nothing came back inside the bound. */
+  | { readonly kind: 'timeout' }
 
 /**
  * Build the prompt for one delegated turn from the conversation the model sent.
@@ -70,21 +100,36 @@ export function answerText(event: SessionEventLike, sessionId: string): string |
 }
 
 /**
+ * The controller's own words for a refusal, or a stated absence.
+ *
+ * A rejection that carries no message is still a rejection, and naming it is more useful to a reader
+ * than an empty string that reads as "no reason". The fallback is deliberately *not* a paraphrase of
+ * the failure — it says only what this function knows, which is that the controller refused.
+ * @param error - whatever the admission rejected with.
+ * @returns a non-empty reason.
+ */
+function refusalReason(error: unknown): string {
+  if (error instanceof Error && error.message.length > 0) return error.message
+  if (typeof error === 'string' && error.length > 0) return error
+  return 'the session controller refused the prompt'
+}
+
+/**
  * Run one delegated turn.
  *
  * Subscribes **before** admitting, so an answer that lands on the same tick as the admission is not
- * missed — a fast agent is exactly the case a naive admit-then-subscribe loses. Declining is a
- * first-class outcome: returning `undefined` lets a later responder answer, and failing everything, the
- * agent's own "I cannot take care of that" notice stands rather than an empty utterance.
+ * missed — a fast agent is exactly the case a naive admit-then-subscribe loses. Every way the turn can
+ * end is named in the {@link TurnOutcome} it resolves with; nothing is collapsed, so a caller can act
+ * on the difference between "the controller said no" and "nobody answered in time".
  * @param deps - the session, the budget, and the two impure edges.
- * @returns a function that answers one delegation, or `undefined` to decline it.
+ * @returns a function that answers one delegation, or resolves with why it did not.
  */
-export function createTurnRunner(deps: TurnDeps): (request: DelegationRequest) => Promise<string | undefined> {
-  return async (request: DelegationRequest): Promise<string | undefined> => {
+export function createTurnRunner(deps: TurnDeps): (request: DelegationRequest) => Promise<TurnOutcome> {
+  return async (request: DelegationRequest): Promise<TurnOutcome> => {
     const prompt = promptFrom(request, deps.maxPromptChars)
     // An empty prompt is a turn the controller would reject, so it is declined before the admission
     // rather than reported as a failure after one.
-    if (prompt.length === 0) return undefined
+    if (prompt.length === 0) return { kind: 'declined' }
 
     let settle!: (text: string | undefined) => void
     const answered = new Promise<string | undefined>((resolve) => { settle = resolve })
@@ -97,16 +142,17 @@ export function createTurnRunner(deps: TurnDeps): (request: DelegationRequest) =
 
     try {
       await deps.admit(prompt)
-    } catch {
-      // The controller refused the admission. Nothing was queued, so there is nothing to wait for.
+    } catch (error) {
+      // The controller refused the admission. Nothing was queued, so there is nothing to wait for —
+      // and the reason it gave is the whole point of this patch, so it is returned rather than dropped.
       clearTimeout(timer)
       unsubscribe()
-      return undefined
+      return { kind: 'refused', reason: refusalReason(error) }
     }
 
     const text = await answered
     clearTimeout(timer)
     unsubscribe()
-    return text
+    return text === undefined ? { kind: 'timeout' } : { kind: 'answered', text }
   }
 }

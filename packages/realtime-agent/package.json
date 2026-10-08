@@ -1,6 +1,6 @@
 {
   "name": "dsh-realtime-agent",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Delegation bridge for the dsh-realtime seam: answers what the voice model delegates, or says plainly that it cannot.",
   "type": "module",
   "main": "lib/index.js",
@@ -46,16 +46,16 @@
     "typecheck": "tsc -b --dry"
   },
   "dependencies": {
-    "@deepseek-ai/dsh-tools": "^0.2.0-rc.2",
     "dsh-realtime": "workspace:^"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.3",
-    "@deepseek-ai/schemastery": "^3.18.3"
+    "@deepseek-ai/schemastery": "^3.18.3",
+    "@deepseek-ai/dsh-tools": "^0.2.0-rc.2"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.4",
-    "@deepseek-ai/dsh-tools": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-tools": "^0.2.0-rc.2",
     "@deepseek-ai/schemastery": "^3.18.4"
   }
 }

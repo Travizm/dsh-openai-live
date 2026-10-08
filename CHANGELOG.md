@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Internal
+
+- **The gate now inspects the built client artefact, not only its source.** `scripts/client-artefact.mjs`
+  fails the build when a package declaring `dsh.client` emits anything but CommonJS, or emits CommonJS
+  without an `apply` entry point. It proves its own detector first against fixtures that must be rejected
+  and accepted — which caught a false positive on the very first run, where `exports.apply` read as the
+  `export` keyword. Coverage cannot see this class of defect: it measures the source, and a source and its
+  emitted artefact can disagree about module format silently.
+
 ### Fixed
 
 - **The client face shipped as ESM into a loader that materialises CommonJS.** `dsh-realtime-audio-ws`

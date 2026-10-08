@@ -69,7 +69,8 @@
     "dsh-realtime": "workspace:^",
     "dsh-realtime-agent": "workspace:^",
     "dsh-realtime-openai": "workspace:^",
-    "dsh-realtime-replay": "workspace:^"
+    "dsh-realtime-replay": "workspace:^",
+    "dsh-realtime-responder": "workspace:^"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.4",

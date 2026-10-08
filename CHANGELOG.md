@@ -6,6 +6,27 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`dsh-realtime-responder` — the application that answers.** Until now a delegation was published to
+  the bus and nobody replied, so a working voice session said, out loud, that it could not take care of
+  the request. This package listens, admits a turn to a real DSH session
+  (`sessionController.prompt`, which returns a receipt and not an answer), waits for the session's
+  `assistant/message` on the `session/event` bus, and returns the agent's reply for the voice model to
+  speak.
+
+  It is a separate package rather than part of `dsh-realtime-agent` because the agent's contract is that
+  an **application** answers; folding the answerer in would make the plugin answer itself, which is the
+  shape the seam was designed to avoid.
+
+  Both bounds govern: the agent's `delegationTimeoutMs` and the responder's `answerTimeoutMs`. The
+  smaller one decides what is actually heard, so the shipped patch sets both to 45 s.
+
+  It does **not** yet acknowledge-then-speak-late — the voice model waits in silence, and past the bound
+  the responder declines rather than inventing an answer. That refinement needs a spike (does the
+  provider hold a delegation open for a late append?) which requires audio in flight, so it lands with
+  the client half.
+
 ## [0.2.1] — 2026-10-08
 
 ### Fixed

@@ -25,7 +25,11 @@ All notable changes to this project are documented here. The format follows
   the plain-CommonJS artefact as a fixture that **must fail** it. A guard that encodes a guess is worse
   than no guard, and this one demonstrated why.
 
-## [0.3.0] — 2026-10-08 `realtime-agent/start` and `realtime-agent/stop` are new bus
+## [0.3.0] — 2026-10-08
+
+### Added
+
+- **A connection opens the voice session.** `realtime-agent/start` and `realtime-agent/stop` are new bus
   events; the audio route emits them when an authenticated client connects and when its last client leaves
   (`openSessionOnConnect`, default true).
 

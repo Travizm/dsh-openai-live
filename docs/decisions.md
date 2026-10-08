@@ -84,6 +84,13 @@ endpoint. The durable fix is upstream, not private.
 **Cost.** Upstream review latency, and a design that must be acceptable to maintainers we do not
 control.
 
+**Amendment (2026-10-09) — the reason was half-right.** It was checked against the plugin's own
+source. `AlexKaiqi/dsh-realtime-voice` registers `routeId: 'openai/gpt-realtime'`, so *the sunsetting
+family* is confirmed; *the wrong endpoint* is not — it calls official `https://api.openai.com`, pins
+that origin, and carries a second vendor (Doubao) alongside. The decision stands; its stated reason
+does not, and the strategy should not be defended with an argument the evidence will not carry. Full
+comparison: [competitive-landscape.md](competitive-landscape.md).
+
 ---
 
 ## ADR-007 — Non-governed: a standalone product repo
@@ -111,3 +118,29 @@ dropped.
 
 **Reversal.** If the artifact is later brought under Forge, it enters as a **verification** sprint
 over a built artifact — which is what that machinery is genuinely good at.
+
+---
+
+## ADR-008 — A file nothing reads is not a contract
+
+**Decision.** This bundle does not ship the ecosystem's `plugin-spec.json` or
+`spec/runtime-contract.json`, and no convention is adopted here until the thing that *consumes* it
+has been found.
+
+**Why.** A competing bundle ships both, and they make it look formal — which is precisely the
+attraction. Neither is consumed: a grep over the harness's `packages/` and `docs/` finds them
+nowhere, the installed market plugin (`safer-dsh-market`) does not read them, the official authoring
+docs do not mention them, and `gh search code "plugin-spec.json"` returns only unrelated ecosystems
+(ToolJet, elizaOS). They pass no gate, catch no drift, and register nothing.
+
+Copying them would be cargo-culting — the appearance of rigour standing in for it — in a repository
+whose entire thesis is that a check has to bite. The same instinct that produced this project's leak
+scan ("every pattern unambiguous by construction, no allow-list") rejects it: before adding a
+convention, find the reader.
+
+**Cost.** We look less decorated beside a bundle that ships them, and the comparison is public
+([competitive-landscape.md](competitive-landscape.md)). Accepted: a reviewer who reads *what consumes
+a file* is worth more than one who counts files.
+
+**Reversal.** If the harness or a market plugin begins reading them, adopt the convention then — to
+the schema that consumer expects, not the schema we guessed.

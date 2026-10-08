@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { Context } from '@deepseek-ai/cordis'
+import { Context, Service } from '@deepseek-ai/cordis'
+import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { RealtimeAdapter, RealtimeRuntime, type RealtimeSession, type RealtimeSessionHandlers, type RealtimeSessionOptions } from 'dsh-realtime'
 import * as agent from '../src/index.ts'
 import { Config, createHandlers, apply } from '../src/index.ts'
@@ -10,12 +11,16 @@ import type { DelegationRequest, RealtimeAgentConfig } from '../src/types.ts'
 class RecordingAdapter extends RealtimeAdapter {
   readonly appends: Array<{ kind: 'commentary' | 'thinking'; text: string; delegationId: string | undefined }> = []
   handlers: RealtimeSessionHandlers | undefined
+  opened = 0
+  closed = 0
 
   session(options: RealtimeSessionOptions): Promise<RealtimeSession> {
     // Wire the handlers exactly as a real adapter does: a substitute that drops them makes every
     // injected event vanish, and the suite then debugs the wrong file.
     this.handlers = options.handlers
+    this.opened += 1
     const appends = this.appends
+    const adapter = this
     return Promise.resolve({
       id: 'sess-1',
       started: {
@@ -36,7 +41,7 @@ class RecordingAdapter extends RealtimeAdapter {
         return Promise.resolve()
       },
       appendInstructions: () => Promise.resolve(),
-      close: () => Promise.resolve(),
+      close: () => { adapter.closed += 1; return Promise.resolve() },
     })
   }
 }
@@ -50,14 +55,30 @@ afterEach(async () => {
   ctx = undefined
 })
 
-/** A context with the real seam mounted and one recording adapter on the `fake` route. */
-function harness(): { ctx: Context; adapter: RecordingAdapter } {
+/** A tools service that records what was registered and what was released. */
+class FakeTools extends Service {
+  readonly registered: ToolDefinition[] = []
+  readonly released: string[] = []
+
+  constructor(context: Context) {
+    super(context, 'tools')
+  }
+
+  register(definition: ToolDefinition): () => void {
+    this.registered.push(definition)
+    return () => { this.released.push(definition.name) }
+  }
+}
+
+/** A context with the real seam, one recording adapter on the `fake` route, and a tools service. */
+function harness(): { ctx: Context; adapter: RecordingAdapter; tools: FakeTools } {
   const context = new Context()
   new RealtimeRuntime(context)
+  const tools = new FakeTools(context)
   const adapter = new RecordingAdapter()
   context.realtime.registerAdapter(['fake'], adapter)
   ctx = context
-  return { ctx: context, adapter }
+  return { ctx: context, adapter, tools }
 }
 
 describe('plugin shape', () => {
@@ -65,7 +86,7 @@ describe('plugin shape', () => {
     // A default export makes the Loader discard a function plugin's namespace: it loads and
     // contributes nothing, which is the quietest possible failure.
     expect(agent.name).toBe('realtime-agent')
-    expect(agent.inject).toEqual(['realtime'])
+    expect(agent.inject).toEqual(['realtime', 'tools'])
     expect('default' in agent).toBe(false)
     expect(typeof apply).toBe('function')
   })
@@ -236,5 +257,71 @@ describe('apply', () => {
     adapter.handlers?.onDelegation?.({ id: 'item_2', target: 'client', offsetMs: 0 })
     await tick()
     expect(adapter.appends).toHaveLength(1)
+  })
+})
+
+describe('the voice tools a session exposes', () => {
+  it('publishes them on mount, all three', () => {
+    const { ctx: context, tools } = harness()
+    apply(context, Config({ provider: 'fake' }) as RealtimeAgentConfig)
+    expect(tools.registered.map(definition => definition.name))
+      .toEqual(['voice_start', 'voice_stop', 'voice_say'])
+  })
+
+  it('releases them with the fiber that registered them', async () => {
+    const { ctx: context, tools } = harness()
+    apply(context, Config({ provider: 'fake' }) as RealtimeAgentConfig)
+    await context.fiber.dispose()
+    ctx = undefined
+    // Registrations are effects. If this ever needs a separate teardown path, that path is what will
+    // be forgotten on the day it matters.
+    expect(tools.released).toEqual(['voice_start', 'voice_stop', 'voice_say'])
+  })
+
+  it('opens exactly one session however often it is asked', async () => {
+    const { ctx: context, adapter, tools } = harness()
+    apply(context, Config({ provider: 'fake' }) as RealtimeAgentConfig)
+    const start = tools.registered.find(definition => definition.name === 'voice_start')
+    const first = await start!.execute({}, {} as never)
+    const second = await start!.execute({}, {} as never)
+    expect(second).toEqual(first)
+    expect(adapter.opened).toBe(1)
+  })
+
+  it('stops the session, then reports there was nothing left to stop', async () => {
+    const { ctx: context, adapter, tools } = harness()
+    apply(context, Config({ provider: 'fake' }) as RealtimeAgentConfig)
+    const start = tools.registered.find(definition => definition.name === 'voice_start')
+    const stop = tools.registered.find(definition => definition.name === 'voice_stop')
+
+    await start!.execute({}, {} as never)
+    expect(await stop!.execute({}, {} as never)).toEqual({ closed: true })
+    expect(adapter.closed).toBe(1)
+
+    expect(await stop!.execute({}, {} as never)).toEqual({ closed: false })
+    expect(adapter.closed).toBe(1)
+  })
+
+  it('refuses to speak once the session has been stopped', async () => {
+    const { ctx: context, tools } = harness()
+    apply(context, Config({ provider: 'fake' }) as RealtimeAgentConfig)
+    const start = tools.registered.find(definition => definition.name === 'voice_start')
+    const stop = tools.registered.find(definition => definition.name === 'voice_stop')
+    const say = tools.registered.find(definition => definition.name === 'voice_say')
+
+    await start!.execute({}, {} as never)
+    await stop!.execute({}, {} as never)
+    await expect(say!.execute({ text: 'still there?' }, {} as never)).rejects.toThrow('voice_start')
+  })
+
+  it('speaks into the session the tools opened', async () => {
+    const { ctx: context, adapter, tools } = harness()
+    apply(context, Config({ provider: 'fake' }) as RealtimeAgentConfig)
+    const start = tools.registered.find(definition => definition.name === 'voice_start')
+    const say = tools.registered.find(definition => definition.name === 'voice_say')
+
+    await start!.execute({}, {} as never)
+    await say!.execute({ text: 'Staging is green.' }, {} as never)
+    expect(adapter.appends).toEqual([{ kind: 'commentary', text: 'Staging is green.', delegationId: undefined }])
   })
 })

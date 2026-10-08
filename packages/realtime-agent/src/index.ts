@@ -25,6 +25,7 @@ import Schema from '@deepseek-ai/schemastery'
 import type { Context } from '@deepseek-ai/cordis'
 import type { RealtimeDelegation, RealtimeSession, RealtimeSessionHandlers, RealtimeTranscript } from 'dsh-realtime'
 import { answerDelegation, type DelegationAsker } from './bridge.ts'
+import { voiceToolDefinitions } from './tools.ts'
 import { TranscriptBuffer } from './transcript.ts'
 import type { DelegationAnswer, DelegationRequest, RealtimeAgentConfig } from './types.ts'
 
@@ -46,12 +47,13 @@ declare module '@deepseek-ai/cordis' {
 export * from './types.ts'
 export { answerDelegation, boundAppend, UNANSWERED_NOTICE, type DelegationAsker } from './bridge.ts'
 export { TranscriptBuffer } from './transcript.ts'
+export { voiceToolDefinitions, type VoiceToolDeps } from './tools.ts'
 
 /** Plugin name, as it appears in Loader diagnostics. */
 export const name = 'realtime-agent'
 
-/** This plugin drives the realtime seam, so it waits for it. */
-export const inject = ['realtime']
+/** This plugin drives the realtime seam and publishes tools, so it waits for both. */
+export const inject = ['realtime', 'tools']
 
 /**
  * Validated configuration.
@@ -129,15 +131,49 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
     onSessionError: (error) => { ctx.emit('realtime-agent/error', error) },
   })
 
-  if (config.autoStart) {
-    // `apply` is synchronous, so a failed open cannot be thrown from it — it is reported on the bus
-    // instead. The plugin stays valid and a later start may succeed.
-    void ctx.realtime.session({
+  /**
+   * Open a session, or return the one already open.
+   *
+   * Idempotent on purpose: `voice_start` is safe to call repeatedly, and a model that calls it twice
+   * must not end up with two live sessions it cannot see.
+   */
+  const open = async (): Promise<RealtimeSession> => {
+    const current = session
+    if (current !== undefined) return current
+    const opened = await ctx.realtime.session({
       provider: config.provider,
       model: config.model,
       ...config.voice === undefined ? {} : { voice: config.voice },
       ...config.instructions === undefined ? {} : { instructions: config.instructions },
       handlers,
-    }).then((opened) => { session = opened }, (error: Error) => { ctx.emit('realtime-agent/error', error) })
+    })
+    session = opened
+    return opened
+  }
+
+  /**
+   * Close the session, dropping the reference first.
+   *
+   * Dropping it before the close settles means a delegation arriving during teardown is ignored rather
+   * than answered into a transport that is going away.
+   */
+  const stop = async (): Promise<void> => {
+    const current = session
+    session = undefined
+    await current?.close()
+  }
+
+  // Tools are an effect, like every other contribution this plugin makes: the fiber that mounted them
+  // releases them, so there is no separate teardown path to forget.
+  ctx.effect(function* () {
+    const disposers = voiceToolDefinitions({ session: () => session, start: open, stop })
+      .map(definition => ctx.tools.register(definition))
+    yield () => { for (const dispose of disposers) dispose() }
+  }, 'realtime-agent.tools')
+
+  if (config.autoStart) {
+    // `apply` is synchronous, so a failed open cannot be thrown from it — it is reported on the bus
+    // instead. The plugin stays valid and a later start may succeed.
+    void open().catch((error: Error) => { ctx.emit('realtime-agent/error', error) })
   }
 }

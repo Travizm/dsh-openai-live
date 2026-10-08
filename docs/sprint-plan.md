@@ -6,6 +6,10 @@ traceable to a row in `docs/plan-review-adjudication.md`, which is the record of
 The review itself (`reviews/sprint-plan-review-20261008T230732Z-51f9152e7c089941.md`, `gpt-6-astra`,
 reasoning high) is **untrusted input**; only the adjudicated dispositions are plan.
 
+**v2.1 · 2026-10-09.** Adds the ecosystem evidence this plan's S2 and S4 bets were written without:
+[`competitive-landscape.md`](competitive-landscape.md) — a published competitor in the same
+capability space, its seam, and the ruling on what *not* to copy (ADR-008). No ordering changes.
+
 Standalone work in this repo — it owns its gates, there is no Forge governance contract over it
 (ADR-007). A sprint here is **one shippable release**, sized to finish inside **one session**, because
 the longest build in this project died to context exhaustion rather than to difficulty. *(The
@@ -190,6 +194,10 @@ Stories:
 3. **Bring-your-own-key onboarding** that says which capability the key needs and proves it before
    saving, rather than failing at session create.
 4. **Document the seam's contract** as the thing third parties implement.
+5. **The two steals, decided rather than forgotten** (`competitive-landscape.md` §4). An
+   **AudioWorklet** capture path — our client half already documents the `ScriptProcessorNode` trade
+   and the trigger to swap it — and a **WebRTC** transport re-evaluation. Neither is a rewrite. They
+   are here so a competitor shipping both forces a decision instead of a shrug.
 
 Exit criteria: the plugin works on two providers; adding a third is a *measured* afternoon.
 

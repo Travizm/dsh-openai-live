@@ -27,6 +27,18 @@ All notable changes to this project are documented here. The format follows
   provider hold a delegation open for a late append?) which requires audio in flight, so it lands with
   the client half.
 
+- **The audio seams, in both directions.** `dsh-realtime-agent` no longer drops either end.
+  `realtime-agent/audio` carries provider output audio — frame for frame, in order, unbuffered — and
+  `realtime-agent/mic` writes capture frames into the open session. Input had no route at all before,
+  because the object that captures it (a client half) cannot reach the plugin's context; the frames
+  arrive as an event, and the agent keeps the only object that can write them.
+
+  A microphone frame arriving with no session open is **dropped, not buffered**: a capture device may
+  well start first, and a queue that grows while nothing drains it presents first as latency and then as
+  an unbounded allocation. A write into a session that closed a moment ago is a race rather than a fault,
+  so it is reported on `realtime-agent/error` instead of thrown from a listener — which has no caller to
+  catch it.
+
 ## [0.2.1] — 2026-10-08
 
 ### Fixed

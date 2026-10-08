@@ -189,6 +189,34 @@ describe('toProviderError', () => {
     expect(error?.message).toContain('param=type')
   })
 
+  it('classifies a refused credential, so a caller can tell the user to replace it', () => {
+    const error = toProviderError({
+      type: 'error',
+      error: { code: 'invalid_api_key', message: 'Incorrect API key provided' },
+    })
+    expect(error?.code).toBe('CREDENTIAL_REJECTED')
+    expect(error?.detail).toMatchObject({ providerCode: 'invalid_api_key', retryable: false })
+    expect(error?.detail?.remedy).toBeDefined()
+  })
+
+  it('marks a throttle retryable, which a refusal is not', () => {
+    const error = toProviderError({
+      type: 'error',
+      error: { code: 'rate_limit_exceeded', message: 'Rate limit reached' },
+    })
+    expect(error?.code).toBe('RATE_LIMITED')
+    expect(error?.detail?.retryable).toBe(true)
+  })
+
+  it('keeps the generic class for a code it does not recognise, rather than guessing', () => {
+    const error = toProviderError({
+      type: 'error',
+      error: { code: 'some_unheard_of_code', message: 'Who knows' },
+    })
+    expect(error?.code).toBe('PROVIDER_ERROR')
+    expect(error?.detail).toMatchObject({ providerCode: 'some_unheard_of_code', retryable: false })
+  })
+
   it('copes with a missing, null or non-object error body', () => {
     expect(toProviderError({ type: 'error' })?.message).toContain('unspecified')
     expect(toProviderError({ type: 'error', error: null })?.message).toContain('unspecified')

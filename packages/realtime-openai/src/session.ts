@@ -145,7 +145,13 @@ export class OpenAiLiveSession implements RealtimeSession {
         this.pending.delete(eventId)
         reject(new RealtimeError(
           `the provider did not acknowledge a ${kind} append within ${this.appendAckTimeoutMs}ms`,
-          'PROVIDER_ERROR',
+          'PROVIDER_TIMEOUT',
+          {
+            detail: {
+              retryable: true,
+              remedy: 'retry the append — if it times out again the session has likely stalled, so reopen it with voice_start',
+            },
+          },
         ))
       }, this.appendAckTimeoutMs)
       this.pending.set(eventId, {

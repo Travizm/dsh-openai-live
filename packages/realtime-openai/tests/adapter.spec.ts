@@ -134,14 +134,14 @@ describe('resolveApiKey', () => {
         return error as { code?: string; message?: string }
       }
     })()
-    expect(failure?.code).toBe('MISSING_CREDENTIAL')
+    expect(failure?.code).toBe('NOT_CONFIGURED')
     expect(failure?.message).toContain('apiKey')
     expect(failure?.message).not.toContain(KEY)
   })
 
   it('refuses a blank or whitespace-only key', () => {
-    expect(() => resolveApiKey(config({ apiKey: '' }))).toThrowError(expect.objectContaining({ code: 'MISSING_CREDENTIAL' }))
-    expect(() => resolveApiKey(config({ apiKey: '   ' }))).toThrowError(expect.objectContaining({ code: 'MISSING_CREDENTIAL' }))
+    expect(() => resolveApiKey(config({ apiKey: '' }))).toThrowError(expect.objectContaining({ code: 'NOT_CONFIGURED' }))
+    expect(() => resolveApiKey(config({ apiKey: '   ' }))).toThrowError(expect.objectContaining({ code: 'NOT_CONFIGURED' }))
   })
 
   it('trims a key that arrived with whitespace', () => {
@@ -175,7 +175,7 @@ describe('handshake', () => {
     const factory = new FakeFactory()
     const adapter = new OpenAiLiveAdapter(configWithoutKey(), factory)
     await expect(adapter.session({ provider: 'openai-live', model: 'gpt-live-1' }))
-      .rejects.toMatchObject({ code: 'MISSING_CREDENTIAL' })
+      .rejects.toMatchObject({ code: 'NOT_CONFIGURED' })
     expect(factory.transport).toBeUndefined()
   })
 
@@ -301,7 +301,7 @@ describe('handshake', () => {
 
   it('rejects when the provider never confirms, rather than hanging an open socket', async () => {
     const { transport, pending } = await openSession({ establishTimeoutMs: 5 })
-    await expect(pending).rejects.toMatchObject({ code: 'PROVIDER_ERROR' })
+    await expect(pending).rejects.toMatchObject({ code: 'PROVIDER_TIMEOUT', detail: { retryable: true } })
     expect(transport.sent).toHaveLength(1)
   })
 
@@ -482,8 +482,10 @@ describe('the delegation path', () => {
 
   it('fails loudly when the provider never acknowledges', async () => {
     const { session } = liveSession({}, 5)
+    // Distinct from a reported failure: the provider said nothing at all, which is a different
+    // problem from the provider saying no, and a retry can legitimately help.
     await expect(session.appendCommentary('anything')).rejects
-      .toMatchObject({ code: 'PROVIDER_ERROR' })
+      .toMatchObject({ code: 'PROVIDER_TIMEOUT', detail: { retryable: true } })
   })
 
   it('refuses an append over the bound before it reaches the wire', async () => {

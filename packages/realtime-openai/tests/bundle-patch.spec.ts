@@ -207,6 +207,6 @@ describe('the shipped bundle patch', () => {
     } catch (error) {
       code = (error as { code?: unknown }).code
     }
-    expect(code).toBe('MISSING_CREDENTIAL')
+    expect(code).toBe('NOT_CONFIGURED')
   })
 })

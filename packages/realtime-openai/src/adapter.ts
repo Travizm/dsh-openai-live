@@ -7,7 +7,7 @@
 import { RealtimeAdapter, RealtimeError } from 'dsh-realtime'
 import type { RealtimeModelInfo, RealtimeProviderInfo, RealtimeSession } from 'dsh-realtime'
 import { OpenAiLiveSession } from './session.ts'
-import { toStarted } from './translate.ts'
+import { toStarted, toProviderError } from './translate.ts'
 import { isKnownServerEvent, parseServerEvent, sessionStart } from './wire.ts'
 import type { OpenAiLiveConfig, LiveSessionTarget, RealtimeTransportFactory } from './types.ts'
 
@@ -24,15 +24,26 @@ const PROVIDER_NAME = 'OpenAI Live'
  * *setting*, because that is what a user can act on and what cannot leak.
  * @param config - the resolved plugin configuration.
  * @returns the trimmed key.
- * @throws RealtimeError `MISSING_CREDENTIAL` when the setting is absent or blank.
+ * @throws RealtimeError `NOT_CONFIGURED` when the setting is absent or blank.
  */
 export function resolveApiKey(config: OpenAiLiveConfig): string {
   const key = (config.apiKey ?? '').trim()
   if (key.length === 0) {
+    // A missing credential is a *state*, not a fault: it is what a fresh install looks like, and it
+    // is fixed by supplying a value rather than by retrying. The detail says so in words the caller
+    // can relay, and names the setting without ever approaching a value.
     throw new RealtimeError(
       `no API key configured: set "${API_KEY_SETTING}" to the raw key`
       + ` (the composition supplies it from the environment)`,
-      'MISSING_CREDENTIAL',
+      'NOT_CONFIGURED',
+      {
+        detail: {
+          setting: API_KEY_SETTING,
+          retryable: false,
+          remedy: `set "${API_KEY_SETTING}" (or the OPENAI_LIVE_API_KEY environment variable) to an`
+            + ' OpenAI key, then start the voice session again',
+        },
+      },
     )
   }
   return key
@@ -112,7 +123,8 @@ export class OpenAiLiveAdapter extends RealtimeAdapter {
     const timer = setTimeout(() => {
       settleEstablish.reject(new RealtimeError(
         `the provider did not confirm the session within ${this.config.establishTimeoutMs}ms`,
-        'PROVIDER_ERROR',
+        'PROVIDER_TIMEOUT',
+        { detail: { retryable: true, remedy: 'retry voice_start — the provider did not answer in time' } },
       ))
     }, this.config.establishTimeoutMs)
 
@@ -144,12 +156,10 @@ export class OpenAiLiveAdapter extends RealtimeAdapter {
           }
           if (event.type === 'error') {
             clearTimeout(timer)
-            const failure = new RealtimeError(
-              'the provider rejected the session opening',
-              'PROVIDER_ERROR',
-              { cause: new Error(String((event as { error?: { message?: unknown } }).error?.message ?? 'unspecified')) },
-            )
-            settleEstablish.reject(failure)
+            // Classified rather than generic: a session opening refused because the key was refused
+            // and one refused because the account is out of credit are the same event here and must
+            // not be the same error — this is the path a user with a *present but wrong* key hits.
+            settleEstablish.reject(toProviderError(event))
             return
           }
         }

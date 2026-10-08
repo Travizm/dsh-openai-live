@@ -6,6 +6,22 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.3]
+
+### Fixed
+
+- **`@deepseek-ai/dsh-tools` is a `dependency`, not a `peerDependency`.** The consumer imports
+  `defineTool` from it, and a peer is resolved from the *consumer's* `node_modules`. Under pnpm's strict
+  layout a plugin installed into a profile cannot reach a package that only the profile's bundles
+  declare — so the import failed and the row could not load. It is now installed into the package's own
+  tree, where resolution does not depend on the host's layout. Safe because `defineTool` is a pure
+  function returning a plain object: a second copy carries no shared state and no service identity.
+
+  Found by installing through the DeepSeek Harness plugin portal, which runs pnpm. **Every verification
+  we had ran npm, and npm installs peers automatically** — so the missing peer was invisible until a
+  package manager that does not do that ran the install. Verify with the package manager the consumer
+  uses, not the one that is convenient.
+
 ## [0.1.2]
 
 ### Added
@@ -81,7 +97,8 @@ First release. Verified against the live GPT-Live-1 API rather than against docu
   under client delegation, and client delegation has no `response.*` path at all.
 - `gpt-realtime` carries a published sunset date; `gpt-live-1` does not.
 
-[Unreleased]: https://github.com/Travizm/dsh-openai-live/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/Travizm/dsh-openai-live/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/Travizm/dsh-openai-live/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Travizm/dsh-openai-live/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Travizm/dsh-openai-live/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Travizm/dsh-openai-live/releases/tag/v0.1.0

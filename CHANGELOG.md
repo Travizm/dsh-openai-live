@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.2]
+
 ### Added
 
 - **`dsh-realtime-agent`** — the consumer the seam was missing. It holds a session, records the
@@ -21,6 +23,11 @@ All notable changes to this project are documented here. The format follows
 
   Shipped as a third row in the bundle, with `autoStart: false` so mounting the bundle cannot by
   itself open a socket or spend credit.
+
+- **Voice tools** — `voice_start`, `voice_stop` and `voice_say`, so an agent can be heard rather than
+  only heard *from*. `voice_say` throws when no session is open, naming the fix: a tool-thrown failure
+  is the registry's own failure channel, and reporting it as a returned value would leave the model
+  believing it had spoken when nothing was said.
 
 ## [0.1.1]
 
@@ -74,6 +81,7 @@ First release. Verified against the live GPT-Live-1 API rather than against docu
   under client delegation, and client delegation has no `response.*` path at all.
 - `gpt-realtime` carries a published sunset date; `gpt-live-1` does not.
 
-[Unreleased]: https://github.com/Travizm/dsh-openai-live/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/Travizm/dsh-openai-live/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/Travizm/dsh-openai-live/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Travizm/dsh-openai-live/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Travizm/dsh-openai-live/releases/tag/v0.1.0

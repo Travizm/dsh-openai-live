@@ -6,6 +6,36 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-10-08
+
+### Added
+
+- **The desktop app can reach the audio route.** `dsh-realtime-audio-ws` 0.2.0, and the bundle that ships
+  it. Until now the client half derived its socket URL from `location`, which works on the served browser
+  UI and cannot work in the app: that page's origin is `dsh-app://app`, whose host is the literal string
+  `app`, so it built `ws://app/…` — a name that resolves nowhere and fails in a way that reads exactly like
+  the host refusing the connection.
+
+  The host half now contributes a row to the web server's index-injection table: the door built for
+  plugins, gathered on every index render and every worker boot payload, read fresh at emit time, which is
+  the only moment the OS-assigned port is known for certain. The row publishes the route path, the
+  authority to open the socket against, and a capability token.
+
+  The token is not decoration. The app's requests to loopback are cross-site, so the harness's own
+  `SameSite=Strict` auth cookie cannot travel and the connection service refuses that page correctly and
+  forever, however right the rest of the client half is. One token, generated per process and injected only
+  into the page the host itself serves, is the credential that can. The route's own verdict path is
+  unchanged — it still asks the connection service in the same position, as DSH's own transport does — and
+  the token merely overrides a refusal for a caller presenting it.
+
+### Changed
+
+- **A page that cannot derive an authority now says so.** `pageAuthority` refuses to read one from a
+  non-http(s) page, and the client reports *"no authority for the audio socket: this page has none of its
+  own and the host injected none"* rather than failing at connect with a refusal it cannot explain.
+
+## [0.1.3] — 2026-10-08
+
 ### Fixed
 
 - **The client face's registration shape — and the guard that should have caught it.** `dsh-realtime-audio-ws`

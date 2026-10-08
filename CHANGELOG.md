@@ -6,6 +6,20 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **The client face shipped as ESM into a loader that materialises CommonJS.** `dsh-realtime-audio-ws`
+  0.1.1. The browser entry was emitted by the package's ordinary `tsc` build, so it carried `export`
+  statements into a loader the harness itself calls *"the lazy-CJS module table"*. The renderer reported
+  `Uncaught SyntaxError: Unexpected token 'export'`, and because the web boot fails loudly on a single bad
+  entry, **the whole application refused to start** — a shipped defect with a visible blast radius.
+
+  The client face now has its own CommonJS build target, and it imports nothing at all: the Cordis context
+  it used is stated structurally instead, so the served artefact has no ESM syntax and no `require` calls.
+
+  No bundle version accompanies this: `dsh-openai-live` already declares `dsh-realtime-audio-ws: ^0.1.0`,
+  which admits 0.1.1, so a new bundle version would be a version with no change behind it.
+
 ## [0.3.0] — 2026-10-08
 
 The voice loop closes in code. A session can now be heard, answered, and reached from a browser: four

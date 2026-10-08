@@ -23,8 +23,6 @@
  * actually been read, rather than shipping a capture path that a policy might silently kill.
  */
 
-import type { Context as ClientContext } from '@deepseek-ai/cordis'
-
 /** Browser-side plugin name. */
 export const name = 'realtime-audio-client'
 
@@ -81,6 +79,17 @@ export interface SocketLike {
   onmessage: ((event: { data: unknown }) => void) | null
   onerror: (() => void) | null
   onclose: (() => void) | null
+}
+
+/**
+ * The slice of a client Cordis context this plugin uses.
+ *
+ * Structural, and not only for testability: this face is served as a single CommonJS module, so any import
+ * it carried would have to be resolvable by whatever the module table hands the bundle. It needs one
+ * method, so it states one and imports nothing at all.
+ */
+export interface ClientContextLike {
+  effect(run: unknown, label?: string): unknown
 }
 
 /** Everything this plugin touches outside itself, injectable so every path is testable. */
@@ -328,7 +337,7 @@ export function createAudioClient(deps: ClientAudioDeps): ClientAudio {
  *
  * @param ctx - the client context, used only to own the lifetime.
  */
-export function apply(ctx: ClientContext): void {
+export function apply(ctx: ClientContextLike): void {
   const client = createAudioClient(defaultDeps())
   ;(globalThis as unknown as Record<string, unknown>)[GLOBAL_KEY] = {
     start: () => client.start(),

@@ -47,7 +47,17 @@ export const MAX_BACKLOG_SECONDS = 0.5
 /** Global the client publishes itself on. There is no UI surface yet; this is how it is started. */
 export const GLOBAL_KEY = '__dshRealtimeAudio'
 
-/** Optional host-injected settings. A future index-injection row may set the path; the default matches. */
+/**
+ * What the host injects into the page: the route path, the authority to open the socket against, and the
+ * capability token to present. Every field is optional, because an older host injects only the path.
+ */
+export interface InjectedRouteSettings {
+  readonly path?: string
+  readonly authority?: string
+  readonly token?: string
+}
+
+/** Optional host-injected settings, published as a `global` index-injection row before this file runs. */
 export const INJECTED_KEY = '__DSH_REALTIME_AUDIO__'
 
 // ---- the API shapes this file needs, described rather than imported -----------------------------------
@@ -98,7 +108,7 @@ export interface ClientAudioDeps {
   readonly getUserMedia: ((constraints: unknown) => Promise<StreamLike>) | undefined
   readonly createAudioContext: ((sampleRate: number) => ContextLike) | undefined
   readonly createSocket: ((url: string) => SocketLike) | undefined
-  readonly injected: { readonly path?: string } | undefined
+  readonly injected: InjectedRouteSettings | undefined
 }
 
 /** What the caller — or a test — gets to see. */
@@ -125,12 +135,46 @@ export interface ClientAudio {
  * @param path - the route pathname.
  * @returns the URL, or undefined when this page cannot host a socket at all.
  */
-export function socketUrl(location: LocationLike | undefined, path: string): string | undefined {
-  if (location === undefined || location.host === '') return undefined
+export function socketUrl(
+  location: LocationLike | undefined,
+  path: string,
+  authority?: string,
+): string | undefined {
+  const host = authority !== undefined && authority !== '' ? authority : pageAuthority(location)
+  if (host === undefined) return undefined
   // An https page may not open a ws:// socket — the browser blocks it as mixed content — so the scheme has
   // to follow the page rather than being decided here.
-  const scheme = location.protocol === 'https:' ? 'wss' : 'ws'
-  return `${scheme}://${location.host}${path}`
+  const scheme = location?.protocol === 'https:' ? 'wss' : 'ws'
+  return `${scheme}://${host}${path}`
+}
+
+/**
+ * The authority a page can derive for itself, or undefined when it cannot derive a usable one.
+ *
+ * Only an http(s) page addresses a server. The desktop app's page is served from `dsh-app://app`, whose
+ * host is the literal string `app`: deriving a socket URL from it yields `ws://app/...`, which resolves
+ * nowhere and fails in a way that reads exactly like the host refusing the connection — a wrong answer
+ * that costs an afternoon. Returning undefined lets the caller name the real cause instead.
+ *
+ * @param location - the page's location, or undefined when there is none.
+ * @returns the authority, or undefined when this page has no usable one of its own.
+ */
+export function pageAuthority(location: LocationLike | undefined): string | undefined {
+  if (location === undefined) return undefined
+  if (location.protocol !== 'http:' && location.protocol !== 'https:') return undefined
+  return location.host === '' ? undefined : location.host
+}
+
+/**
+ * Attach the capability token, when the host injected one.
+ *
+ * @param url - the socket URL.
+ * @param token - the injected token, or undefined on a host that injects none.
+ * @returns the URL to open.
+ */
+export function withToken(url: string, token: string | undefined): string {
+  if (token === undefined || token === '') return url
+  return `${url}?t=${encodeURIComponent(token)}`
 }
 
 /**
@@ -174,7 +218,7 @@ export interface ScopeLike {
   navigator?: { mediaDevices?: { getUserMedia(constraints: unknown): Promise<StreamLike> } }
   AudioContext?: new (options: { sampleRate: number }) => ContextLike
   WebSocket?: new (url: string) => SocketLike
-  __DSH_REALTIME_AUDIO__?: { readonly path?: string }
+  __DSH_REALTIME_AUDIO__?: InjectedRouteSettings
 }
 
 /**
@@ -285,8 +329,11 @@ export function createAudioClient(deps: ClientAudioDeps): ClientAudio {
 
   const start = async (): Promise<ClientAudioState> => {
     if (current.kind === 'live') return current
-    const url = socketUrl(deps.location, deps.injected?.path ?? DEFAULT_PATH)
-    if (url === undefined) return fail('this page has no location to open a socket against')
+    const route = socketUrl(deps.location, deps.injected?.path ?? DEFAULT_PATH, deps.injected?.authority)
+    if (route === undefined) {
+      return fail('no authority for the audio socket: this page has none of its own and the host injected none')
+    }
+    const url = withToken(route, deps.injected?.token)
     if (deps.getUserMedia === undefined) return fail('this page has no microphone API')
     if (deps.createAudioContext === undefined) return fail('this page has no audio API')
     if (deps.createSocket === undefined) return fail('this page has no WebSocket API')

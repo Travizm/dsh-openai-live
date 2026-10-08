@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { Context, Service } from '@deepseek-ai/cordis'
 import WebSocket from 'ws'
 import { Config, apply } from '../src/index.ts'
+import { INJECTED_KEY } from '../src/injection.ts'
 import { DEFAULT_PATH, type RealtimeAudioWsConfig } from '../src/types.ts'
 
 let cleanups: Array<() => Promise<void> | void> = []
@@ -23,6 +24,9 @@ afterEach(async () => {
 /** The route registry slice this package claims. */
 class FakeWebServer extends Service {
   readonly upgrades = new Map<string, (req: IncomingMessage, socket: Duplex, head: Buffer) => unknown>()
+  /** The web server's own view of where it is listening: the injection row is built from these. */
+  listenedPort = 19387
+  readonly config = { port: 19387, host: '127.0.0.1' }
   constructor(ctx: Context) { super(ctx, 'webServer') }
   registerUpgrade(route: { path: string; handler: (req: IncomingMessage, socket: Duplex, head: Buffer) => unknown }): () => void {
     this.upgrades.set(route.path, route.handler)
@@ -177,5 +181,47 @@ describe('the audio route', () => {
     client.close()
     await new Promise((resolve) => { setTimeout(resolve, 20) })
     expect(events).toEqual([])
+  })
+
+  /** Gather the injection table the web server collects on every index render and worker boot payload. */
+  function injectionTable(context: Context): Array<{ name: string; value: { path?: string; authority?: string; token?: string } }> {
+    const table: unknown[] = []
+    void (context.emit as unknown as (name: string, payload: unknown) => void)('webserver/index-inject', table)
+    return table as Array<{ name: string; value: { path?: string; authority?: string; token?: string } }>
+  }
+
+  it('publishes the route settings the page needs, built at emit time', async () => {
+    const { context } = await mount()
+    const table = injectionTable(context)
+    expect(table).toHaveLength(1)
+    expect(table[0]?.name).toBe(INJECTED_KEY)
+    expect(table[0]?.value.path).toBe(DEFAULT_PATH)
+    // The port is read at emit time, not at boot: an index render follows the listen, which is the only
+    // moment the OS-assigned port is known.
+    expect(table[0]?.value.authority).toBe('127.0.0.1:19387')
+    expect(table[0]?.value.token).toMatch(/^[A-Za-z0-9_-]{43}$/)
+  })
+
+  it('accepts the injected token from a caller that cannot carry the cookie', async () => {
+    // The desktop app's page is served from `dsh-app://app`, so its request to loopback is cross-site and
+    // the harness's SameSite=Strict cookie never arrives — the connection service refuses it, correctly.
+    // The injected token is what makes that page usable at all, and this is the case that proves it.
+    const { context, connection, url } = await mount()
+    connection.rejection = 401
+    const token = injectionTable(context)[0]?.value.token ?? ''
+    expect(token).not.toBe('')
+    const client = new WebSocket(`${url()}?t=${token}`)
+    cleanups.push(() => { client.terminate() })
+    await once(client, 'open')
+    // The service's verdict is untouched: it is the token that admitted this caller, not a changed answer.
+    expect(connection.rejection).toBe(401)
+  })
+
+  it('still refuses a caller presenting the wrong token', async () => {
+    const { connection, url } = await mount()
+    connection.rejection = 401
+    const client = new WebSocket(`${url()}?t=not-the-token`)
+    cleanups.push(() => { client.terminate() })
+    await expect(once(client, 'open')).rejects.toThrowError(/401/)
   })
 })

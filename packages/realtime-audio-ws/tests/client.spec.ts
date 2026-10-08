@@ -247,8 +247,13 @@ describe('createAudioClient', () => {
   })
 
   it('fails with a reason when the page lacks a location, a microphone, audio or a socket', async () => {
+    // A page with no location and nothing injected has no authority to open a socket against; the reason
+    // says that rather than blaming the location, which was the old and less useful wording.
     await expect(harness({ location: undefined }).client.start())
-      .resolves.toEqual({ kind: 'failed', reason: 'this page has no location to open a socket against' })
+      .resolves.toEqual({
+        kind: 'failed',
+        reason: 'no authority for the audio socket: this page has none of its own and the host injected none',
+      })
     await expect(harness({ getUserMedia: undefined }).client.start())
       .resolves.toEqual({ kind: 'failed', reason: 'this page has no microphone API' })
     await expect(harness({ createAudioContext: undefined }).client.start())

@@ -261,11 +261,11 @@ describe('apply', () => {
 })
 
 describe('the voice tools a session exposes', () => {
-  it('publishes them on mount, all three', () => {
+  it('publishes them on mount', () => {
     const { ctx: context, tools } = harness()
     apply(context, Config({ provider: 'fake' }) as RealtimeAgentConfig)
     expect(tools.registered.map(definition => definition.name))
-      .toEqual(['voice_start', 'voice_stop', 'voice_say'])
+      .toEqual(['voice_start', 'voice_stop'])
   })
 
   it('releases them with the fiber that registered them', async () => {
@@ -275,7 +275,7 @@ describe('the voice tools a session exposes', () => {
     ctx = undefined
     // Registrations are effects. If this ever needs a separate teardown path, that path is what will
     // be forgotten on the day it matters.
-    expect(tools.released).toEqual(['voice_start', 'voice_stop', 'voice_say'])
+    expect(tools.released).toEqual(['voice_start', 'voice_stop'])
   })
 
   it('opens exactly one session however often it is asked', async () => {
@@ -300,28 +300,5 @@ describe('the voice tools a session exposes', () => {
 
     expect(await stop!.execute({}, {} as never)).toEqual({ closed: false })
     expect(adapter.closed).toBe(1)
-  })
-
-  it('refuses to speak once the session has been stopped', async () => {
-    const { ctx: context, tools } = harness()
-    apply(context, Config({ provider: 'fake' }) as RealtimeAgentConfig)
-    const start = tools.registered.find(definition => definition.name === 'voice_start')
-    const stop = tools.registered.find(definition => definition.name === 'voice_stop')
-    const say = tools.registered.find(definition => definition.name === 'voice_say')
-
-    await start!.execute({}, {} as never)
-    await stop!.execute({}, {} as never)
-    await expect(say!.execute({ text: 'still there?' }, {} as never)).rejects.toThrow('voice_start')
-  })
-
-  it('speaks into the session the tools opened', async () => {
-    const { ctx: context, adapter, tools } = harness()
-    apply(context, Config({ provider: 'fake' }) as RealtimeAgentConfig)
-    const start = tools.registered.find(definition => definition.name === 'voice_start')
-    const say = tools.registered.find(definition => definition.name === 'voice_say')
-
-    await start!.execute({}, {} as never)
-    await say!.execute({ text: 'Staging is green.' }, {} as never)
-    expect(adapter.appends).toEqual([{ kind: 'commentary', text: 'Staging is green.', delegationId: undefined }])
   })
 })

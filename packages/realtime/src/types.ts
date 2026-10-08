@@ -159,22 +159,34 @@ export interface RealtimeSession {
 
   /**
    * Return a delegated result for the model to **speak aloud**.
+   *
+   * Resolves on the provider's **acknowledgement** when it answers a delegation. With no
+   * `delegationId` there is no acknowledgement to wait for: the provider accepts a session-wide append
+   * in silence, because it does not begin applying context at a bare `session.start`. That form
+   * therefore resolves on the write and is **best-effort** — it is applied once audio has flowed, and
+   * this seam cannot say when. It is not a way to speak unprompted.
    * @param content - plain text, non-empty and within {@link MAX_APPEND_CHARS}.
-   * @param delegationId - the delegation this answers, or `undefined` for session-wide context.
+   * @param delegationId - the delegation this answers, or `undefined` for best-effort session context.
    */
   appendCommentary(content: string, delegationId?: string): Promise<void>
 
   /**
    * Add context the model may use **without speaking it** — progress, facts, intermediate state.
+   *
+   * With no `delegationId` this resolves on the write and is best-effort, for the reason recorded on
+   * {@link appendCommentary}: the provider does not acknowledge a session-wide append.
    * @param content - plain text, non-empty and within {@link MAX_APPEND_CHARS}.
-   * @param delegationId - the delegation this relates to, or `undefined` for session-wide context.
+   * @param delegationId - the delegation this relates to, or `undefined` for best-effort session context.
    */
   appendThinking(content: string, delegationId?: string): Promise<void>
 
   /**
    * Steer the live conversation's behaviour (tone, brevity, policy) without speaking anything.
+   *
+   * With no `delegationId` this resolves on the write and is best-effort, for the reason recorded on
+   * {@link appendCommentary}.
    * @param content - plain text, non-empty and within {@link MAX_APPEND_CHARS}.
-   * @param delegationId - `undefined` for session-wide steering.
+   * @param delegationId - `undefined` for best-effort session-wide steering.
    */
   appendInstructions(content: string, delegationId?: string): Promise<void>
 

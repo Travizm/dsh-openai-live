@@ -422,22 +422,35 @@ describe('the delegation path', () => {
   it('sends silent progress through thinking, and steering through instructions', async () => {
     const { transport, session } = liveSession()
     const thinking = session.appendThinking('looking it up', 'item_1')
-    const instructions = session.appendInstructions('keep it short')
+    const instructions = session.appendInstructions('keep it short', 'item_1')
     expect(transport.parsed().map(frame => frame.type)).toEqual([
       'session.thinking.append',
       'session.instructions.append',
     ])
-    expect(transport.parsed()[1]).toMatchObject({ delegation_id: null })
+    expect(transport.parsed()[1]).toMatchObject({ delegation_id: 'item_1' })
     transport.deliver({ type: 'session.thinking.appended' })
     transport.deliver({ type: 'session.instructions.appended' })
     await expect(thinking).resolves.toBeUndefined()
     await expect(instructions).resolves.toBeUndefined()
   })
 
+  it('skips a pending append of another kind when the acknowledgement carries no id', async () => {
+    const { transport, session } = liveSession()
+    // The provider's echo is undocumented, so correlation degrades to FIFO — and FIFO has to stay
+    // right when more than one append is in flight, which means skipping entries of other kinds
+    // rather than settling whichever one happens to be first.
+    const thinking = session.appendThinking('unrelated progress', 'item_1')
+    const commentary = session.appendCommentary('the answer', 'item_1')
+    transport.deliver({ type: 'session.commentary.appended' })
+    await expect(commentary).resolves.toBeUndefined()
+    transport.deliver({ type: 'session.thinking.appended' })
+    await expect(thinking).resolves.toBeUndefined()
+  })
+
   it('correlates by the echoed client id when the provider supplies one', async () => {
     const { transport, session } = liveSession()
-    const first = session.appendThinking('one')
-    const second = session.appendCommentary('two')
+    const first = session.appendThinking('one', 'item_1')
+    const second = session.appendCommentary('two', 'item_1')
     const secondId = (transport.parsed()[1] as { event_id: string }).event_id
     // Acknowledge the *second* first, by id: the first must still be outstanding afterwards.
     transport.deliver({ type: 'session.commentary.appended', client_event_id: secondId })
@@ -480,12 +493,23 @@ describe('the delegation path', () => {
     await expect(pending).resolves.toBeUndefined()
   })
 
-  it('fails loudly when the provider never acknowledges', async () => {
+  it('fails loudly when the provider never acknowledges a delegated append', async () => {
     const { session } = liveSession({}, 5)
-    // Distinct from a reported failure: the provider said nothing at all, which is a different
-    // problem from the provider saying no, and a retry can legitimately help.
-    await expect(session.appendCommentary('anything')).rejects
+    // A delegation-scoped append IS acknowledged, so waiting on one is right — this bound governs
+    // that wait. Distinct from a reported failure: the provider said nothing at all, which is a
+    // different problem from the provider saying no, and a retry can legitimately help.
+    await expect(session.appendCommentary('anything', 'item_delegated')).rejects
       .toMatchObject({ code: 'PROVIDER_TIMEOUT', detail: { retryable: true } })
+  })
+
+  it('resolves a session-wide append on the write, because the provider never acknowledges one', async () => {
+    const { transport, session } = liveSession({}, 5)
+    // Measured provider behaviour: an append with no delegation is accepted in silence. Awaiting an
+    // acknowledgement there would burn the whole bound and then report a timeout about a frame the
+    // provider had already taken — which is what `voice_say` did on every fresh session.
+    await expect(session.appendCommentary('session-wide context')).resolves.toBeUndefined()
+    const frames = transport.sent.map(frame => JSON.parse(frame) as { type?: string; delegation_id?: unknown })
+    expect(frames.at(-1)).toMatchObject({ type: 'session.commentary.append', delegation_id: null })
   })
 
   it('refuses an append over the bound before it reaches the wire', async () => {
@@ -590,7 +614,7 @@ describe('session teardown', () => {
 
   it('fails an outstanding append when the provider closes', async () => {
     const { transport, session } = liveSession()
-    const pending = session.appendCommentary('still waiting')
+    const pending = session.appendCommentary('still waiting', 'item_delegated')
     transport.deliver({ type: 'session.closed' })
     await expect(pending).rejects.toMatchObject({ code: 'SESSION_CLOSED' })
   })
@@ -598,7 +622,7 @@ describe('session teardown', () => {
   it('fails outstanding appends and reports a provider error frame', async () => {
     const errors: string[] = []
     const { transport, session } = liveSession({ onError: e => errors.push(e.message) })
-    const pending = session.appendThinking('in flight')
+    const pending = session.appendThinking('in flight', 'item_delegated')
     transport.deliver({ type: 'error', error: { code: 'invalid_value', message: 'bad' } })
     await expect(pending).rejects.toMatchObject({ code: 'PROVIDER_ERROR' })
     expect(errors).toHaveLength(1)

@@ -36,6 +36,26 @@ All notable changes to this project are documented here. The format follows
   These were found by installing through the DeepSeek Harness plugin portal and then using it with no
   credential configured. The plugin loaded correctly; how it *failed* was the defect.
 
+### Removed
+
+- **`voice_say`.** It could never succeed. The tool promised unprompted speech and was implemented with
+  the delegation-less form of `commentary.append`, which this provider does not acknowledge — so every
+  call waited the full acknowledgement bound and then failed, on every fresh session. A tool the model
+  will reliably call and that cannot work is worse than no tool, and the bridge already answers
+  delegations automatically, so a manual "say this" tool had no remaining job either.
+
+  Unprompted speech is not available in client delegation at all: `response.item.create` requires
+  Responses mode, and the delegation mode is fixed at session creation. Delivering it means changing
+  how delegations are delivered — an architecture decision, not a tool.
+
+### Changed
+
+- **A delegation-less context append no longer awaits an acknowledgement that cannot arrive.** The
+  provider acknowledges an append only when it answers a delegation; a session-wide append is accepted
+  in silence. Awaiting an ack for that form burned the whole bound and then reported a timeout about a
+  frame the provider had already taken. It now resolves on the write, and the seam documents it as
+  best-effort: applied once audio has flowed, at a time this seam cannot confirm.
+
 ## [0.1.3]
 
 ### Fixed

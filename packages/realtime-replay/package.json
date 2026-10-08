@@ -1,6 +1,6 @@
 {
   "name": "dsh-realtime-replay",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Keyless replay for the dsh-realtime seam: drives the real adapter and session from a recording, so CI needs no credential.",
   "type": "module",
   "main": "lib/index.js",

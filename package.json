@@ -1,6 +1,6 @@
 {
   "name": "dsh-openai-live",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Full-duplex voice for DeepSeek Harness: a realtime capability seam, a GPT-Live-1 adapter, and a keyless replay backend.",
   "type": "module",
   "packageManager": "pnpm@11.7.0",

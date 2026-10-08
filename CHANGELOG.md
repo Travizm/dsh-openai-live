@@ -6,6 +6,20 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-10-08
+
+### Fixed
+
+- **`dsh-realtime-replay` was left behind at 0.1.1, which made every install contain two versions of
+  the seam.** Its `dsh-realtime: ^0.1.1` requirement is, on a 0.x package, minor-locked — `^0.1.1`
+  means `>=0.1.1 <0.2.0` — so it could not see `dsh-realtime@0.2.0`, and the resolved tree carried both.
+  Two copies of a service package is the duplicate-instance failure this project has already been bitten
+  by: one copy registers, the other is asked. The replay is now 0.2.0 against the 0.2.x seam, and the
+  bundle's requirement moves with it.
+
+  Found by **installing** the published bundle, not by reading the repository: every manifest, tag and
+  check was correct, and only the resolved dependency tree was wrong.
+
 ## [0.2.0] — 2026-10-08
 
 ### Added
@@ -146,7 +160,8 @@ First release. Verified against the live GPT-Live-1 API rather than against docu
   under client delegation, and client delegation has no `response.*` path at all.
 - `gpt-realtime` carries a published sunset date; `gpt-live-1` does not.
 
-[Unreleased]: https://github.com/Travizm/dsh-openai-live/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Travizm/dsh-openai-live/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/Travizm/dsh-openai-live/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Travizm/dsh-openai-live/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/Travizm/dsh-openai-live/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Travizm/dsh-openai-live/compare/v0.1.1...v0.1.2

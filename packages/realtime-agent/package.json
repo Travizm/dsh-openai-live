@@ -1,7 +1,7 @@
 {
-  "name": "dsh-realtime-openai",
+  "name": "dsh-realtime-agent",
   "version": "0.1.1",
-  "description": "GPT-Live-1 full-duplex voice adapter for the dsh-realtime seam, over the OpenAI Live WebSocket API.",
+  "description": "Delegation bridge for the dsh-realtime seam: answers what the voice model delegates, or says plainly that it cannot.",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -25,15 +25,14 @@
     "cordis",
     "realtime",
     "voice",
-    "full-duplex",
-    "openai",
-    "gpt-live"
+    "delegation",
+    "agent"
   ],
   "homepage": "https://github.com/Travizm/dsh-openai-live",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Travizm/dsh-openai-live.git",
-    "directory": "packages/realtime-openai"
+    "directory": "packages/realtime-agent"
   },
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
@@ -47,8 +46,7 @@
     "typecheck": "tsc -b --dry"
   },
   "dependencies": {
-    "dsh-realtime": "workspace:^",
-    "ws": "^8.22.0"
+    "dsh-realtime": "workspace:^"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.3",
@@ -56,6 +54,6 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.4",
-    "dsh-realtime-agent": "workspace:^"
+    "@deepseek-ai/schemastery": "^3.18.4"
   }
 }

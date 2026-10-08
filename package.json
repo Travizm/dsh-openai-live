@@ -67,6 +67,7 @@
   },
   "dependencies": {
     "dsh-realtime": "workspace:^",
+    "dsh-realtime-agent": "workspace:^",
     "dsh-realtime-openai": "workspace:^",
     "dsh-realtime-replay": "workspace:^"
   },

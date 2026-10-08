@@ -3,11 +3,15 @@
 # Applied as one layer when this package is listed in a profile's `dsh.profile.bundles`, which
 # `dsh plugin add` reconciles automatically from the `dsh.bundle.patch` declaration in package.json.
 #
-# Two rows, both on the `realtime` seam this bundle also installs:
+# Three rows, all on the `realtime` seam this bundle also installs:
 #
 #   - `dsh-realtime`        the seam. A *service* package: it default-exports its class, takes no
 #                           config, and has no `apply` — so the row is id and name only.
 #   - `dsh-realtime-openai` the GPT-Live-1 adapter. A *function* plugin.
+#   - `dsh-realtime-agent`  the consumer: it holds a session and answers what the model delegates.
+#                           `autoStart: false` is the default, stated explicitly because a patch's
+#                           `config` is replaced wholesale rather than deep-merged. Mounting the
+#                           bundle must not, by itself, open a socket or spend credit.
 #
 # `apiKey` is optional in the adapter's schema on purpose, so this composition works unchanged on a
 # machine with no credential: the route registers, the profile boots, and opening a session fails with
@@ -33,3 +37,9 @@
         model: gpt-live-1
         voice: marin
         apiKey: !!js process.env.OPENAI_LIVE_API_KEY
+
+    - id: dsh-realtime-agent
+      name: 'dsh-realtime-agent'
+      config:
+        provider: openai-live
+        autoStart: false

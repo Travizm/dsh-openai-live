@@ -20,6 +20,7 @@ const pkg = (path: string) => fileURLToPath(new URL(path, import.meta.url))
 export default defineConfig({
   resolve: {
     alias: {
+      'dsh-realtime-agent': pkg('./packages/realtime-agent/src/index.ts'),
       'dsh-realtime-openai': pkg('./packages/realtime-openai/src/index.ts'),
       'dsh-realtime-replay': pkg('./packages/realtime-replay/src/index.ts'),
       'dsh-realtime': pkg('./packages/realtime/src/index.ts'),

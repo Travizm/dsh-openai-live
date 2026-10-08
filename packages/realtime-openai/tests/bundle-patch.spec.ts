@@ -9,6 +9,8 @@ import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import { parse } from 'yaml'
 import RealtimeRuntime from 'dsh-realtime'
+import * as realtimeAgent from 'dsh-realtime-agent'
+import { Config as AgentConfig } from 'dsh-realtime-agent'
 import * as openaiLive from '../src/index.ts'
 import { Config } from '../src/index.ts'
 
@@ -116,6 +118,7 @@ async function boot(inserted: readonly PatchRow[]): Promise<Context> {
   const modules = new Map<string, unknown>([
     ['dsh-realtime', RealtimeRuntime],
     ['dsh-realtime-openai', openaiLive],
+    ['dsh-realtime-agent', realtimeAgent],
   ])
   context.loader.internal = {
     version: 'v2',
@@ -145,23 +148,30 @@ async function withoutCredential<T>(run: () => Promise<T>): Promise<T> {
 }
 
 describe('the shipped bundle patch', () => {
-  it('inserts the seam and the adapter, and nothing else', () => {
+  it('inserts the seam, the adapter and the consumer, and nothing else', () => {
     const inserted = rows()
-    expect(inserted.map(row => row.id)).toEqual(['dsh-realtime', 'dsh-realtime-openai'])
-    expect(inserted.map(row => row.name)).toEqual(['dsh-realtime', 'dsh-realtime-openai'])
+    expect(inserted.map(row => row.id)).toEqual(['dsh-realtime', 'dsh-realtime-openai', 'dsh-realtime-agent'])
+    expect(inserted.map(row => row.name)).toEqual(['dsh-realtime', 'dsh-realtime-openai', 'dsh-realtime-agent'])
     // The seam is a *service* package: it default-exports its class, takes no config and has no
     // `apply`. A config block here would be a row that mounts and ignores everything in it.
     expect(inserted[0]).not.toHaveProperty('config')
   })
 
-  it('configures the adapter using only fields its schema declares', () => {
-    const adapterRow = rows()[1]
-    const declared = new Set(Object.keys(Config.dict as Record<string, unknown>))
-    const unknown = Object.keys(adapterRow?.config ?? {}).filter(key => !declared.has(key))
-    // This is the assertion that matters most, because the failure it prevents is silent: schemastery
-    // KEEPS an undeclared key rather than rejecting it, so `api_key` would boot clean and be ignored
-    // while the plugin ran on defaults.
-    expect(unknown).toEqual([])
+  it('configures every row using only fields its own schema declares', () => {
+    const schemas: Record<string, Record<string, unknown>> = {
+      'dsh-realtime-openai': Config.dict as Record<string, unknown>,
+      'dsh-realtime-agent': AgentConfig.dict as Record<string, unknown>,
+    }
+    // This is the assertion that matters most, because the failure it prevents is SILENT: schemastery
+    // KEEPS an undeclared key rather than rejecting it, so `api_key` boots clean and is ignored while
+    // the plugin runs on defaults. A row whose name has no schema here fails loudly for the same
+    // reason — it means a row was added without anyone checking its config against anything.
+    for (const row of rows()) {
+      const keys = Object.keys(row.config ?? {})
+      if (keys.length === 0) continue
+      const declared = new Set(Object.keys(schemas[row.name] ?? {}))
+      expect(keys.filter(key => !declared.has(key)), `undeclared config on row ${row.name}`).toEqual([])
+    }
   })
 
   it('declares a credential field but does not require it', () => {

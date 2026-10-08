@@ -6,6 +6,22 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`dsh-realtime-agent`** — the consumer the seam was missing. It holds a session, records the
+  conversation, and answers what the voice model delegates. A delegation carries metadata only and no
+  task text, so the request carries the transcript alongside it: the consumer knows the conversation,
+  only the application knows its own state, and the request hands one to the other.
+
+  Responders register on the Cordis bus and are dispatched with `serial` semantics, so several can be
+  registered and the first to return a non-empty answer wins. Every other outcome — a decline, a
+  responder that throws or rejects, no responder at all, or no answer inside the bound — is delivered
+  to the model **out loud** rather than as silence or an invented answer. That is the seam's
+  fail-closed invariant made audible.
+
+  Shipped as a third row in the bundle, with `autoStart: false` so mounting the bundle cannot by
+  itself open a socket or spend credit.
+
 ## [0.1.1]
 
 ### Fixed

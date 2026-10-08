@@ -140,6 +140,21 @@ export class OpenAiLiveSession implements RealtimeSession {
     this.assertOpen(`append ${kind}`)
 
     const eventId = `evt_${++this.sequence}`
+
+    // The provider acknowledges an append only when it **answers a delegation**. Measured, not assumed:
+    // a delegation-less append is accepted in complete silence — no `*.appended`, and no `error`
+    // either, which the endpoint's loud rejection of unknown fields proves is acceptance rather than a
+    // malformed frame. The cause is that the provider does not begin applying context at a bare
+    // `session.start`.
+    //
+    // So awaiting an acknowledgement for this form waits for something that cannot arrive: it burns
+    // the whole bound and then reports a timeout about a frame the provider had already taken. The
+    // session-wide form resolves on the write instead, and the seam documents it as best-effort.
+    if (delegationId === undefined) {
+      this.transport.send(contextAppend(kind, content, null, eventId))
+      return
+    }
+
     const acknowledged = new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(eventId)
@@ -165,7 +180,7 @@ export class OpenAiLiveSession implements RealtimeSession {
       })
     })
 
-    this.transport.send(contextAppend(kind, content, delegationId ?? null, eventId))
+    this.transport.send(contextAppend(kind, content, delegationId, eventId))
     await acknowledged
   }
 

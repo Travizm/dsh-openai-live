@@ -1,5 +1,5 @@
 import { defineTool, type InferValue, type ToolDefinition, type ValueSchemaSpec } from '@deepseek-ai/dsh-tools'
-import { RealtimeError, type RealtimeSession } from 'dsh-realtime'
+import type { RealtimeSession } from 'dsh-realtime'
 
 /**
  * A canonical output declaration rendered as JSON.
@@ -42,15 +42,6 @@ const STOPPED_VALUE = {
   properties: { closed: { type: 'boolean', required: true } },
 } as const
 
-const SAID_VALUE = {
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    spoken: { type: 'boolean', required: true },
-    characters: { type: 'number', required: true },
-  },
-} as const
-
 /**
  * The tools that let an agent drive a voice session.
  *
@@ -84,29 +75,6 @@ export function voiceToolDefinitions(deps: VoiceToolDeps): ToolDefinition[] {
         const wasOpen = deps.session() !== undefined
         await deps.stop()
         return { closed: wasOpen }
-      },
-    }),
-
-    defineTool({
-      name: 'voice_say',
-      description: 'Say something out loud in the live voice session, in your own voice.',
-      parameters: { text: { type: 'string', required: true, description: 'What to say aloud.' } },
-      output: jsonOutput(SAID_VALUE),
-      async execute(args) {
-        const session = deps.session()
-        // Thrown, not returned as a value. A tool-thrown failure is the registry's own failure
-        // channel, and reporting this as a successful result would leave the model believing it had
-        // spoken when nothing was said. Typed rather than bare, so the model receives a class and a
-        // remedy it can relay instead of a sentence it has to interpret.
-        if (session === undefined) {
-          throw new RealtimeError(
-            'no voice session is open — call voice_start first',
-            'NO_SESSION',
-            { detail: { retryable: true, remedy: 'call voice_start to open a session, then say it again' } },
-          )
-        }
-        await session.appendCommentary(args.text)
-        return { spoken: true, characters: args.text.length }
       },
     }),
   ]

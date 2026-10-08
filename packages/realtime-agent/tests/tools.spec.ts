@@ -6,23 +6,17 @@ import { voiceToolDefinitions, type VoiceToolDeps } from '../src/tools.ts'
 const EXEC = {} as never
 
 interface Recorder {
-  appends: string[]
   stopped: number
 }
 
-const sessionOf = (recorder: Recorder): RealtimeSession => ({
-  id: 'sess-1',
-  appendCommentary: (text: string) => {
-    recorder.appends.push(text)
-    return Promise.resolve()
-  },
-} as unknown as RealtimeSession)
+/** Only the id is read: the tool surface reports which session it opened, not what was said in it. */
+const sessionOf = (): RealtimeSession => ({ id: 'sess-1' } as unknown as RealtimeSession)
 
 function build(overrides: Partial<VoiceToolDeps> = {}): { recorder: Recorder; tools: ReturnType<typeof voiceToolDefinitions> } {
-  const recorder: Recorder = { appends: [], stopped: 0 }
+  const recorder: Recorder = { stopped: 0 }
   const tools = voiceToolDefinitions({
-    session: () => sessionOf(recorder),
-    start: () => Promise.resolve(sessionOf(recorder)),
+    session: () => sessionOf(),
+    start: () => Promise.resolve(sessionOf()),
     stop: () => {
       recorder.stopped += 1
       return Promise.resolve()
@@ -39,9 +33,9 @@ const tool = (tools: ReturnType<typeof voiceToolDefinitions>, name: string) => {
 }
 
 describe('voiceToolDefinitions', () => {
-  it('publishes exactly the three session controls', () => {
+  it('publishes exactly the two session controls', () => {
     const { tools } = build()
-    expect(tools.map(definition => definition.name)).toEqual(['voice_start', 'voice_stop', 'voice_say'])
+    expect(tools.map(definition => definition.name)).toEqual(['voice_start', 'voice_stop'])
     for (const definition of tools) {
       expect(definition.description.length).toBeGreaterThan(0)
       expect(definition.output.schema).toBeDefined()
@@ -71,20 +65,5 @@ describe('voiceToolDefinitions', () => {
     const { recorder, tools } = build()
     expect(await tool(tools, 'voice_stop').execute({}, EXEC)).toEqual({ closed: true })
     expect(recorder.stopped).toBe(1)
-  })
-
-  it('speaks through the live session', async () => {
-    const { recorder, tools } = build()
-    expect(await tool(tools, 'voice_say').execute({ text: 'Staging is green.' }, EXEC))
-      .toEqual({ spoken: true, characters: 17 })
-    expect(recorder.appends).toEqual(['Staging is green.'])
-  })
-
-  it('refuses to speak with no session, naming the fix', async () => {
-    // Thrown, not returned as a value: a tool-thrown failure is the registry's own failure channel,
-    // so the model is told it did not speak rather than being handed a result that looks like it did.
-    const { tools } = build({ session: () => undefined })
-    await expect(tool(tools, 'voice_say').execute({ text: 'hello' }, EXEC))
-      .rejects.toThrow('no voice session is open — call voice_start first')
   })
 })

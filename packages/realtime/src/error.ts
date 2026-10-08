@@ -53,8 +53,6 @@ export const REALTIME_ERROR_CODES = Object.freeze({
   PROVIDER_TIMEOUT: 'PROVIDER_TIMEOUT',
   /** The transport failed — a socket error, not a decision the provider made. */
   NETWORK: 'NETWORK',
-  /** An operation needed a live session and there is none open. */
-  NO_SESSION: 'NO_SESSION',
 })
 
 /** One of {@link REALTIME_ERROR_CODES}. */

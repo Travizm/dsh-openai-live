@@ -6,11 +6,13 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-10-08
+
 ### Added
 
 - **A failure taxonomy on the realtime seam.** `REALTIME_ERROR_CODES` gains `NOT_CONFIGURED`,
   `CREDENTIAL_REJECTED`, `NOT_ENTITLED`, `INSUFFICIENT_CREDIT`, `RATE_LIMITED`, `PROVIDER_TIMEOUT`,
-  `NETWORK` and `NO_SESSION`, and `RealtimeError` carries an optional structured `detail` —
+  `NETWORK`, and `RealtimeError` carries an optional structured `detail` —
   `{ remedy?, setting?, retryable?, providerCode? }` — so a consumer can act on a failure rather than
   interpret its prose. Purely additive: `MISSING_CREDENTIAL` remains exported and no existing code
   changed meaning, per the file's own contract.
@@ -30,9 +32,6 @@ All notable changes to this project are documented here. The format follows
   append and a reported failure were indistinguishable to a caller branching on `code`.
 - **A session opening the provider refused is classified** through the same translator, so a present
   but wrong key surfaces as `CREDENTIAL_REJECTED` rather than a generic failure.
-- **`voice_say` without a session throws a typed `NO_SESSION`** carrying a remedy, instead of a bare
-  `Error`. Its message is unchanged.
-
   These were found by installing through the DeepSeek Harness plugin portal and then using it with no
   credential configured. The plugin loaded correctly; how it *failed* was the defect.
 
@@ -147,7 +146,8 @@ First release. Verified against the live GPT-Live-1 API rather than against docu
   under client delegation, and client delegation has no `response.*` path at all.
 - `gpt-realtime` carries a published sunset date; `gpt-live-1` does not.
 
-[Unreleased]: https://github.com/Travizm/dsh-openai-live/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/Travizm/dsh-openai-live/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Travizm/dsh-openai-live/compare/v0.1.3...v0.2.0
 [0.1.3]: https://github.com/Travizm/dsh-openai-live/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Travizm/dsh-openai-live/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Travizm/dsh-openai-live/compare/v0.1.0...v0.1.1

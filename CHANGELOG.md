@@ -6,6 +6,11 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-10-08
+
+The voice loop closes in code. A session can now be heard, answered, and reached from a browser: four
+packages ship, two of them new.
+
 ### Added
 
 - **`dsh-realtime-responder` — the application that answers.** Until now a delegation was published to

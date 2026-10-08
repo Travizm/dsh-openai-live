@@ -1,6 +1,6 @@
 {
   "name": "dsh-realtime-responder",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Answers what the voice model delegates by admitting a turn to a DeepSeek Harness session and speaking the agent's reply.",
   "type": "module",
   "main": "lib/index.js",
@@ -46,6 +46,7 @@
     "typecheck": "tsc -b --dry"
   },
   "dependencies": {
+    "dsh-realtime": "workspace:^",
     "dsh-realtime-agent": "workspace:^"
   },
   "peerDependencies": {

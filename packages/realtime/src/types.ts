@@ -206,3 +206,31 @@ export interface RealtimeSession {
  * halfway through a live conversation. Exact token accounting belongs to the adapter.
  */
 export const MAX_APPEND_CHARS = 2000
+
+/**
+ * How one delegated turn ended, when the answer was not an answer.
+ *
+ * Carried so a refusal can be *described* rather than only counted. The four cases are the four
+ * different things a person would do about it — nothing was asked, the controller refused (and said
+ * why), or it was admitted and nothing came back in time — and collapsing them into one `undefined`
+ * is what made the plugin's failures indistinguishable from outside it.
+ */
+export type RealtimeDelegationOutcome = 'answered' | 'declined' | 'refused' | 'timeout'
+
+/**
+ * One delegated turn, settled, reported for diagnostics.
+ *
+ * `reason` is present only on `refused`, and is **redacted** before it is emitted: this is the first
+ * surface on which text the plugin did not author reaches a human, so it is safe by construction
+ * rather than by a later pass.
+ */
+export interface RealtimeDelegationSettlement {
+  /** The delegation this settles. Correlates with the ask, the answer and the journal. */
+  readonly id: string
+  /** The session that raised it. */
+  readonly sessionId: string
+  /** How it ended. */
+  readonly outcome: RealtimeDelegationOutcome
+  /** The controller's own reason, redacted, when the outcome is `refused`. */
+  readonly reason?: string
+}

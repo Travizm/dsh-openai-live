@@ -1,6 +1,6 @@
 {
   "name": "dsh-openai-live",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Full-duplex voice for DeepSeek Harness: a realtime capability seam, a GPT-Live-1 adapter, and a keyless replay backend.",
   "type": "module",
   "packageManager": "pnpm@11.7.0",
@@ -61,6 +61,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:built": "node scripts/built-composition.mjs && node scripts/client-artefact.mjs",
+    "probe:delegation": "node scripts/probe-delegation-path.mjs",
     "leakscan": "node scripts/leak-scan.mjs",
     "canary": "node scripts/protocol-canary.mjs",
     "gate": "pnpm leakscan && pnpm build && pnpm typecheck && pnpm test:coverage && pnpm test:built"

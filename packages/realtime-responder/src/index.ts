@@ -9,6 +9,14 @@
  * Per the harness convention it named-exports `name` / `inject` / `Config` / `apply` and has **no
  * default export**.
  *
+ * ## What a turn that produced no answer now says
+ *
+ * A settlement is emitted on `realtime-agent/delegation-settled` for every turn that is not answered:
+ * *declined*, *refused* (with the controller's own reason, redacted) or *timeout*. That event is the
+ * seam the diagnostics layer reads from — the journal, the route and the spoken failure all consume it
+ * rather than re-deriving why a turn went quiet. The reason is redacted **as it is emitted**, because
+ * this is the first string the plugin relays that it did not author.
+ *
  * ## The bound, stated plainly
  *
  * A DSH agent turn can run for minutes. The delegation asking for the answer is bounded (the agent's
@@ -24,12 +32,17 @@
 
 import Schema from '@deepseek-ai/schemastery'
 import type { Context } from '@deepseek-ai/cordis'
+import type { RealtimeDelegationSettlement } from 'dsh-realtime'
+import { redact } from 'dsh-realtime'
 import type { DelegationAnswer, DelegationRequest } from 'dsh-realtime-agent'
-import { createTurnRunner } from './turn.ts'
+import { createTurnRunner, type TurnOutcome } from './turn.ts'
 import type { RealtimeResponderConfig, SessionEventLike } from './types.ts'
 
 export * from './types.ts'
-export { answerText, createTurnRunner, promptFrom, type TurnDeps } from './turn.ts'
+export { answerText, createTurnRunner, promptFrom, type TurnDeps, type TurnOutcome } from './turn.ts'
+
+/** Character ceiling on a reason carried on the bus, so a controller error cannot flood a consumer. */
+const MAX_REASON_CHARS = 500
 
 /**
  * The slice of the session controller this plugin uses, described structurally rather than imported.
@@ -66,6 +79,22 @@ export const Config = Schema.object({
 })
 
 /**
+ * One turn's settlement, as the bus carries it.
+ *
+ * Redacted and bounded **at emission** rather than by a later pass: the controller's reason is the
+ * first text this plugin relays that it did not author, so it is safe by construction from the moment
+ * it exists. A turn that was answered is not settled — the answer is its own report.
+ * @param request - the delegation that was asked about.
+ * @param outcome - how the turn ended; never `answered`, which the caller handles.
+ * @returns the settlement to emit.
+ */
+function settlementFor(request: DelegationRequest, outcome: TurnOutcome): RealtimeDelegationSettlement {
+  const settled = { id: request.id, sessionId: request.sessionId, outcome: outcome.kind }
+  if (outcome.kind !== 'refused') return settled
+  return { ...settled, reason: redact(outcome.reason).slice(0, MAX_REASON_CHARS) }
+}
+
+/**
  * Register the responder on the delegation bus.
  * @param ctx - the Cordis context, which must provide `sessionController`.
  * @param config - validated configuration.
@@ -98,8 +127,13 @@ export function apply(ctx: Context, config: RealtimeResponderConfig): void {
     const dispose = ctx.on(
       'realtime-agent/delegation',
       async (request: DelegationRequest): Promise<DelegationAnswer | undefined> => {
-        const text = await run(request)
-        return text === undefined ? undefined : { text, mode: 'spoken' }
+        const outcome = await run(request)
+        if (outcome.kind === 'answered') return { text: outcome.text, mode: 'spoken' }
+        // Not answered. The reason is reported rather than dropped — this is the whole of the fix —
+        // and it is reported on the bus rather than spoken, so the diagnostic exists before the
+        // feature that narrates it.
+        ctx.emit('realtime-agent/delegation-settled', settlementFor(request, outcome))
+        return undefined
       },
     )
     yield () => { dispose() }

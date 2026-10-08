@@ -6,6 +6,39 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **A settled delegation says *why* it produced nothing.** `dsh-realtime-responder` 0.2.0 and
+  `dsh-realtime-agent` 0.3.0. The new `realtime-agent/delegation-settled` event is emitted for every
+  turn that is **not** answered — `declined` (there was nothing to ask), `refused` (the session
+  controller rejected the admission, carrying **its own reason**) or `timeout` (admitted, nothing came
+  back inside the bound). Until now all three arrived as the same `undefined`, which is why the
+  plugin's foundational failure could not be diagnosed from outside it. An answered turn is not
+  settled: the answer is its own report.
+
+- **`redact()` — the credential rule, in one place.** `dsh-realtime` 0.3.0. Diagnostic surfaces are
+  places a provider key or the route's capability token could escape into, and a disclosure outlives
+  the debugging session that introduced it. The primitive removes secrets by **shape** (`sk-…`, a
+  bearer header, a private-key block, a JWT, a recorded fingerprint) and by **value**, because a
+  32-byte base64url capability token has no shape any pattern could catch and only the caller that
+  holds it can name it. It is applied at emission, not in a later pass: the controller's reason is the
+  first text this plugin relays that it did not author.
+
+- **An installed-profile probe.** `pnpm probe:delegation [profile|/abs/dir]`, driving the
+  delegation→answer path through the installed artefacts and correlating the delegation id, the
+  reconstructed prompt, the controller's verdict and reason, the agent's result and the returned
+  speech into `review-evidence/q1-delegation-<target>.jsonl`. It also asserts the two properties of a
+  profile that have broken this plugin before: no `@deepseek-ai` shadow, and the bundle actually
+  installed. Three cases — answered, refused (with a **planted sentinel key**, so the probe doubles as
+  the redaction proof) and timeout.
+
+### Changed
+
+- **`createTurnRunner` resolves with a `TurnOutcome` rather than `string | undefined`.** The four ways
+  a turn can end are named, so a caller can act on the difference between *the controller said no* and
+  *nobody answered in time* instead of re-deriving it. A rejection that carries no message reports
+  that absence rather than a fabricated reason.
+
 ## [0.4.0] — 2026-10-08
 
 ### Added

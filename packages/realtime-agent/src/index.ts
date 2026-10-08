@@ -23,7 +23,7 @@
 
 import Schema from '@deepseek-ai/schemastery'
 import type { Context } from '@deepseek-ai/cordis'
-import type { RealtimeDelegation, RealtimeSession, RealtimeSessionHandlers, RealtimeTranscript } from 'dsh-realtime'
+import type { RealtimeDelegation, RealtimeDelegationSettlement, RealtimeSession, RealtimeSessionHandlers, RealtimeTranscript } from 'dsh-realtime'
 import { answerDelegation, type DelegationAsker } from './bridge.ts'
 import { voiceToolDefinitions } from './tools.ts'
 import { TranscriptBuffer } from './transcript.ts'
@@ -41,6 +41,20 @@ declare module '@deepseek-ai/cordis' {
     'realtime-agent/delegation'(request: DelegationRequest): DelegationAnswer | undefined | Promise<DelegationAnswer | undefined>
     /** A session-scoped failure the adapter contained rather than throwing. */
     'realtime-agent/error'(error: Error): void
+    /**
+     * A delegated turn settled **without** an answer, and why.
+     *
+     * Emitted by whichever application attempted the turn, so a turn that went quiet is described
+     * rather than merely counted: `declined` (there was nothing to ask), `refused` (the session
+     * controller rejected the admission, and `reason` is what it said — already redacted, because
+     * this is the first text the plugin relays that it did not author) or `timeout` (admitted, and
+     * nothing came back inside the bound).
+     *
+     * An **answered** turn is not settled here: the answer is its own report. This is the seam the
+     * diagnostics layer reads from — it exists so that a refusal can reach a journal, a route or a
+     * user's ear without any of them re-deriving why the turn produced nothing.
+     */
+    'realtime-agent/delegation-settled'(settlement: RealtimeDelegationSettlement): void
     /**
      * Output audio: PCM16 in the session's declared output format.
      *

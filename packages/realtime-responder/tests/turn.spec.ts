@@ -104,7 +104,7 @@ describe('createTurnRunner', () => {
     await Promise.resolve()
     expect(admitted).toEqual(['is staging ok?'])
     listeners[0]!(message([text('green')]))
-    await expect(pending).resolves.toBe('green')
+    await expect(pending).resolves.toEqual({ kind: 'answered', text: 'green' })
     expect(unsubscribed()).toBe(1)
   })
 
@@ -123,24 +123,45 @@ describe('createTurnRunner', () => {
     listeners[0]!({ type: 'assistant/chunk' })
     listeners[0]!(message([text('someone else')], 'sess-2'))
     listeners[0]!(message([text('green')]))
-    await expect(pending).resolves.toBe('green')
+    await expect(pending).resolves.toEqual({ kind: 'answered', text: 'green' })
   })
 
   it('declines without admitting when the transcript carried no text', async () => {
     const { admitted, run } = deps()
-    await expect(run(request([{ kind: 'input', text: '' }]))).resolves.toBeUndefined()
+    await expect(run(request([{ kind: 'input', text: '' }]))).resolves.toEqual({ kind: 'declined' })
     expect(admitted).toEqual([])
   })
 
-  it('declines when nothing answers in time, and stops listening', async () => {
+  it('says it timed out when nothing answers, and stops listening', async () => {
     const { unsubscribed, run } = deps({ answerTimeoutMs: 5 })
-    await expect(run(request([{ kind: 'input', text: 'q' }]))).resolves.toBeUndefined()
+    await expect(run(request([{ kind: 'input', text: 'q' }]))).resolves.toEqual({ kind: 'timeout' })
     expect(unsubscribed()).toBe(1)
   })
 
-  it('declines when the controller refuses the admission, and stops listening', async () => {
+  it("carries the controller's own reason when it refuses the admission", async () => {
+    // The whole point of the patch: this string used to be discarded in a `catch {}`, which is why the
+    // foundational failure could not be diagnosed from outside the plugin.
     const { unsubscribed, run } = deps({ admit: () => Promise.reject(new Error('session/model-unavailable')) })
-    await expect(run(request([{ kind: 'input', text: 'q' }]))).resolves.toBeUndefined()
+    await expect(run(request([{ kind: 'input', text: 'q' }])))
+      .resolves.toEqual({ kind: 'refused', reason: 'session/model-unavailable' })
     expect(unsubscribed()).toBe(1)
+  })
+
+  it('carries a bare string rejection as the reason', async () => {
+    const { run } = deps({ admit: () => Promise.reject('controller said no') })
+    await expect(run(request([{ kind: 'input', text: 'q' }])))
+      .resolves.toEqual({ kind: 'refused', reason: 'controller said no' })
+  })
+
+  it('states the absence rather than inventing a reason when the rejection carries no message', async () => {
+    const { run } = deps({ admit: () => Promise.reject(new Error('')) })
+    await expect(run(request([{ kind: 'input', text: 'q' }])))
+      .resolves.toEqual({ kind: 'refused', reason: 'the session controller refused the prompt' })
+  })
+
+  it('states the absence for a rejection that is neither an Error nor a string', async () => {
+    const { run } = deps({ admit: () => Promise.reject({ code: 500 }) })
+    await expect(run(request([{ kind: 'input', text: 'q' }])))
+      .resolves.toEqual({ kind: 'refused', reason: 'the session controller refused the prompt' })
   })
 })

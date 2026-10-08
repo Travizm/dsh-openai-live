@@ -12,6 +12,7 @@ import RealtimeRuntime from 'dsh-realtime'
 import * as realtimeAgent from 'dsh-realtime-agent'
 import { Config as AgentConfig } from 'dsh-realtime-agent'
 import { Config as ResponderConfig } from 'dsh-realtime-responder'
+import { Config as AudioConfig } from 'dsh-realtime-audio-ws'
 import * as openaiLive from '../src/index.ts'
 import { Config } from '../src/index.ts'
 
@@ -151,8 +152,8 @@ async function withoutCredential<T>(run: () => Promise<T>): Promise<T> {
 describe('the shipped bundle patch', () => {
   it('inserts the seam, the adapter and the consumer, and nothing else', () => {
     const inserted = rows()
-    expect(inserted.map(row => row.id)).toEqual(['dsh-realtime', 'dsh-realtime-openai', 'dsh-realtime-agent', 'dsh-realtime-responder'])
-    expect(inserted.map(row => row.name)).toEqual(['dsh-realtime', 'dsh-realtime-openai', 'dsh-realtime-agent', 'dsh-realtime-responder'])
+    expect(inserted.map(row => row.id)).toEqual(['dsh-realtime', 'dsh-realtime-openai', 'dsh-realtime-agent', 'dsh-realtime-responder', 'dsh-realtime-audio-ws'])
+    expect(inserted.map(row => row.name)).toEqual(['dsh-realtime', 'dsh-realtime-openai', 'dsh-realtime-agent', 'dsh-realtime-responder', 'dsh-realtime-audio-ws'])
     // The seam is a *service* package: it default-exports its class, takes no config and has no
     // `apply`. A config block here would be a row that mounts and ignores everything in it.
     expect(inserted[0]).not.toHaveProperty('config')
@@ -163,6 +164,7 @@ describe('the shipped bundle patch', () => {
       'dsh-realtime-openai': Config.dict as Record<string, unknown>,
       'dsh-realtime-agent': AgentConfig.dict as Record<string, unknown>,
       'dsh-realtime-responder': ResponderConfig.dict as Record<string, unknown>,
+      'dsh-realtime-audio-ws': AudioConfig.dict as Record<string, unknown>,
     }
     // This is the assertion that matters most, because the failure it prevents is SILENT: schemastery
     // KEEPS an undeclared key rather than rejecting it, so `api_key` boots clean and is ignored while
@@ -191,7 +193,13 @@ describe('the shipped bundle patch', () => {
     const unloaded = [...loaded.loader.entries()]
       .filter(entry => entry.fiber === undefined && !entry.disabled)
       .map(entry => entry.options.name)
-    expect(unloaded).toEqual(['dsh-realtime-responder'])
+    // Measured, and worth stating plainly: BOTH of these rows WAIT rather than load. The responder
+    // declares `inject: ['sessionController']`; the audio route defers with `ctx.inject(['connection',
+    // 'webServer'])`, which leaves its fiber waiting in the same way. This is the behaviour to want — a row
+    // that waits is diagnosable, and a row that loaded and silently contributed nothing would not be. Its
+    // functional behaviour with the services present is proven against a real socket in
+    // packages/realtime-audio-ws/tests/plugin.spec.ts.
+    expect(unloaded).toEqual(['dsh-realtime-responder', 'dsh-realtime-audio-ws'])
 
     expect(loaded.realtime).toBeInstanceOf(RealtimeRuntime)
     // The route name comes from the patch's `provider`, so this asserts the config was actually

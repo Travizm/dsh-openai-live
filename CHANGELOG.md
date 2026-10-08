@@ -39,6 +39,27 @@ All notable changes to this project are documented here. The format follows
   so it is reported on `realtime-agent/error` instead of thrown from a listener — which has no caller to
   catch it.
 
+- **`dsh-realtime-audio-ws` — the host end of the client half's transport.** The bundle could decode the
+  provider's audio and hear nothing else: no socket existed for a browser to connect to. This package claims
+  one WebSocket upgrade route on the harness web server and bridges it to the two events the agent already
+  carries — `realtime-agent/mic` inbound, `realtime-agent/audio` outbound. It is transport and nothing else:
+  no audio logic, no session, no format handling.
+
+  It is an upgrade route rather than a Remote because a third-party plugin **cannot add a Remote** — that
+  needs generated artifacts and a mount inside a DeepSeek-owned assembly. The web server, whose own README
+  calls it *"a plain route registry with no harness vocabulary"* built so other plugins can claim routes, is
+  the door that is actually open.
+
+  **It authenticates, because it must.** Upgrade requests never reach the HTTP route handlers, so no gate
+  answers them and a route would otherwise be an unauthenticated loopback endpoint carrying microphone
+  audio one way and the agent's answers the other. The handler asks the connection service in the same
+  position DSH's own transport asks it, and refuses in the same bytes.
+
+  Frames are forwarded, never queued — the same rule the audio event carries — and a frame above
+  `maxFrameBytes` closes the connection with 1009 rather than being truncated.
+
+  No browser face yet: nothing here opens a microphone or plays audio.
+
 ## [0.2.1] — 2026-10-08
 
 ### Fixed

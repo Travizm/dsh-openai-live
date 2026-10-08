@@ -68,3 +68,24 @@
         sessionId: REPLACE_WITH_THE_SESSION_ID_TO_STEER
         answerTimeoutMs: 45000
         maxPromptChars: 4000
+
+    # The audio route: the host end of the client half's transport. It claims a WebSocket upgrade route on
+    # the harness web server and bridges that socket to the two audio events the agent already carries —
+    # captured microphone frames in, the agent's speech out. No audio logic and no session of its own.
+    #
+    # It declares no top-level `inject` and instead defers with `ctx.inject([...])`, but the measured result
+    # is the same: the row's fiber waits until the web server and connection services exist, so it claims
+    # nothing where there is no web stack rather than loading and silently doing nothing. Both this row and
+    # the responder above therefore appear as unloaded in a composition without their services, and the
+    # bundle-patch test pins that.
+    #
+    # The route authenticates through the connection service rather than any scheme of its own. Upgrade
+    # requests never reach the web server's HTTP route handlers, so nothing else answers for them; without
+    # that check this would be an unauthenticated endpoint on loopback carrying microphone audio in and the
+    # agent's answers out.
+    - id: dsh-realtime-audio-ws
+      name: 'dsh-realtime-audio-ws'
+      config:
+        path: /dsh-realtime/audio
+        maxFrameBytes: 480000
+        maxConnections: 1

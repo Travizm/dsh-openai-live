@@ -16,11 +16,16 @@ class RecordingAdapter extends RealtimeAdapter {
   closed = 0
   /** Make the next audio write fail, as a session that closed mid-flight does. */
   refuseAudio = false
+  /** Make opening fail, as a provider that refuses the session does. */
+  refuseOpen = false
+  /** Make closing fail, as a session that is already gone does. */
+  refuseClose = false
 
   session(options: RealtimeSessionOptions): Promise<RealtimeSession> {
     // Wire the handlers exactly as a real adapter does: a substitute that drops them makes every
     // injected event vanish, and the suite then debugs the wrong file.
     this.handlers = options.handlers
+    if (this.refuseOpen) return Promise.reject(new Error('the provider refused the session'))
     this.opened += 1
     const appends = this.appends
     const adapter = this
@@ -47,7 +52,11 @@ class RecordingAdapter extends RealtimeAdapter {
         return Promise.resolve()
       },
       appendInstructions: () => Promise.resolve(),
-      close: () => { adapter.closed += 1; return Promise.resolve() },
+      close: () => {
+        if (adapter.refuseClose) return Promise.reject(new Error('the session is already gone'))
+        adapter.closed += 1
+        return Promise.resolve()
+      },
     })
   }
 }
@@ -327,6 +336,48 @@ describe('the audio seams', () => {
     ctx = undefined
     context.emit('realtime-agent/mic', new Uint8Array([1]))
     expect(adapter.sentAudio).toEqual([])
+  })
+})
+
+describe('session requests from a transport', () => {
+  it('opens the session when a transport asks, and closes it when told', async () => {
+    const { ctx: context, adapter } = harness()
+    apply(context, Config({ provider: 'fake' }) as RealtimeAgentConfig)
+    await tick()
+
+    context.emit('realtime-agent/start')
+    await tick()
+    expect(adapter.opened).toBe(1)
+    // Idempotent: a second ask must not leave two live sessions nobody can see.
+    context.emit('realtime-agent/start')
+    await tick()
+    expect(adapter.opened).toBe(1)
+
+    context.emit('realtime-agent/stop')
+    await tick()
+    expect(adapter.closed).toBe(1)
+  })
+
+  it('reports a failed open and a failed close on the bus rather than throwing from the listener', async () => {
+    const { ctx: context, adapter } = harness()
+    const failures: Error[] = []
+    context.on('realtime-agent/error', (error: Error) => { failures.push(error) })
+    apply(context, Config({ provider: 'fake' }) as RealtimeAgentConfig)
+    await tick()
+
+    adapter.refuseOpen = true
+    // A listener has no caller to catch a rejection — the worst place to raise one.
+    expect(() => { context.emit('realtime-agent/start') }).not.toThrow()
+    await tick()
+    expect(failures[0]?.message).toBe('the provider refused the session')
+
+    adapter.refuseOpen = false
+    context.emit('realtime-agent/start')
+    await tick()
+    adapter.refuseClose = true
+    expect(() => { context.emit('realtime-agent/stop') }).not.toThrow()
+    await tick()
+    expect(failures).toHaveLength(2)
   })
 })
 

@@ -139,4 +139,43 @@ describe('the audio route', () => {
     await closed
     expect([...web.upgrades.keys()]).toEqual([])
   })
+
+  it('asks the agent for the session when an authenticated client connects', async () => {
+    const { context, url } = await mount()
+    const starts: number[] = []
+    context.on('realtime-agent/start', () => { starts.push(1) })
+    const client = new WebSocket(url())
+    cleanups.push(() => { client.terminate() })
+    await once(client, 'open')
+    // Without this a working microphone writes into a session nobody opened, and the mic seam drops every
+    // frame by design — silence that looks like a fault anywhere but in the agent.
+    expect(starts).toHaveLength(1)
+  })
+
+  it('ends the session when the last client leaves', async () => {
+    const { context, url } = await mount()
+    const stops: number[] = []
+    context.on('realtime-agent/stop', () => { stops.push(1) })
+    const client = new WebSocket(url())
+    cleanups.push(() => { client.terminate() })
+    await once(client, 'open')
+    const closed = once(client, 'close')
+    client.close()
+    await closed
+    await new Promise((resolve) => { setTimeout(resolve, 20) })
+    expect(stops).toHaveLength(1)
+  })
+
+  it('leaves the session alone when asked not to open one', async () => {
+    const { context, url } = await mount({ openSessionOnConnect: false })
+    const events: string[] = []
+    context.on('realtime-agent/start', () => { events.push('start') })
+    context.on('realtime-agent/stop', () => { events.push('stop') })
+    const client = new WebSocket(url())
+    cleanups.push(() => { client.terminate() })
+    await once(client, 'open')
+    client.close()
+    await new Promise((resolve) => { setTimeout(resolve, 20) })
+    expect(events).toEqual([])
+  })
 })

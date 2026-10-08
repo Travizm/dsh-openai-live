@@ -21,6 +21,9 @@ export const DEFAULT_MAX_FRAME_BYTES = 480_000
 /** How many sockets may be attached at once. One microphone is the honest default. */
 export const DEFAULT_MAX_CONNECTIONS = 1
 
+/** Whether an authenticated connection asks the agent to open the voice session. See the config field. */
+export const DEFAULT_OPEN_SESSION_ON_CONNECT = true
+
 export interface RealtimeAudioWsConfig {
   /**
    * Absolute pathname to claim. Registered exactly, so it must be distinct from every other route in the
@@ -37,6 +40,16 @@ export interface RealtimeAudioWsConfig {
    * two microphones on one session is a fault, not a feature.
    */
   readonly maxConnections: number
+  /**
+   * Ask the agent to open the voice session when an authenticated client connects, and to close it when the
+   * last one leaves. Default true.
+   *
+   * This is not the agent's `autoStart`, and the two defaults differ for a reason. `autoStart` opens a
+   * session at boot with nobody asking, which is why it ships false. This one responds to a connection,
+   * which takes an explicit authenticated action — and with it false, a working microphone produces silence
+   * that looks like a fault anywhere but in this file.
+   */
+  readonly openSessionOnConnect: boolean
 }
 
 /**

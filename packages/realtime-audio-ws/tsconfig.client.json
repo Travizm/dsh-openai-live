@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "target": "es2024",
+    "lib": ["es2024"],
+    "module": "commonjs",
+    "strict": true,
+    "skipLibCheck": true,
+    "types": [],
+    "rootDir": "src/client",
+    "outDir": "lib/client"
+  },
+  "include": ["src/client"]
+}

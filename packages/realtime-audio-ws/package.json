@@ -1,6 +1,6 @@
 {
   "name": "dsh-realtime-audio-ws",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "The host end of the client half's transport: a WebSocket upgrade route that bridges microphone audio in and agent speech out.",
   "type": "module",
   "main": "lib/index.js",
@@ -51,7 +51,7 @@
     "registry": "https://registry.npmjs.org"
   },
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && tsc -p tsconfig.client.json",
     "typecheck": "tsc -b --dry"
   },
   "dependencies": {

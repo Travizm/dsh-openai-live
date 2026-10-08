@@ -29,9 +29,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # No `version:` here on purpose. `pnpm/action-setup` fails when a version is given both here
+      # and as `packageManager` in package.json — "Multiple versions of pnpm specified" — so the
+      # manifest is the single source of truth. Keeping the two in sync by hand is one edit away from
+      # a red pipeline that never even reaches the tests.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 11
 
       - uses: actions/setup-node@v4
         with:

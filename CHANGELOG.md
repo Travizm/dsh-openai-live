@@ -60,6 +60,22 @@ All notable changes to this project are documented here. The format follows
 
   No browser face yet: nothing here opens a microphone or plays audio.
 
+- **The client half — `dsh-realtime-audio-ws/client`.** The browser face of the transport: it opens the
+  route's socket, captures the microphone into it at 24 kHz PCM16, and plays what comes back. No client
+  services, one file, and it injects nothing.
+
+  `start()` **reports rather than throws** — a refused permission or a missing browser API arrives as
+  `{ kind: 'failed', reason }`, because the reason is what tells someone whether to grant something or look
+  elsewhere. It refuses outright if the audio graph will not open at 24 kHz rather than streaming at the
+  wrong rate, which would arrive at half speed and read as a provider fault.
+
+  Capture uses `ScriptProcessorNode` rather than an `AudioWorklet`: a worklet module must be fetched from a
+  `blob:` URL, which a page's Content-Security-Policy can refuse, and the desktop app demonstrably has one.
+  Deprecated and higher-latency — a disclosed trade to revisit once that policy has been read.
+
+  There is no UI surface yet; the client publishes itself on `globalThis.__dshRealtimeAudio` with
+  `start`/`stop`/`state`.
+
 ## [0.2.1] — 2026-10-08
 
 ### Fixed

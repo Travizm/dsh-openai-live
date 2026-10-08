@@ -67,12 +67,38 @@ the intended behaviour: its fiber waits until they exist, so a profile with no w
 visibly waits rather than one that loads and silently claims nothing. The bundle-patch test pins it, and
 `tests/plugin.spec.ts` proves the functional path against a real socket with both services present.
 
+## The client half
+
+`dsh-realtime-audio-ws/client` is the browser face: it opens this socket, captures the microphone into it at
+24 kHz PCM16, and plays what comes back. No client services, one file, and it injects nothing — a client
+face that needs nothing cannot be broken by another plugin's absence.
+
+**How it runs.** There is no UI surface yet, so it publishes itself on a global:
+
+```js
+await __dshRealtimeAudio.start()   // asks for the microphone, then connects
+__dshRealtimeAudio.state()         // { kind: 'idle' | 'live' | 'failed' }
+__dshRealtimeAudio.stop()
+```
+
+`start()` **reports rather than throws**, so a refused permission or a missing API arrives as
+`{ kind: 'failed', reason }` — the reason is what tells someone whether to grant something or to look
+somewhere else. A settings card is its own increment.
+
+**Two decisions inside it worth knowing.**
+
+`ScriptProcessorNode`, not an `AudioWorklet`. A worklet module must be fetched from a URL — a `blob:` URL,
+which a page's Content-Security-Policy can refuse, and the desktop app demonstrably has a CSP. A processor
+node needs no module fetch, so it works anywhere and the whole capture path stays testable. It is
+deprecated and its latency is worse: a disclosed trade, to revisit once the app page's `script-src` has
+actually been read rather than assumed.
+
+**It refuses rather than mislabels the sample rate.** 48 kHz samples declared as 24 kHz arrive at half speed
+and read as a provider fault — the most expensive possible way to discover a missing resampler. If the graph
+will not open at 24 kHz the client fails and says which rate it got.
+
 ## What it does not do yet
 
-**There is no browser face.** This is the host end only: nothing here opens a microphone or plays audio.
-The client half — `getUserMedia` → 24 kHz PCM16 → this socket, and playback the other way — is the next
-increment, and it is where a device, a permission prompt and a human come in.
-
-**No format negotiation.** The client is expected to know the session's format from configuration. A
-`ready` frame carrying sample rate and channel count would be the natural first control message, and it is
-deliberately absent rather than half-built.
+**No format negotiation, and no reconnect.** A `ready` frame carrying sample rate and channel count would be
+the natural first control message; a dropped socket currently ends the conversation rather than being
+rejoined. Both are deliberately absent rather than half-built.

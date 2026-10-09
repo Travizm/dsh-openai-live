@@ -10,13 +10,24 @@ const request = (transcript: readonly { kind: 'input' | 'output'; text: string }
   transcript,
 } as unknown as DelegationRequest)
 
-/** An appended assistant message, as `session/event` carries one. */
-const message = (content: unknown, sessionId = 'sess-1'): SessionEventLike => ({
+/**
+ * An appended assistant message, **shaped the way `session/event` actually delivers one**.
+ *
+ * There is no `sessionId` field, on purpose. The harness calls a `session/event` listener as
+ * `(session, event)`: the owning session is the **first argument** and the event carries only
+ * `{ type, seq, time, data }`. This helper used to attach a `sessionId` to the event, which is the shape
+ * the `answerText` filter read — so the suite agreed with the code while the running plugin could never
+ * match an answer and every delegated turn timed out. Doubles are wired as production wires them, or they
+ * are a second bug wearing the first one's coat.
+ */
+const message = (content: unknown): SessionEventLike => ({
   type: 'assistant/message',
-  sessionId,
   surfaceOp: 'append',
   data: { message: { content } },
 })
+
+/** The session these turns are admitted to. Supplied **beside** each event, never on it. */
+const SESSION = 'sess-1'
 
 const text = (value: string): { type: 'text'; text: string } => ({ type: 'text', text: value })
 
@@ -40,28 +51,28 @@ describe('promptFrom', () => {
 
 describe('answerText', () => {
   it('reads the text blocks of an appended assistant message', () => {
-    expect(answerText(message([text('Staging is green.')]), 'sess-1')).toBe('Staging is green.')
+    expect(answerText(message([text('Staging is green.')]))).toBe('Staging is green.')
   })
 
   it('joins multiple text blocks in order', () => {
-    expect(answerText(message([text('one'), text('two')]), 'sess-1')).toBe('one\ntwo')
+    expect(answerText(message([text('one'), text('two')]))).toBe('one\ntwo')
   })
 
   it('ignores anything that is not an assistant message', () => {
-    expect(answerText({ type: 'assistant/chunk' }, 'sess-1')).toBeUndefined()
+    expect(answerText({ type: 'assistant/chunk' })).toBeUndefined()
   })
 
-  it('ignores another session, so one conversation cannot answer for another', () => {
-    expect(answerText(message([text('elsewhere')], 'sess-2'), 'sess-1')).toBeUndefined()
-  })
+  // Which session an answer belongs to is the **runner's** decision now, not this function's: the session
+  // is not on the event, so a filter here could only ever have matched nothing. Covered in
+  // `createTurnRunner` below, and again end-to-end in `plugin.spec.ts`.
 
   it('ignores a replayed message — only an append is news', () => {
-    expect(answerText({ ...message([text('history')]), surfaceOp: 'replace' }, 'sess-1')).toBeUndefined()
+    expect(answerText({ ...message([text('history')]), surfaceOp: 'replace' })).toBeUndefined()
   })
 
   it('ignores a payload with no content array', () => {
-    expect(answerText({ type: 'assistant/message', sessionId: 'sess-1', surfaceOp: 'append' }, 'sess-1')).toBeUndefined()
-    expect(answerText(message('not-an-array'), 'sess-1')).toBeUndefined()
+    expect(answerText({ type: 'assistant/message', surfaceOp: 'append' })).toBeUndefined()
+    expect(answerText(message('not-an-array'))).toBeUndefined()
   })
 
   it('skips blocks that are not text — nulls, primitives, other kinds', () => {
@@ -70,25 +81,25 @@ describe('answerText', () => {
       'a bare string',
       { type: 'reasoning', text: 'thinking' },
       text('real'),
-    ]), 'sess-1')).toBe('real')
+    ]))).toBe('real')
   })
 
   it('skips a text block whose text is not a string', () => {
-    expect(answerText(message([{ type: 'text', text: 7 }, text('real')]), 'sess-1')).toBe('real')
+    expect(answerText(message([{ type: 'text', text: 7 }, text('real')]))).toBe('real')
   })
 
   it('treats whitespace-only content as no answer at all', () => {
-    expect(answerText(message([text('   ')]), 'sess-1')).toBeUndefined()
+    expect(answerText(message([text('   ')]))).toBeUndefined()
   })
 })
 
 describe('createTurnRunner', () => {
   const deps = (over: Partial<TurnDeps> = {}) => {
     const admitted: string[] = []
-    const listeners: ((event: SessionEventLike) => void)[] = []
+    const listeners: ((event: SessionEventLike, sessionId: string) => void)[] = []
     let unsubscribed = 0
     const run = createTurnRunner({
-      sessionId: () => 'sess-1',
+      sessionId: () => SESSION,
       maxPromptChars: () => 1_000,
       answerTimeoutMs: () => 50,
       admit: (prompt) => { admitted.push(prompt); return Promise.resolve() },
@@ -103,7 +114,7 @@ describe('createTurnRunner', () => {
     const pending = run(request([{ kind: 'input', text: 'is staging ok?' }]))
     await Promise.resolve()
     expect(admitted).toEqual(['is staging ok?'])
-    listeners[0]!(message([text('green')]))
+    listeners[0]!(message([text('green')]), SESSION)
     await expect(pending).resolves.toEqual({ kind: 'answered', text: 'green' })
     expect(unsubscribed()).toBe(1)
   })
@@ -119,10 +130,20 @@ describe('createTurnRunner', () => {
     const { listeners, run } = deps()
     const pending = run(request([{ kind: 'input', text: 'q' }]))
     await Promise.resolve()
-    listeners[0]!({})
-    listeners[0]!({ type: 'assistant/chunk' })
-    listeners[0]!(message([text('someone else')], 'sess-2'))
-    listeners[0]!(message([text('green')]))
+    listeners[0]!({}, SESSION)
+    listeners[0]!({ type: 'assistant/chunk' }, SESSION)
+    listeners[0]!(message([text('green')]), SESSION)
+    await expect(pending).resolves.toEqual({ kind: 'answered', text: 'green' })
+  })
+
+  it('ignores an answer from another session, so one conversation cannot answer for another', async () => {
+    // The comparison that used to be made against a field the event does not carry — which made *every*
+    // event a non-match, and every turn a timeout. It is made here, from the id the subscriber supplies.
+    const { listeners, run } = deps()
+    const pending = run(request([{ kind: 'input', text: 'q' }]))
+    await Promise.resolve()
+    listeners[0]!(message([text('elsewhere')]), 'sess-2')
+    listeners[0]!(message([text('green')]), SESSION)
     await expect(pending).resolves.toEqual({ kind: 'answered', text: 'green' })
   })
 
@@ -173,7 +194,7 @@ describe('createTurnRunner', () => {
     let session = 'sess-1'
     let budget = 1_000
     const admitted: string[] = []
-    const listeners: ((event: SessionEventLike) => void)[] = []
+    const listeners: ((event: SessionEventLike, sessionId: string) => void)[] = []
     const run = createTurnRunner({
       sessionId: () => session,
       maxPromptChars: () => budget,
@@ -189,14 +210,14 @@ describe('createTurnRunner', () => {
 
     // The turn that started on sess-1 is still answered by sess-1, with the budget it started with.
     expect(admitted).toEqual(['abcdefghij'])
-    listeners[0]!(message([text('from one')], 'sess-1'))
+    listeners[0]!(message([text('from one')]), 'sess-1')
     await expect(inFlight).resolves.toEqual({ kind: 'answered', text: 'from one' })
 
     // The next turn uses the new session and the new budget.
     const next = run(request([{ kind: 'input', text: 'abcdefghij' }]))
     expect(admitted[1]).toBe('abcd')
-    listeners[1]!(message([text('from two')], 'sess-1'))
-    listeners[1]!(message([text('from two')], 'sess-2'))
+    listeners[1]!(message([text('from two')]), 'sess-1')
+    listeners[1]!(message([text('from two')]), 'sess-2')
     await expect(next).resolves.toEqual({ kind: 'answered', text: 'from two' })
   })
 })

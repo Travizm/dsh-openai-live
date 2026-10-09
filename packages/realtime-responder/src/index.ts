@@ -304,11 +304,16 @@ export function apply(ctx: Context, config: RealtimeResponderConfig): void {
         content: [{ type: 'text', text }],
       })
     },
-    // `session/event` listeners are called with `(session, event)` — the event is the second argument,
-    // which is only discoverable from the harness's own listener type.
-    subscribe: (listener) => ctx.on('session/event', (_session: unknown, event: unknown) => {
-      listener(event as SessionEventLike)
-    }),
+    // `session/event` listeners are called with `(session, event)`. The owning session is the FIRST
+    // argument and the event carries no session id of its own, so the scope is forwarded from here. This
+    // adapter used to discard the session and hand the listener the bare event, which made every answer
+    // unmatchable in a real composition while a hand-built test event passed.
+    subscribe: (listener) => ctx.on(
+      'session/event',
+      (session: { readonly id?: unknown } | undefined, event: unknown) => {
+        listener(event as SessionEventLike, typeof session?.id === 'string' ? session.id : '')
+      },
+    ),
   })
 
   // A listener is a contribution like any other: the fiber that registered it releases it, so there is

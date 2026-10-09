@@ -102,10 +102,11 @@ describe('answering a delegation', () => {
       content: [{ type: 'text', text: 'is staging ok?' }],
     })
 
-    // `session/event` listeners take (session, event); the session is unused here.
-    context.emit('session/event', undefined as never, {
+    // `session/event` listeners take (session, event): the owning session is the FIRST argument, and the
+    // event carries no session id of its own. Emitting it the harness's way is the point of this suite — a
+    // hand-built event carrying `sessionId` is what hid a defect that made every real turn time out.
+    context.emit('session/event', { id: 'sess-1' } as never, {
       type: 'assistant/message',
-      sessionId: 'sess-1',
       surfaceOp: 'append',
       data: { message: { content: [{ type: 'text', text: 'Staging is green.' }] } },
     } as unknown as never)
@@ -113,6 +114,29 @@ describe('answering a delegation', () => {
     await expect(answer).resolves.toEqual({ text: 'Staging is green.', mode: 'spoken' })
     // An answered turn is its own report: settling it too would double-report a success.
     expect(settled).toEqual([])
+  })
+
+  it('ignores a session event it cannot attribute, rather than answering on a guess', async () => {
+    // A `session/event` with no identifiable session is what a listener receives from anything that is not
+    // ours. Answering from one would speak another conversation's reply into this one, so the unmatched arm
+    // refuses to guess rather than falling back to the configured session.
+    const { context } = harness()
+    apply(context, Config({ sessionId: 'sess-1', answerTimeoutMs: 1_000 }) as RealtimeResponderConfig)
+
+    const answer = context.serial('realtime-agent/delegation', request)
+    await Promise.resolve()
+
+    const payload = {
+      type: 'assistant/message',
+      surfaceOp: 'append',
+      data: { message: { content: [{ type: 'text', text: 'from nowhere' }] } },
+    } as unknown as never
+    context.emit('session/event', undefined as never, payload)
+    context.emit('session/event', { notAnId: 1 } as never, payload)
+
+    // Neither was attributed, so the turn is still open — and the answer from the right session still lands.
+    context.emit('session/event', { id: 'sess-1' } as never, payload)
+    await expect(answer).resolves.toEqual({ text: 'from nowhere', mode: 'spoken' })
   })
 
   it('declines when nothing answers in time, so the agent speaks its own notice', async () => {
@@ -272,7 +296,7 @@ describe('answering a delegation', () => {
     ctx = undefined
     // Registrations are effects. If this ever needs a teardown path of its own, that path is what gets
     // forgotten on the day it matters.
-    expect(() => context.emit('session/event', undefined as never, {} as unknown as never)).not.toThrow()
+    expect(() => context.emit('session/event', { id: 'sess-1' } as never, {} as unknown as never)).not.toThrow()
   })
 })
 
@@ -338,17 +362,17 @@ describe('the settings it declares', () => {
     await Promise.resolve()
 
     // The next turn is admitted to the new session — and an answer only counts if it comes from there,
-    // which is what makes steering real rather than merely recorded.
+    // which is what makes steering real rather than merely recorded. The session is carried as the
+    // listener's first argument, which is the only place it exists: this assertion is the one that would
+    // have caught the answer path never matching anything.
     expect(controller.prompted.at(-1)).toMatchObject({ sessionId: 'sess-2' })
-    context.emit('session/event', undefined as never, {
+    context.emit('session/event', { id: 'sess-1' } as never, {
       type: 'assistant/message',
-      sessionId: 'sess-1',
       surfaceOp: 'append',
       data: { message: { content: [{ type: 'text', text: 'from the old session' }] } },
     } as unknown as never)
-    context.emit('session/event', undefined as never, {
+    context.emit('session/event', { id: 'sess-2' } as never, {
       type: 'assistant/message',
-      sessionId: 'sess-2',
       surfaceOp: 'append',
       data: { message: { content: [{ type: 'text', text: 'from the new session' }] } },
     } as unknown as never)

@@ -9,14 +9,14 @@ All notable changes to this project are documented here. The format follows
 ### Added
 
 - **A settled delegation says *why* it produced nothing.** `dsh-realtime-responder` 0.2.0 and
-  `dsh-realtime-agent` 0.3.0. The new `realtime-agent/delegation-settled` event is emitted for every
+  `dsh-realtime-agent` 0.2.4. The new `realtime-agent/delegation-settled` event is emitted for every
   turn that is **not** answered — `declined` (there was nothing to ask), `refused` (the session
   controller rejected the admission, carrying **its own reason**) or `timeout` (admitted, nothing came
   back inside the bound). Until now all three arrived as the same `undefined`, which is why the
   plugin's foundational failure could not be diagnosed from outside it. An answered turn is not
   settled: the answer is its own report.
 
-- **`redact()` — the credential rule, in one place.** `dsh-realtime` 0.3.0. Diagnostic surfaces are
+- **`redact()` — the credential rule, in one place.** `dsh-realtime` 0.2.1. Diagnostic surfaces are
   places a provider key or the route's capability token could escape into, and a disclosure outlives
   the debugging session that introduced it. The primitive removes secrets by **shape** (`sk-…`, a
   bearer header, a private-key block, a JWT, a recorded fingerprint) and by **value**, because a
@@ -33,6 +33,16 @@ All notable changes to this project are documented here. The format follows
   the redaction proof) and timeout.
 
 ### Changed
+
+- **Released as *patches*, not minors — and that is the point.** `dsh-realtime` goes 0.2.0 → **0.2.1**
+  and `dsh-realtime-agent` 0.2.3 → **0.2.4**, not `0.3.0`. A 0.x caret **minor-locks**, so `^0.2.0`
+  means `>=0.2.0 <0.3.0`: a `0.3.0` seam falls outside every published consumer's declared range
+  (`dsh-realtime-agent`, `-openai`, `-replay`, and the 0.4.0 bundle all carry `^0.2.0`) and installs a
+  **second copy** of the seam — the duplicate-package defect that breaks a host silently. Inside the
+  range, every existing consumer receives the fix with no action and no bundle upgrade.
+
+  The bundle still goes 0.4.0 → **0.5.0**, because it must: `0.4.0` declares
+  `dsh-realtime-responder@^0.1.0`, which cannot admit the responder's `0.2.0`.
 
 - **`createTurnRunner` resolves with a `TurnOutcome` rather than `string | undefined`.** The four ways
   a turn can end are named, so a caller can act on the difference between *the controller said no* and

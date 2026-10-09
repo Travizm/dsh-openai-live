@@ -4,6 +4,86 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.4] — 2026-10-10
+
+### Added
+
+- **The ask, the refusal, and the config that was resolved.** `dsh-realtime` 0.2.6 ·
+  `dsh-realtime-agent` 0.2.9 · `dsh-realtime-audio-ws` 0.2.5. A journal for a session that never opened was
+  byte-for-byte the same shape as one for a session nobody asked for — an accepted socket, then nothing — so
+  neither could be told from the other and *"the voice is broken"* had no answer anywhere in the file.
+  `session.requested` is now recorded by **whoever asks**, with its trigger (`connect` / `strip` /
+  `autostart`); the ask and its outcome are written by *different plugins* on purpose, so the pair
+  **brackets** a hand-off that crosses a plugin boundary — and a request with no outcome after it says the
+  listener never ran, which no single entry can say because the opener's silence reads the same either way.
+
+### Fixed
+
+- **A refusal decided before the provider was called left no trace.** `dsh-realtime-agent` 0.2.9. The
+  transport's start path calls the agent through `emit`, which **discards a returned outcome**, so a refusal
+  that had already been classified — with a remedy already named for the user — reached no record at all. It
+  is now journalled by **class, never message**, exactly as the provider's own error path already was, and
+  for the same reason: a provider error can carry the key it refused. The boot path was worse — `autoStart`
+  did not go through `requestSession` at all, so a **restart** that failed to open a session recorded nothing
+  whatsoever, which is the path a restart actually lands on.
+- **`config.resolved` was documented and had no producer.** `dsh-realtime-audio-ws` 0.2.5 ·
+  `dsh-realtime-agent` 0.2.9. The kind was declared in the journal's vocabulary *and* promised by the table
+  in `docs/diagnostics.md`, and nothing wrote it — so its **absence** read as evidence that nothing had been
+  configured. A kind is not a capability. Each plugin now records its own at apply: values only, no field
+  that can carry a secret, and `instructions` excluded deliberately, because the journal records what
+  happened rather than copying the configuration into itself.
+
+### Changed
+
+- **The responder's call site borrows the session controller's real type.** No runtime change, and the
+  responder is not republished for it — but it is the guard that would have caught 0.6.3's defect at compile
+  time, so it is recorded here rather than left to the commit log.
+
+## [0.6.3] — 2026-10-10
+
+### Fixed
+
+- **Every delegation was refused for want of a signal.** `dsh-realtime-responder` 0.2.5. The responder called
+  the session controller's `prompt(request)` with **one** argument; the real method takes **two**, the second
+  a required `AbortSignal` that the harness reads before it will even consider the request. Every delegation
+  since the seam was written died with `Cannot read properties of undefined (reading 'throwIfAborted')` — the
+  headline capability had never once worked in production, and the suite was green throughout.
+
+## [0.6.2] — 2026-10-09
+
+### Added
+
+- **A record that can leave the process that made it.** `dsh-realtime-audio-ws` 0.2.4. The journal stays
+  I/O-free: a sink is supplied by the deployment that wants one (`journalPath`, **off by default**, because a
+  plugin that writes files merely because it was installed writes in someone else's directory), and every
+  sink call is wrapped so a broken sink costs the copy and never the entry. Entries reach a sink *after*
+  redaction, which is why this is a sink rather than a second writer with its own idea of what a secret looks
+  like.
+
+### Fixed
+
+- **The strip was painted over the host's page and could not be read.** `dsh-realtime-audio-ws` 0.2.4. A
+  fixed overlay whose background was a translucent wash let the host's own text read straight through it: two
+  texts superimposed, neither legible, and no stack trace. The reported symptom was "the GUI is
+  unreadable". It is now an opaque, theme-aware base with a soft shadow, and the guard asserts the **paint**,
+  because jsdom has no compositor and no DOM assertion can see what is behind an element.
+
+## [0.6.1] — 2026-10-09
+
+### Added
+
+- **A delegated turn's steps, narrated while it runs.** `dsh-realtime` 0.2.4 · `dsh-realtime-agent` 0.2.8 ·
+  `dsh-realtime-responder` 0.2.4. Milestones are spoken from a phrase table keyed by the tool's **name** —
+  never from the model's own argument text, so no model-authored text reaches the ear — and paced per turn:
+  the first step is never held back, and later ones respect an interval and a per-turn ceiling.
+
+### Fixed
+
+- **Every real turn timed out, because the answer was matched on a field no event carries.** The responder
+  read the session id off the event; the harness passes it *beside* the event, as the listener's first
+  argument. A filter copied from the answer reader then dropped `tool/call` entirely, since `tool/call` is
+  not a surface event and carries no `surfaceOp` at all.
+
 ## [0.6.0] — 2026-10-09
 
 ### Added

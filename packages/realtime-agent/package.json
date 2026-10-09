@@ -1,6 +1,6 @@
 {
   "name": "dsh-realtime-agent",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "description": "Delegation bridge for the dsh-realtime seam: answers what the voice model delegates, or says plainly that it cannot.",
   "type": "module",
   "main": "lib/index.js",

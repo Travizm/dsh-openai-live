@@ -8,8 +8,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
-- **A settled delegation says *why* it produced nothing.** `dsh-realtime-responder` 0.2.0 and
-  `dsh-realtime-agent` 0.2.4. The new `realtime-agent/delegation-settled` event is emitted for every
+- **A settled delegation says *why* it produced nothing.** `dsh-realtime-responder` 0.2.1 and
+  `dsh-realtime-agent` 0.2.5. The new `realtime-agent/delegation-settled` event is emitted for every
   turn that is **not** answered — `declined` (there was nothing to ask), `refused` (the session
   controller rejected the admission, carrying **its own reason**) or `timeout` (admitted, nothing came
   back inside the bound). Until now all three arrived as the same `undefined`, which is why the
@@ -35,7 +35,7 @@ All notable changes to this project are documented here. The format follows
 ### Changed
 
 - **Released as *patches*, not minors — and that is the point.** `dsh-realtime` goes 0.2.0 → **0.2.1**
-  and `dsh-realtime-agent` 0.2.3 → **0.2.4**, not `0.3.0`. A 0.x caret **minor-locks**, so `^0.2.0`
+  and `dsh-realtime-agent` 0.2.3 → **0.2.5**, not `0.3.0`. A 0.x caret **minor-locks**, so `^0.2.0`
   means `>=0.2.0 <0.3.0`: a `0.3.0` seam falls outside every published consumer's declared range
   (`dsh-realtime-agent`, `-openai`, `-replay`, and the 0.4.0 bundle all carry `^0.2.0`) and installs a
   **second copy** of the seam — the duplicate-package defect that breaks a host silently. Inside the
@@ -48,6 +48,25 @@ All notable changes to this project are documented here. The format follows
   a turn can end are named, so a caller can act on the difference between *the controller said no* and
   *nobody answered in time* instead of re-deriving it. A rejection that carries no message reports
   that absence rather than a fabricated reason.
+
+### Fixed
+
+- **The published manifests carried `workspace:` and could not be installed at all.** `npm publish`
+  ships `package.json` verbatim, and `workspace:^` is a **pnpm** protocol — so
+  `dsh-realtime-agent@0.2.4`, `dsh-realtime-responder@0.2.0` and `dsh-openai-live@0.5.0` went out with
+  dependency entries no consumer can resolve:
+
+      npm error code EUNSUPPORTEDPROTOCOL
+      npm error Unsupported URL Type "workspace:": workspace:^
+
+  `pnpm pack` rewrites the protocol to a real range (`{'dsh-realtime': '^0.2.1'}`); the pack was
+  correct and the *publish path* was not. Republished as `0.2.5` / `0.2.1` / `0.5.1` through pnpm, and
+  the three broken versions deprecated so nobody installs them by accident.
+
+  The lesson is the one this file already carries: **a publisher's success message is not evidence.**
+  All three reported success and would have been declared done. Installing the bundle from the registry
+  into a clean directory is the only pass that sees what a consumer gets — and it is the pass that
+  caught this, one step after the poll of the registry showed four green versions.
 
 ## [0.4.0] — 2026-10-08
 

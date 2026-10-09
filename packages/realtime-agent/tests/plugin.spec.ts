@@ -20,6 +20,8 @@ class RecordingAdapter extends RealtimeAdapter {
   refuseAppend = false
   /** Make opening fail, as a provider that refuses the session does. */
   refuseOpen = false
+  /** Make opening fail with *this* error, so a classified refusal can be driven through the same path. */
+  refuseOpenWith: Error | undefined
   /** Make closing fail, as a session that is already gone does. */
   refuseClose = false
 
@@ -27,6 +29,7 @@ class RecordingAdapter extends RealtimeAdapter {
     // Wire the handlers exactly as a real adapter does: a substitute that drops them makes every
     // injected event vanish, and the suite then debugs the wrong file.
     this.handlers = options.handlers
+    if (this.refuseOpenWith !== undefined) return Promise.reject(this.refuseOpenWith)
     if (this.refuseOpen) return Promise.reject(new Error('the provider refused the session'))
     this.opened += 1
     const appends = this.appends
@@ -190,6 +193,40 @@ describe('the journal the agent writes', () => {
     expect(journal.snapshot().some(entry => entry.kind === 'session.requested')).toBe(false)
     expect(journal.snapshot().find(entry => entry.kind === 'session.failed')?.detail)
       .toEqual({ class: 'Error' })
+  })
+
+  it('records the CODE of a refusal and never its message, so a reader can act on it', async () => {
+    const { ctx: context, adapter, journal } = harness()
+    // The first real refusal this instrument ever captured, verbatim: the account was out of credit. The
+    // journal could say `RealtimeError` and nothing else, so answering "why" took a probe against the
+    // provider — the code is what turns a record of a failure into a record of what to do about it.
+    adapter.refuseOpenWith = new RealtimeError(
+      `no credits remaining for key ${SENTINEL_KEY}`,
+      'INSUFFICIENT_CREDIT',
+      {
+        detail: {
+          providerCode: 'credit_balance_exhausted',
+          retryable: false,
+          remedy: 'add credit to the OpenAI account — the balance is exhausted',
+        },
+      },
+    )
+    apply(context, Config({ provider: 'fake' }) as RealtimeAgentConfig)
+    await tick()
+
+    context.emit('realtime-agent/start')
+    await tick()
+
+    expect(journal.snapshot().find(entry => entry.kind === 'session.failed')?.detail).toEqual({
+      class: 'RealtimeError',
+      code: 'INSUFFICIENT_CREDIT',
+      providerCode: 'credit_balance_exhausted',
+      remedy: 'add credit to the OpenAI account — the balance is exhausted',
+      retryable: 'false',
+    })
+    // The message is where a key turns up — this plugin holds no credential to redact against, which is why
+    // the text is the adapter's to record and the code is this plugin's.
+    expect(JSON.stringify(journal.snapshot())).not.toContain(SENTINEL_TEXT)
   })
 
   it('records what it resolved, so a journal can be read without the profile beside it', async () => {

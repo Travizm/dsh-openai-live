@@ -12,6 +12,7 @@ because the last round's most expensive mistake was treating a tidy story as a f
 | the same journal's route token | a per-boot capability token the audio route publishes to the page; the strip already holds it | free |
 | `pnpm probe:delegation <profile>` | the delegation→answer path against the **installed** profile: answered / refused-with-reason / timeout, shadow-free check, package presence | free, no provider |
 | `pnpm self-test <profile>` | five checks and one verdict — key, route, session, prompt, canned turn | one short session |
+| `pnpm probe:open` | drives the **production adapter** with the production payload and prints the provider's refusal **redacted against the key** — the one thing `self-test` deliberately stubs, and the instrument that named `INSUFFICIENT_CREDIT` | one refused session |
 | **the harness session log** | **every turn, step, `tool/call`, `tool/result`, and the `source.kind` of every user message** | free |
 
 That last row is the one that matters and it is already on disk, written by the harness rather than by us:
@@ -132,7 +133,7 @@ Read in order, and the failure names itself:
 | The journal shows | What it means |
 |---|---|
 | `socket.accepted` → `session.requested` → nothing | the ask reached **no listener**: the agent row is absent, or its `inject` is unsatisfied |
-| `session.requested` → `session.failed` | the open was attempted and refused; the `class`, and the outcome's `refusal`, name the remedy |
+| `session.requested` → `session.failed` | the open was attempted and refused. The entry carries the **`code`**, the provider's `providerCode`, the `remedy` and `retryable`, so it says *what to do*: `INSUFFICIENT_CREDIT` / `credit_balance_exhausted` / `retryable=false` is an account to top up, not a bug to fix. The message is deliberately absent — it is where a key turns up, and the adapter, which holds the key and can redact against it, is the plugin that records text |
 | `session.requested` → `session.opened` | the session is live, so the fault is downstream — read the harness session log |
 | no `session.requested` at all | nothing asked: check `openSessionOnConnect` in `config.resolved`, and the connection itself |
 

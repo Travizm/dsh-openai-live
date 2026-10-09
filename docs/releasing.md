@@ -6,7 +6,7 @@ wrong. Everything here has been paid for once.
 ## 1. Pre-publish gates
 
 ```bash
-pnpm gate                                  # leak scan · build · typecheck · coverage · built-artifact
+pnpm gate                                  # leak scan · build · declared deps · typecheck · coverage · built-artifact
 pnpm leakscan                              # tracked files only — the tarball is a second, unreviewed product
 ```
 

@@ -7,7 +7,8 @@ about what the gate will ask of you.
 
 ```bash
 pnpm install
-pnpm gate      # build → typecheck (src AND tests) → coverage gate → built-artifact smoke
+pnpm gate      # leak scan → build → declared-dependency check → typecheck (src AND tests) → coverage gate
+               # → built-artifact smoke
 ```
 
 Requires Node `^22.19.0 || >=24.0.0` and pnpm 11.

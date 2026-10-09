@@ -116,7 +116,9 @@ provider be a choice.
 
 ## Where this is right now
 
-`dsh-openai-live 0.4.0`, six packages, 338 tests, 100% coverage on every file, published and verified
-by real install. It works: say something, the model delegates, an agent answers, you hear it — in the
-desktop app, on a profile confirmed free of shadowed harness packages. What it does not yet do is
-explain itself or survive a long tool turn, and those two are the next two releases.
+`dsh-openai-live 0.5.3`, six packages, 404 tests, 100% coverage on every file, published and verified
+by real install. It works, and since 0.5.2 it **explains itself**: a bounded journal the plugins write
+to, the controller's reason carried on the wire *and spoken*, a `GET /dsh-realtime/diagnostics` route,
+and `pnpm self-test <profile>` for one verdict worth pasting into a bug report. What it does not yet do
+is survive a long tool turn — an all-or-nothing answer still has to fit inside one delegation window —
+and it is still started from a devtools global. Those two are the next two releases.

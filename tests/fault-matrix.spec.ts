@@ -425,8 +425,10 @@ describe('the fault matrix', () => {
     expect(types).toContain('session.started')
     expect(types).toContain('session.delegation.created')
 
-    // A barge-in is real and it matters — it is simply not reported. Recording one would mean the
-    // journal claiming to see something no observer has, so the row asserts the absence instead.
+    // A barge-in is real and it matters — and *this* provider does not report it. Recording one would mean
+    // the journal claiming to see something no observer has, so the row asserts the absence instead. That
+    // is a property of OpenAI's protocol, not of the class: Gemini's docs carry `server_content.interrupted`
+    // and a cancellation message naming the IDs of pending calls. See docs/second-provider-spike.md.
     expect(types.filter(type => /interrupt|speech_started|speech_stopped|response\.cancel/.test(type))).toEqual([])
   })
 

@@ -114,6 +114,7 @@ export class Journal {
   private readonly capacity: number
   private readonly secrets: string[]
   private readonly entries: JournalEntry[] = []
+  private readonly sinks: ((entry: JournalEntry) => void)[] = []
   private nextSeq = 1
 
   /**
@@ -148,6 +149,25 @@ export class Journal {
   }
 
   /**
+   * Send every entry, as it is recorded, to somewhere else as well.
+   *
+   * The journal itself stays I/O-free on purpose — it is a plain object a test can construct and a route can
+   * serve — so persistence is a *sink* the caller supplies rather than something this class does. Additive,
+   * for the same reason `addSecrets` is: sinks arrive with the plugins that want them, and plugins load in no
+   * guaranteed order.
+   *
+   * **A sink cannot break the record.** It is called inside a guard, so a sink that throws — a full disk, a
+   * path that does not exist, a bug in the caller's own writer — costs the copy and never the entry. A
+   * diagnostic mechanism that can lose the diagnostic is worse than none, because it fails exactly when it is
+   * needed.
+   * @param sink - called with each entry, oldest to newest, in the order they were recorded.
+   */
+  onEntry(sink: (entry: JournalEntry) => void): void {
+    if (typeof sink !== 'function') return
+    this.sinks.push(sink)
+  }
+
+  /**
    * Redact and retain one entry, evicting the oldest when the buffer is full.
    * @param kind - what happened.
    * @param detail - string fields to retain; every value is redacted before it is stored.
@@ -169,6 +189,16 @@ export class Journal {
     // `shift()` on a bounded array: the buffer is capped, so this stays O(capacity) at worst and
     // the memory ceiling is a property of the type rather than of the caller's discipline.
     while (this.entries.length > this.capacity) this.entries.shift()
+    for (const sink of this.sinks) {
+      try {
+        sink(entry)
+      } catch {
+        // Deliberately swallowed: see `onEntry`. The entry is already retained, so a broken sink costs the
+        // copy and not the record — and re-throwing here would let a diagnostics sink take down the path it
+        // was added to illuminate. This guard is proven able to fail: remove it and `journal-sink.spec.ts`
+        // reports a lost entry.
+      }
+    }
     return entry
   }
 

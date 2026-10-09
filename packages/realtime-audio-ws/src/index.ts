@@ -72,6 +72,8 @@ export { diagnosticsRoute, type DiagnosticsDeps, type DiagnosticsJournal, type D
 export { STRIP_ELEMENT_ID, stripBootstrap, stripMarkup, stripRows } from './strip.ts'
 export type { InjectedGlobalRow, InjectedRow } from './injection.ts'
 
+import { createJournalFileSink } from './journal-file.ts'
+
 /** Plugin name. */
 export const name = 'realtime-audio-ws'
 
@@ -84,6 +86,10 @@ export const Config = Schema.object({
   // microphone: a connection takes an explicit action, an authenticated one, and its absence is silence.
   openSessionOnConnect: Schema.boolean().default(DEFAULT_OPEN_SESSION_ON_CONNECT),
   diagnosticsPath: Schema.string().default(DEFAULT_DIAGNOSTICS_PATH),
+  // Empty means no file, and empty is the default: a plugin that writes files because it was installed is a
+  // plugin writing files in somebody else's directory. The deployment that wants a recording is the
+  // deployment that names a path.
+  journalPath: Schema.string().default(''),
 })
 
 /**
@@ -137,6 +143,13 @@ export function apply(ctx: Context, config: RealtimeAudioWsConfig): void {
     // constructor argument: the plugin that mints the token is the only one that can name it, and it
     // mints it here, after the journal already exists.
     journal.addSecrets([token])
+    // The record leaves the process when a path is named. Registered *after* the token, so that every entry
+    // the file receives has already been through the redaction that knows about it — a sink is handed
+    // entries after `record` has redacted them, and that ordering is the reason this is a sink rather than a
+    // second writer with its own idea of what a secret looks like.
+    if (config.journalPath.length > 0) {
+      journal.onEntry(createJournalFileSink(config.journalPath))
+    }
     // The injection event is declared by `@deepseek-ai/dsh-host-webserver`, which this package deliberately
     // does not import: importing it would augment `Context` with a second declaration of `webServer` and
     // turn the structural dependency above into a compile error. The name is cast at this one boundary.

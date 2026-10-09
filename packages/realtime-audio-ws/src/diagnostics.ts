@@ -67,20 +67,57 @@ export function diagnosticsRoute(deps: DiagnosticsDeps): DiagnosticsRoute {
     kind: 'exact',
     path: deps.path,
     handler: (req, res) => {
+      // The host's own page is cross-origin to loopback, and a browser discards a cross-origin response
+      // that carries no `Access-Control-Allow-Origin` — the request authenticates, the route answers
+      // 200, and the caller sees a CORS failure with no body. The WebSocket sibling is exempt from CORS,
+      // which is how this went unnoticed: one policy, two doors, and only one of them told the browser
+      // it was allowed to read the answer.
+      const origin = typeof req.headers.origin === 'string' ? req.headers.origin : undefined
       const rejection = verdictFor(deps.rejectionFor(req), tokenFromUrl(req.url), deps.token)
       if (rejection !== undefined) {
         // The status carries the verdict the connection service actually gave, so a reader can tell a
         // missing credential from a refused one rather than guessing from a generic failure.
-        send(res, rejection, { error: rejection === 401 ? 'unauthorized' : 'forbidden' })
+        send(res, rejection, { error: rejection === 401 ? 'unauthorized' : 'forbidden' }, origin)
+        return
+      }
+      // A preflight is answered only after the verdict, never before it. Answering one unauthenticated
+      // would confirm the route's existence to a caller holding no capability at all.
+      if (req.method === 'OPTIONS') {
+        res.writeHead(204, headers(origin))
+        res.end()
         return
       }
       const entries = deps.journal.snapshot()
       // `size` and `oldestSeq` travel with the entries rather than being left for the reader to infer:
       // a truncated buffer and an idle one are the same empty-looking list otherwise, and the sequence
       // number is the only thing that separates "nothing happened" from "the buffer rolled over".
-      send(res, 200, { size: deps.journal.size, oldestSeq: deps.journal.oldestSeq, entries })
+      send(res, 200, { size: deps.journal.size, oldestSeq: deps.journal.oldestSeq, entries }, origin)
     },
   }
+}
+
+/**
+ * The headers every response from this route carries.
+ *
+ * `Access-Control-Allow-Origin` **reflects the caller's own origin** rather than naming one. The token is
+ * the authorisation here, not the origin: a request only reaches this point holding a capability that
+ * exists nowhere but the page the host injected it into, so echoing the origin grants nothing the token
+ * has not already granted — and it keeps the route readable from a profile whose page is served on some
+ * other scheme. `Vary: Origin`, because the header varies with the request and a cache that missed that
+ * would serve one origin's answer to another.
+ * @param origin - the request's `Origin`, when it sent one.
+ * @returns the response headers.
+ */
+function headers(origin: string | undefined): Record<string, string> {
+  const built: Record<string, string> = {
+    'content-type': 'application/json',
+    'cache-control': 'no-store',
+    vary: 'Origin',
+  }
+  // Absent when the caller sent no origin — a command-line client needs no permission to read a response
+  // it was never going to have a browser apply a same-origin policy to.
+  if (origin !== undefined) built['access-control-allow-origin'] = origin
+  return built
 }
 
 /**
@@ -91,8 +128,9 @@ export function diagnosticsRoute(deps: DiagnosticsDeps): DiagnosticsRoute {
  * @param res - the response this handler owns.
  * @param status - HTTP status to write.
  * @param body - value to serialise as the JSON body.
+ * @param origin - the request's `Origin`, carried through so the answer is readable by whoever asked.
  */
-function send(res: ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+function send(res: ServerResponse, status: number, body: unknown, origin: string | undefined): void {
+  res.writeHead(status, headers(origin))
   res.end(JSON.stringify(body))
 }

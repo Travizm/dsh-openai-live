@@ -161,6 +161,44 @@ describe('the journal the audio route writes', () => {
     expect(journal.snapshot().map(entry => entry.kind)).toEqual(['socket.accepted', 'socket.closed'])
   })
 
+  it('lets the host page read the answer, which is cross-origin to loopback', async () => {
+    const { http, token, connection } = await mount()
+    const page = { headers: { origin: 'dsh-app://app' } }
+
+    // The page the host serves lives on its own scheme, so every response it reads is cross-origin, and a
+    // browser discards a cross-origin response with no `Access-Control-Allow-Origin`. The route answered
+    // 200 to a request from that page and the caller saw only a CORS failure — which is how this survived
+    // its own tests: every one of them asserted the status, and the status was right the whole time.
+    const authorised = await fetch(http(DEFAULT_DIAGNOSTICS_PATH, `?t=${token}`), page)
+    expect(authorised.status).toBe(200)
+    expect(authorised.headers.get('access-control-allow-origin')).toBe('dsh-app://app')
+    expect(authorised.headers.get('vary')).toContain('Origin')
+
+    // The refusal carries it too, or a page could learn that it was refused and not why. The refusal comes
+    // from the connection service — a missing token is not by itself one, because the token is the override
+    // and the service is the gate — so this asks the service to object, as the host's own does.
+    connection.rejection = 401
+    const refused = await fetch(http(), page)
+    expect(refused.status).toBe(401)
+    expect(refused.headers.get('access-control-allow-origin')).toBe('dsh-app://app')
+    connection.rejection = undefined
+
+    // A caller that sent no origin is granted nothing it did not need — curl has no same-origin policy to
+    // be exempted from.
+    const plain = await fetch(http(DEFAULT_DIAGNOSTICS_PATH, `?t=${token}`))
+    expect(plain.status).toBe(200)
+    expect(plain.headers.get('access-control-allow-origin')).toBeNull()
+
+    // A preflight is answered only once the verdict has allowed the caller: answering one before that would
+    // confirm the route's existence to anyone who guessed its path.
+    const preflight = await fetch(http(DEFAULT_DIAGNOSTICS_PATH, `?t=${token}`), { method: 'OPTIONS', ...page })
+    expect(preflight.status).toBe(204)
+    connection.rejection = 403
+    const unauthorised = await fetch(http(), { method: 'OPTIONS', ...page })
+    expect(unauthorised.status).toBe(403)
+    connection.rejection = undefined
+  })
+
   it('records a verdict even when a request carries no target', async () => {
     // `node:http` always reports a target on a server request, so this is unreachable in practice — but
     // it is the branch that decides whether a malformed request is journalled or throws while recording.

@@ -14,6 +14,20 @@ export interface AudioSocketBridgeDeps {
   readonly subscribeAudio: (listener: (pcm16: Uint8Array) => void) => () => void
   /** Longest inbound frame accepted, in bytes. */
   readonly maxFrameBytes: number
+  /**
+   * Handle one **control frame** — a text frame on this socket.
+   *
+   * Until S2 story 2 a text frame was not part of this contract, and the comment that said so was right
+   * about the wire as it was: the socket carried PCM16 in both directions and nothing else. It now
+   * carries a channel too, because it is the only duplex connection the client already holds, and one
+   * text frame in / one text frame out is a smaller contract than a second route with its own
+   * authentication would have been.
+   *
+   * `reply` writes exactly one text frame back, and silently drops it once the socket is gone: a control
+   * handler is asynchronous, and a reply to a closed socket would throw from inside a promise nobody
+   * awaits.
+   */
+  readonly onControl: (frame: string, reply: (text: string) => void) => void
   /** Called exactly once when the bridge stops, however it stops. */
   readonly onDetach: () => void
 }
@@ -33,6 +47,22 @@ export function toBytes(data: unknown): Uint8Array {
   if (Array.isArray(data)) return new Uint8Array(Buffer.concat(data as readonly Uint8Array[]))
   if (data instanceof ArrayBuffer) return new Uint8Array(data)
   return new Uint8Array(Buffer.from(data as ArrayBufferLike))
+}
+
+/**
+ * Normalise a `ws` message payload to text.
+ *
+ * The same three shapes {@link toBytes} handles, decoded as UTF-8 — a control frame arrives as a Buffer
+ * whichever way it was framed, and a fragmented one as an array of them.
+ *
+ * @param data - the payload as `ws` delivered it.
+ * @returns the payload as text.
+ */
+export function toText(data: unknown): string {
+  if (typeof data === 'string') return data
+  if (Array.isArray(data)) return Buffer.concat(data as readonly Uint8Array[]).toString('utf8')
+  if (data instanceof Uint8Array) return Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString('utf8')
+  return Buffer.from(data as ArrayBufferLike).toString('utf8')
 }
 
 /**
@@ -61,10 +91,28 @@ export function attachAudioSocket(client: AudioSocket, deps: AudioSocketBridgeDe
     deps.onDetach()
   }
 
+  /**
+   * Answer one control frame, if the socket is still there.
+   *
+   * The guard is here rather than at the call site because this is the only place that knows whether the
+   * bridge is still live, and because a control handler settles asynchronously: a reply that arrives
+   * after the socket went away must be dropped, not thrown.
+   * @param text - the reply frame.
+   */
+  const reply = (text: string): void => {
+    if (stopped) return
+    client.send(text)
+  }
+
   client.on('message', (data, isBinary) => {
-    // A text frame is not part of this contract. Ignoring one is cheaper than closing the connection and
-    // no less correct: nothing on this wire is JSON.
-    if (!isBinary) return
+    // A **text** frame is a control frame. This is the deliberate widening of the contract that used to
+    // say the opposite: the socket is the one duplex connection the client already holds, and a control
+    // plane that needs a second route with a second authentication is a control plane nobody builds.
+    // Checked before the audio path, because a text frame is never audio whatever it contains.
+    if (!isBinary) {
+      deps.onControl(toText(data), reply)
+      return
+    }
     const pcm16 = toBytes(data)
     if (pcm16.byteLength > deps.maxFrameBytes) {
       // 1009 = message too big. `ws` enforces its own `maxPayload` first, so reaching this means the bound

@@ -92,8 +92,26 @@ say *reconnect* rather than pretending an instant change is possible.
 
 `autoStart` is **restart-bound**, and this is a correction rather than a convenience: its only read site
 is the boot, so nothing a running process could do would honour a change. A `set` on it is refused with
-the restart it needs — `"realtime-agent.autoStart" is claimed when the plugin loads — restart to change
-it` — rather than accepted and quietly ignored.
+the restart it needs — `realtime-agent.autoStart` is claimed when the plugin loads, so restart to change
+it — rather than accepted and quietly ignored.
+
+## Asking it what it is doing
+
+Two of this plugin's three session events **return** what they did, so a caller that is waiting can have
+the answer while a caller that only emits is unaffected:
+
+- `realtime-agent/status` — a query. `{open, provider, model, voice?, sessionId?}`, read from the session
+  the provider actually accepted while one is open, and from what a start *would* use while none is. A
+  mounted agent always answers, so `undefined` from the dispatch means the row is absent — which is a
+  different fact from a session that is merely closed.
+- `realtime-agent/start` / `realtime-agent/stop` — the transport emits these and ignores the result; the
+  control channel dispatches them with `serial` and answers with the **outcome**: `{ok, voice, refusal?}`
+  rather than an acknowledgement that the request was made. A `start` that replied *requested* while the
+  open silently failed is exactly the collapse this project has already paid for once.
+
+A failed request carries a **structured refusal** — the seam's machine code and the `remedy` written to be
+relayed verbatim — and never the failure's message. This plugin holds no credential to redact against; the
+adapter does, and that is why its journal records the class of a session failure rather than the text.
 
 ## How answers are kept deliverable
 

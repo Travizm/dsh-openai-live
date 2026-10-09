@@ -22,6 +22,7 @@ import type { Duplex } from 'node:stream'
 // Type-only: pulls the `Events` augmentation that declares the two audio events this package bridges.
 import type {} from 'dsh-realtime-agent'
 import { attachAudioSocket } from './bridge.ts'
+import { createControlHandler } from './control.ts'
 import { diagnosticsRoute } from './diagnostics.ts'
 import {
   createRouteToken,
@@ -51,7 +52,20 @@ export * from './types.ts'
  * stays where it is.
  */
 export { TOKEN_PARAM } from './injection.ts'
-export { attachAudioSocket, toBytes, type AudioSocketBridgeDeps } from './bridge.ts'
+export { attachAudioSocket, toBytes, toText, type AudioSocketBridgeDeps } from './bridge.ts'
+export {
+  createControlHandler,
+  parseControlFrame,
+  type ControlCommand,
+  type ControlDeps,
+  type ControlRefusedReply,
+  type ControlRefusalCode,
+  type ControlReply,
+  type ControlSessionReply,
+  type ControlSettingReply,
+  type ControlStatusReply,
+  type ControlVerb,
+} from './control.ts'
 export { createUpgradeAcceptor, rejectUpgrade, type UpgradeAcceptor } from './upgrade.ts'
 export { diagnosticsRoute, type DiagnosticsDeps, type DiagnosticsJournal, type DiagnosticsRoute } from './diagnostics.ts'
 
@@ -127,6 +141,25 @@ export function apply(ctx: Context, config: RealtimeAudioWsConfig): void {
       name: string,
       listener: (table: InjectedGlobalRow[]) => void,
     ) => unknown
+
+    /**
+     * The control channel: one text frame in, one text frame out, on the socket that carries audio.
+     *
+     * Every edge it needs is injected rather than reached for, and the two session requests go through the
+     * same events the transport already emits — one start path, not a second one beside it. The difference
+     * is that this caller *waits*: `serial` returns the agent's outcome, so `start` can answer with the
+     * session that opened rather than with an acknowledgement that it asked.
+     */
+    const control = createControlHandler({
+      settings: injected.realtime.settings,
+      journal,
+      path: config.path,
+      clients: () => clients.size,
+      voice: () => ctx.serial('realtime-agent/status'),
+      request: (verb) => verb === 'start'
+        ? ctx.serial('realtime-agent/start')
+        : ctx.serial('realtime-agent/stop'),
+    })
 
     ctx.effect(function* () {
       const release = injected.realtime.settings.register(name, [
@@ -211,6 +244,10 @@ export function apply(ctx: Context, config: RealtimeAudioWsConfig): void {
               emitMic: (pcm16) => { ctx.emit('realtime-agent/mic', pcm16) },
               subscribeAudio: (listener) => ctx.on('realtime-agent/audio', listener),
               maxFrameBytes: config.maxFrameBytes,
+              // The handler is total — every frame produces exactly one reply, and it refuses rather than
+              // rejecting — so there is nothing here to catch and nothing here may invent a second reply.
+              // `reply` drops the frame if the socket has gone in the meantime.
+              onControl: (frame, reply) => { void control(frame).then(reply) },
               onDetach: () => {
                 clients.delete(client)
                 journal.record('socket.closed', { clients: String(clients.size) })

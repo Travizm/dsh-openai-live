@@ -72,3 +72,62 @@ export interface RealtimeAgentConfig {
   /** Character budget for the transcript carried on a delegation request. */
   maxTranscriptChars: number
 }
+
+/**
+ * The voice session's state, as the plugin that owns it is the only one able to report it.
+ *
+ * A **query's** answer rather than an event's payload: nothing emits this, and a caller that needs it
+ * asks through `realtime-agent/status` — which is also what makes "is voice live" answerable without
+ * opening anything to find out.
+ */
+export interface RealtimeVoiceStatus {
+  /** Whether a provider session is open now. */
+  readonly open: boolean
+  /**
+   * The registered route the session is on — or, when none is open, the one a start *would* use.
+   *
+   * Read from the session the provider actually accepted when there is one, because a provider may
+   * alias what was asked for.
+   */
+  readonly provider: string
+  /** The model the provider accepted, or the one configured when nothing is open. */
+  readonly model: string
+  /** The output voice, when one has been settled. */
+  readonly voice?: string
+  /** The provider's own session id. Present only while a session is open. */
+  readonly sessionId?: string
+}
+
+/**
+ * Why a session request did not succeed, in the shape a caller can act on.
+ *
+ * **Never the failure's message**, and that is a deliberate limitation rather than an oversight: the
+ * plugin that holds the credential is the adapter, and this one holds none to redact against — which is
+ * the same rule its journal follows, where a session failure is recorded as its *class*. What it can
+ * carry instead is more useful than the message: the seam's own machine code, and the `remedy` written
+ * to be relayed verbatim, both of which name a *setting* rather than its value.
+ */
+export interface RealtimeSessionRefusal {
+  /** The seam's machine code, when the failure was one of its classified ones (`NOT_CONFIGURED`, `RATE_LIMITED`, …). */
+  readonly code?: string
+  /** What to do about it, written to be relayed verbatim to whoever is trying to use the feature. */
+  readonly remedy?: string
+  /** The failing class, when there was no code to carry. A class, never an instance's message. */
+  readonly class?: string
+}
+
+/**
+ * What a request to open or close the voice session produced.
+ *
+ * The **outcome**, not an acknowledgement, because the two are the difference between "asked" and "it
+ * worked" — and collapsing them is the failure this project has already paid for once: a `start` that
+ * replied *requested* while the open silently failed teaches a user that the plugin is broken.
+ */
+export interface RealtimeSessionRequestOutcome {
+  /** Whether the request achieved what it asked for. */
+  readonly ok: boolean
+  /** The state **after** the attempt. */
+  readonly voice: RealtimeVoiceStatus
+  /** Present exactly when `ok` is false. */
+  readonly refusal?: RealtimeSessionRefusal
+}

@@ -43,8 +43,27 @@ first — which is the only reason to trust it.
 
 ## The wire
 
-Binary frames only, both directions, in the session's declared input/output format (PCM16, 24 kHz, mono, for
-the shipped adapter). A text frame is ignored rather than fatal: nothing on this wire is JSON.
+Binary frames carry audio, both directions, in the session's declared input/output format (PCM16, 24 kHz,
+mono, for the shipped adapter). **Text frames carry control:**
+
+| Frame | Answer |
+|---|---|
+| `status` | this route, the live voice, every setting, the journal's last entry |
+| `start` | the session that opened — an outcome, not an acknowledgement |
+| `stop` | the state afterwards |
+| `steer <sessionId>` | the setting that declares a live `sessionId`, changed |
+| `set <key>=<value>` | the setting named by its `<owner>.<field>` key, changed |
+
+One frame in, exactly one frame out, and **every** frame is answered — a verb it does not have, an argument
+where none belongs, a field frozen by its class, a value the setting's own rules reject. The reply is JSON:
+`{"ok":true,…}` with the fields for that verb, or `{"ok":false,"verb":…,"code":…,"reason":…}` with a reason
+written to be relayed verbatim. `set realtime-agent.autoStart=true` answers with the *restart* it needs
+rather than a silence that reads as a broken control.
+
+This was a deliberate widening of a contract that used to say the opposite — a text frame was ignored,
+because nothing on this wire was JSON. The socket is the only duplex connection the client already holds,
+one text frame in / one text frame out is smaller than a second route with its own authentication, and the
+audio path is untouched: the two are told apart by the frame's own type.
 
 Frames are forwarded, never queued. A client that cannot keep up drops audio instead of accumulating it,
 which matches the `realtime-agent/audio` contract — a queue that grows while nothing drains it presents
@@ -107,6 +126,10 @@ will not open at 24 kHz the client fails and says which rate it got.
 
 ## What it does not do yet
 
-**No format negotiation, and no reconnect.** A `ready` frame carrying sample rate and channel count would be
-the natural first control message; a dropped socket currently ends the conversation rather than being
-rejoined. Both are deliberately absent rather than half-built.
+**No format negotiation, and no reconnect.** A `ready` frame carrying sample rate and channel count is the
+obvious next control *frame* — the control channel is now there to carry one — and a dropped socket still
+ends the conversation rather than being rejoined. Both are deliberately absent rather than half-built.
+
+**The browser half does not speak the control channel yet.** It ignores a text frame, which is exactly what
+a reply is; the panel that sends `status` and `set` and renders what comes back is its own increment, and
+until it lands the channel is driven from a socket rather than from the app.

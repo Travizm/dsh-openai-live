@@ -192,6 +192,9 @@ describe('createHandlers', () => {
         onClosed: () => { calls.closed += 1 },
         onSessionError: (error) => { calls.errors.push(error) },
         onAudio: (pcm16) => { calls.audio.push(pcm16) },
+        // Recorded nowhere here: this suite is about the handlers, and the plugin's own journal
+        // wiring is asserted beside it.
+        onAcknowledged: () => undefined,
         ...overrides,
       }),
     }

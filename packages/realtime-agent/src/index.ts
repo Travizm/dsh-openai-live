@@ -24,7 +24,7 @@
 import Schema from '@deepseek-ai/schemastery'
 import type { Context } from '@deepseek-ai/cordis'
 import type { RealtimeDelegation, RealtimeDelegationSettlement, RealtimeSession, RealtimeSessionHandlers, RealtimeTranscript } from 'dsh-realtime'
-import { answerDelegation, type DelegationAsker } from './bridge.ts'
+import { answerDelegation, type DelegationAppend, type DelegationAsker } from './bridge.ts'
 import { voiceToolDefinitions } from './tools.ts'
 import { TranscriptBuffer } from './transcript.ts'
 import type { DelegationAnswer, DelegationRequest, RealtimeAgentConfig } from './types.ts'
@@ -133,6 +133,13 @@ export interface HandlerDeps {
   readonly onSessionError: (error: Error) => void
   /** Where output audio is delivered. Called once per provider delta. */
   readonly onAudio: (pcm16: Uint8Array) => void
+  /**
+   * Where an accepted append is reported.
+   *
+   * An acknowledgement, not a delivery: it says the provider took the append, and nothing about
+   * whether a speaker ever rendered it. See the seam's session contract and invariant 6.
+   */
+  readonly onAcknowledged: (append: DelegationAppend, delegationId: string) => void
 }
 
 /**
@@ -152,8 +159,14 @@ export function createHandlers(deps: HandlerDeps): RealtimeSessionHandlers {
       if (session === undefined) return
       // Handlers are synchronous, so the answer is dispatched rather than awaited. A rejection is
       // reported rather than thrown: an unanswered delegation is already the failure path.
-      void answerDelegation(session, delegation, deps.transcript.lines(), deps.ask, deps.timeoutMs)
-        .catch(deps.onSessionError)
+      void answerDelegation(
+        session,
+        delegation,
+        deps.transcript.lines(),
+        deps.ask,
+        deps.timeoutMs,
+        deps.onAcknowledged,
+      ).catch(deps.onSessionError)
     },
     onAudio: (pcm16: Uint8Array): void => { deps.onAudio(pcm16) },
     onClosed: (): void => { deps.onClosed() },
@@ -194,6 +207,12 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
       ctx.emit('realtime-agent/audio', pcm16)
       // Handed to the transport: all the host can observe, and no more (invariant 6).
       journal.record('speech.sent', { bytes: String(pcm16.byteLength) })
+    },
+    onAcknowledged: (append, delegationId) => {
+      // The one place an acknowledgement can honestly be recorded: the seam's appends resolve on the
+      // provider's confirmation, not on the send. Note what is deliberately absent beside it — no entry
+      // anywhere claims the audio was heard, which is the pair invariant 6 exists to keep apart.
+      journal.record('append.acknowledged', { append, delegationId })
     },
   })
 

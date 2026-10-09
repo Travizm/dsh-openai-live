@@ -35,9 +35,38 @@ const TIMEOUT_MS = 50
 
 const run = async (ask: DelegationAsker, timeoutMs: number = TIMEOUT_MS) => {
   const { appends, session } = recorder()
-  await answerDelegation(session, DELEGATION, TRANSCRIPT, ask, timeoutMs)
+  await answerDelegation(session, DELEGATION, TRANSCRIPT, ask, timeoutMs, () => undefined)
   return appends
 }
+
+/** The same call with the acknowledgements kept, which is not the same thing as deliveries. */
+const runRecordingAcks = async (ask: DelegationAsker) => {
+  const { session } = recorder()
+  const acknowledged: string[] = []
+  await answerDelegation(session, DELEGATION, TRANSCRIPT, ask, TIMEOUT_MS,
+    (append, delegationId) => { acknowledged.push(`${append}:${delegationId}`) })
+  return acknowledged
+}
+
+describe('acknowledgements', () => {
+  it('reports an accepted append, for the delegation it was for', async () => {
+    const acknowledged = await runRecordingAcks(
+      () => Promise.resolve({ text: 'staging is green', mode: 'spoken' }),
+    )
+
+    // The acknowledgement and nothing more: it says the provider took the append, not that anyone
+    // heard it. That distinction is the whole of invariant 6, and a row of the fault matrix.
+    expect(acknowledged).toEqual(['commentary:item_1'])
+  })
+
+  it('acknowledges the notice it speaks when there is no answer to give', async () => {
+    // The empty answer takes a different append and is still an acknowledgement — the provider
+    // accepted it. Reporting nothing here would hide the case the matrix exists to separate.
+    const acknowledged = await runRecordingAcks(() => Promise.resolve(undefined))
+
+    expect(acknowledged).toEqual(['commentary:item_1'])
+  })
+})
 
 describe('boundAppend', () => {
   it('leaves text within the bound untouched', () => {

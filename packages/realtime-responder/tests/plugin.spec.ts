@@ -275,3 +275,163 @@ describe('answering a delegation', () => {
     expect(() => context.emit('session/event', undefined as never, {} as unknown as never)).not.toThrow()
   })
 })
+
+describe('the settings it declares', () => {
+  it('declares the four fields the gate calls live, and nothing else', () => {
+    const { context } = harness()
+    apply(context, Config({ sessionId: 'sess-1' }) as RealtimeResponderConfig)
+
+    expect(context.realtime.settings.list()).toEqual([
+      {
+        key: 'realtime-responder.sessionId',
+        owner: 'realtime-responder',
+        field: 'sessionId',
+        kind: 'string',
+        scope: 'live',
+        describe: 'The DSH session the voice conversation steers',
+        value: 'sess-1',
+      },
+      {
+        key: 'realtime-responder.answerTimeoutMs',
+        owner: 'realtime-responder',
+        field: 'answerTimeoutMs',
+        kind: 'number',
+        scope: 'live',
+        describe: 'How long one turn waits for the agent before declining',
+        value: 45_000,
+      },
+      {
+        key: 'realtime-responder.maxPromptChars',
+        owner: 'realtime-responder',
+        field: 'maxPromptChars',
+        kind: 'number',
+        scope: 'live',
+        describe: 'Character budget for the prompt handed to the agent',
+        value: 4_000,
+      },
+      {
+        // Write-only: the values are secrets, so the surface reports none of them.
+        key: 'realtime-responder.redactSecrets',
+        owner: 'realtime-responder',
+        field: 'redactSecrets',
+        kind: 'string-list',
+        scope: 'live',
+        describe: 'Values that must never be spoken or carried on the bus',
+        value: undefined,
+      },
+    ])
+  })
+
+  it('steers the voice at another session without a restart, and answers from the new one', async () => {
+    // The headline field. Before this, changing it cost two restarts and a false lead.
+    const { context, controller, journal } = harness()
+    apply(context, Config({ sessionId: 'sess-1', answerTimeoutMs: 1_000 }) as RealtimeResponderConfig)
+
+    expect(context.realtime.settings.apply('realtime-responder.sessionId', 'sess-2'))
+      .toEqual({ ok: true, key: 'realtime-responder.sessionId', value: 'sess-2' })
+
+    const answer = context.serial('realtime-agent/delegation', request)
+    await Promise.resolve()
+
+    // The next turn is admitted to the new session — and an answer only counts if it comes from there,
+    // which is what makes steering real rather than merely recorded.
+    expect(controller.prompted.at(-1)).toMatchObject({ sessionId: 'sess-2' })
+    context.emit('session/event', undefined as never, {
+      type: 'assistant/message',
+      sessionId: 'sess-1',
+      surfaceOp: 'append',
+      data: { message: { content: [{ type: 'text', text: 'from the old session' }] } },
+    } as unknown as never)
+    context.emit('session/event', undefined as never, {
+      type: 'assistant/message',
+      sessionId: 'sess-2',
+      surfaceOp: 'append',
+      data: { message: { content: [{ type: 'text', text: 'from the new session' }] } },
+    } as unknown as never)
+
+    await expect(answer).resolves.toEqual({ text: 'from the new session', mode: 'spoken' })
+    // The change is in the record, by key and not by value. (It is not the *last* entry: the turn it
+    // enabled wrote its own entries afterwards, which is exactly the sequence a reader wants.)
+    expect(journal.snapshot()).toContainEqual(expect.objectContaining({
+      kind: 'config.changed',
+      detail: { key: 'realtime-responder.sessionId' },
+    }))
+  })
+
+  it('applies a shorter answer window to the next turn', async () => {
+    const { context, settled } = harness()
+    apply(context, Config({ sessionId: 'sess-1', answerTimeoutMs: 45_000 }) as RealtimeResponderConfig)
+
+    // Nobody answers within five milliseconds, so the next turn settles as a timeout — where the
+    // configured forty-five seconds would have kept the voice model waiting.
+    expect(context.realtime.settings.apply('realtime-responder.answerTimeoutMs', '5')).toMatchObject({ ok: true })
+    await context.serial('realtime-agent/delegation', request)
+
+    expect(settled).toEqual([{ id: 'item_1', sessionId: 'sess-1', outcome: 'timeout' }])
+  })
+
+  it('applies a smaller prompt budget to the next turn', async () => {
+    const { context, controller } = harness()
+    apply(context, Config({ sessionId: 'sess-1', answerTimeoutMs: 1_000 }) as RealtimeResponderConfig)
+    context.realtime.settings.apply('realtime-responder.maxPromptChars', '4')
+
+    void context.serial('realtime-agent/delegation', request)
+    await Promise.resolve()
+
+    expect(controller.prompted.at(-1)).toMatchObject({ content: [{ type: 'text', text: 'is s' }] })
+  })
+
+  it('refuses a value its own rules reject, naming the rule', async () => {
+    const { context, controller } = harness()
+    apply(context, Config({ sessionId: 'sess-1' }) as RealtimeResponderConfig)
+
+    expect(context.realtime.settings.apply('realtime-responder.sessionId', '')).toEqual({
+      ok: false,
+      key: 'realtime-responder.sessionId',
+      code: 'INVALID_SETTING',
+      reason: '"realtime-responder.sessionId" refused the change: sessionId must be non-empty',
+    })
+    expect(context.realtime.settings.apply('realtime-responder.answerTimeoutMs', '0'))
+      .toMatchObject({ code: 'INVALID_SETTING', reason: /positive whole number of milliseconds/ })
+    expect(context.realtime.settings.apply('realtime-responder.maxPromptChars', 'soon'))
+      .toMatchObject({ code: 'INVALID_SETTING' })
+
+    // Nothing was applied, so the next turn still goes where it did before.
+    void context.serial('realtime-agent/delegation', request)
+    await Promise.resolve()
+    expect(controller.prompted.at(-1)).toMatchObject({ sessionId: 'sess-1' })
+  })
+
+  it('learns a new redaction secret at the moment it is set, not at the next boot', async () => {
+    // The window this closes: a secret that becomes redactable only after a restart is one the journal
+    // can write in the clear in between. Derived at runtime, never written — see `redact.spec.ts`.
+    const nextSecret = Buffer.from(Uint8Array.from({ length: 32 }, (_unused, index) => (index * 7 + 3) % 256)).toString('base64url')
+    const { context, controller, journal } = harness()
+    apply(context, Config({ sessionId: 'sess-1', answerTimeoutMs: 1_000 }) as RealtimeResponderConfig)
+    controller.refusal = `upgrade refused for token ${nextSecret}`
+
+    expect(context.realtime.settings.apply('realtime-responder.redactSecrets', JSON.stringify([nextSecret])))
+      .toEqual({ ok: true, key: 'realtime-responder.redactSecrets', value: undefined })
+
+    const answer = await context.serial('realtime-agent/delegation', request) as { readonly text: string }
+
+    expect(answer.text).not.toContain(nextSecret)
+    expect(answer.text).toContain('[redacted]')
+    expect(answer.text).toContain('upgrade refused for token')
+    const refused = journal.snapshot().find(entry => entry.kind === 'prompt.refused')
+    expect(refused?.detail.reason).not.toContain(nextSecret)
+    // The change is recorded by key, never by value.
+    expect(JSON.stringify(journal.snapshot())).not.toContain(nextSecret)
+  })
+
+  it('withdraws its settings with the fiber that registered them', async () => {
+    const { context } = harness()
+    apply(context, Config({ sessionId: 'sess-1' }) as RealtimeResponderConfig)
+    // Held before disposal: disposing the fiber unmounts the seam itself, so the surface has to be
+    // reached through the reference rather than through the context.
+    const settings = context.realtime.settings
+    await context.fiber.dispose()
+    ctx = undefined
+    expect(settings.list()).toEqual([])
+  })
+})

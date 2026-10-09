@@ -88,9 +88,9 @@ describe('createTurnRunner', () => {
     const listeners: ((event: SessionEventLike) => void)[] = []
     let unsubscribed = 0
     const run = createTurnRunner({
-      sessionId: 'sess-1',
-      maxPromptChars: 1_000,
-      answerTimeoutMs: 50,
+      sessionId: () => 'sess-1',
+      maxPromptChars: () => 1_000,
+      answerTimeoutMs: () => 50,
       admit: (prompt) => { admitted.push(prompt); return Promise.resolve() },
       subscribe: (listener) => { listeners.push(listener); return () => { unsubscribed += 1 } },
       ...over,
@@ -133,7 +133,7 @@ describe('createTurnRunner', () => {
   })
 
   it('says it timed out when nothing answers, and stops listening', async () => {
-    const { unsubscribed, run } = deps({ answerTimeoutMs: 5 })
+    const { unsubscribed, run } = deps({ answerTimeoutMs: () => 5 })
     await expect(run(request([{ kind: 'input', text: 'q' }]))).resolves.toEqual({ kind: 'timeout' })
     expect(unsubscribed()).toBe(1)
   })
@@ -163,5 +163,40 @@ describe('createTurnRunner', () => {
     const { run } = deps({ admit: () => Promise.reject({ code: 500 }) })
     await expect(run(request([{ kind: 'input', text: 'q' }])))
       .resolves.toEqual({ kind: 'refused', reason: 'the session controller refused the prompt' })
+  })
+
+  it('reads the session and the budgets once per turn, so a change lands on the next one', async () => {
+    // S2 story 1's test target: a change **during** an active delegation. This is the mechanism that
+    // makes it survivable — the turn in flight keeps the values it started with, and the next turn
+    // sees the new ones. Reading per event instead would move the session an answer is expected on
+    // under a turn that is already running.
+    let session = 'sess-1'
+    let budget = 1_000
+    const admitted: string[] = []
+    const listeners: ((event: SessionEventLike) => void)[] = []
+    const run = createTurnRunner({
+      sessionId: () => session,
+      maxPromptChars: () => budget,
+      answerTimeoutMs: () => 50,
+      admit: (prompt) => { admitted.push(prompt); return Promise.resolve() },
+      subscribe: (listener) => { listeners.push(listener); return () => undefined },
+    })
+
+    const inFlight = run(request([{ kind: 'input', text: 'abcdefghij' }]))
+    // Re-steered and re-budgeted while that turn is still open.
+    session = 'sess-2'
+    budget = 4
+
+    // The turn that started on sess-1 is still answered by sess-1, with the budget it started with.
+    expect(admitted).toEqual(['abcdefghij'])
+    listeners[0]!(message([text('from one')], 'sess-1'))
+    await expect(inFlight).resolves.toEqual({ kind: 'answered', text: 'from one' })
+
+    // The next turn uses the new session and the new budget.
+    const next = run(request([{ kind: 'input', text: 'abcdefghij' }]))
+    expect(admitted[1]).toBe('abcd')
+    listeners[1]!(message([text('from two')], 'sess-1'))
+    listeners[1]!(message([text('from two')], 'sess-2'))
+    await expect(next).resolves.toEqual({ kind: 'answered', text: 'from two' })
   })
 })

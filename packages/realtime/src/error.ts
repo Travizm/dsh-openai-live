@@ -27,6 +27,10 @@ export const REALTIME_ERROR_CODES = Object.freeze({
   PROVIDER_ERROR: 'PROVIDER_ERROR',
   /** A recorded session could not be read as a recording. */
   INVALID_RECORDING: 'INVALID_RECORDING',
+  /** A setting's declaration is malformed: a bad field name, kind, scope, or a kind that does not match what it returns. */
+  INVALID_SETTING: 'INVALID_SETTING',
+  /** A setting is already registered under that key by another registration. */
+  DUPLICATE_SETTING: 'DUPLICATE_SETTING',
 
   // ---------------------------------------------------------------------------------------------
   // Failure taxonomy. These exist so a consumer can branch on the *class* of a failure rather than

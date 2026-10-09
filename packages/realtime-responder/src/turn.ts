@@ -25,12 +25,19 @@ import type { SessionEventLike } from './types.ts'
 
 /** What {@link createTurnRunner} needs from its caller. */
 export interface TurnDeps {
-  /** The session to admit into, and the only session an answer is accepted from. */
-  readonly sessionId: string
-  /** Character budget for the prompt. */
-  readonly maxPromptChars: number
-  /** Bound on waiting for the answer, in milliseconds. */
-  readonly answerTimeoutMs: number
+  /**
+   * The session to admit into, and the only session an answer is accepted from.
+   *
+   * An accessor rather than a value: `sessionId` is one of the fields `docs/control-plane-fields.md`
+   * classifies as **live**, so the runner reads it at the start of the turn rather than holding the
+   * copy taken when the plugin applied. That is what makes steering the voice at a different session
+   * cost a message instead of two restarts.
+   */
+  readonly sessionId: () => string
+  /** Character budget for the prompt, read at the start of the turn. */
+  readonly maxPromptChars: () => number
+  /** Bound on waiting for the answer, in milliseconds, read at the start of the turn. */
+  readonly answerTimeoutMs: () => number
   /** Admit one prompt. Rejects when the controller refuses it. */
   readonly admit: (prompt: string) => Promise<void>
   /** Observe session events; returns the disposer that stops observing. */
@@ -126,16 +133,20 @@ function refusalReason(error: unknown): string {
  */
 export function createTurnRunner(deps: TurnDeps): (request: DelegationRequest) => Promise<TurnOutcome> {
   return async (request: DelegationRequest): Promise<TurnOutcome> => {
-    const prompt = promptFrom(request, deps.maxPromptChars)
+    // All three are read **once, here**: a change takes effect on the next use, and a turn is one use.
+    // Reading them per event instead would let a change made while a turn is in flight move the very
+    // session the answer is expected on, stranding the turn the change was meant to help.
+    const sessionId = deps.sessionId()
+    const prompt = promptFrom(request, deps.maxPromptChars())
     // An empty prompt is a turn the controller would reject, so it is declined before the admission
     // rather than reported as a failure after one.
     if (prompt.length === 0) return { kind: 'declined' }
 
     let settle!: (text: string | undefined) => void
     const answered = new Promise<string | undefined>((resolve) => { settle = resolve })
-    const timer = setTimeout(() => { settle(undefined) }, deps.answerTimeoutMs)
+    const timer = setTimeout(() => { settle(undefined) }, deps.answerTimeoutMs())
     const unsubscribe = deps.subscribe((event) => {
-      const text = answerText(event, deps.sessionId)
+      const text = answerText(event, sessionId)
       if (text === undefined) return
       settle(text)
     })

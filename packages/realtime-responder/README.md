@@ -22,6 +22,30 @@ answers.
 | `sessionId` | **none** | The session the voice conversation is attached to. No default on purpose: a responder pointed at the wrong session would speak another conversation's reply, which is worse than not answering. |
 | `answerTimeoutMs` | `45000` | How long to wait for the agent before declining. |
 | `maxPromptChars` | `4000` | Character budget for the prompt admitted to the agent. |
+| `redactSecrets` | `[]` | Values that must never be spoken or carried onto the bus, however they are spelled. |
+
+## These four change without a restart
+
+All four are **live** fields (`docs/control-plane-fields.md`), which is to say they are read at the
+moment they are used and the seam's settings surface can change them while a conversation is running:
+
+```
+set realtime-responder.sessionId=session-ea70184a-…
+set realtime-responder.answerTimeoutMs=90000
+```
+
+`sessionId` is the headline. It used to be a boot-time constant, and steering the voice at a different
+session cost two restarts and a false lead; it now costs a message. A change takes effect on the **next**
+turn — a turn already in flight keeps the session and the budgets it started with, rather than having
+the ground moved under it.
+
+Changing `redactSecrets` adds to the journal's secrets at the moment it is set, not at the next boot:
+a secret that becomes redactable only after a restart is one the journal can write in the clear in
+between. It is write-only — the surface never reports its value back.
+
+A value the plugin's own rules reject is **refused with a reason** rather than clamped: an empty
+`sessionId` answers *"sessionId must be non-empty"*, and a zero or fractional budget answers with the
+field and the unit.
 
 ## The bound, stated plainly
 
@@ -50,5 +74,9 @@ arguments, so every path is testable with plain fakes: no context, no socket, no
 
 ```ts
 export const name = 'realtime-responder'
-export const inject = ['sessionController']
+export const inject = ['sessionController', 'realtime']
 ```
+
+`realtime` is injected because the responder writes into the seam's journal and declares its settings on
+the seam's surface; a turn that produced nothing is exactly what a reader needs to find afterwards, and
+waiting for the seam is better than loading without it and journaling into nothing.

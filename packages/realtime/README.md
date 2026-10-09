@@ -22,13 +22,14 @@ export function apply(ctx: Context, config: Config) {
 }
 ```
 
-The seam is deliberately thin. It owns three things:
+The seam is deliberately thin. It owns four things:
 
 | Owned here | Owned by the adapter |
 |---|---|
 | Route registration, all-or-nothing, disposed with the fiber | The transport (WebSocket, WebRTC, in-process) |
 | Provider metadata and advisory model catalogues | Wire encoding and decoding |
 | Append bounds (`MAX_APPEND_CHARS`) and coded failures | Token accounting and provider error mapping |
+| The journal, and the settings registry a running plugin can be steered by | Which of its own fields are live — and what a change means |
 
 ## What the seam deliberately does not have
 
@@ -47,6 +48,35 @@ The seam is deliberately thin. It owns three things:
 Failures that prevent a session opening are **thrown** from `session()`. Failures after a session
 opened are delivered to `handlers.onError` — a session that dies mid-conversation must not look like
 a rejected request. Codes are stable and branchable; message text is not part of the API.
+
+## Settings: what a running plugin can be re-steered by
+
+`docs/control-plane-fields.md` is the design gate: every field is **live** (read at the moment of use),
+**session-bound** (carried in the provider's `session.start`, so only a new session can change it) or
+**restart-bound** (claimed once at load). `ctx.realtime.settings` is that classification in code —
+`packages/realtime/src/settings.ts` — so a change to a field the protocol cannot honour is *refused with
+the reason* rather than accepted and ignored.
+
+```ts
+ctx.effect(function* () {
+  const release = ctx.realtime.settings.register(name, [
+    {
+      field: 'sessionId',
+      kind: 'string',
+      scope: 'live',
+      get: () => live.sessionId,          // read at the moment of use — never a copy
+      set: (value: string) => { live.sessionId = value },
+    },
+  ])
+  yield () => { release() }
+}, 'my-plugin.settings')
+```
+
+A key is `<owner>.<field>`. `apply(key, text)` parses by the declared kind, refuses anything the field's
+class cannot honour (`UNKNOWN_SETTING`, `FROZEN_SETTING`, `INVALID_SETTING`) with a reason written to be
+relayed verbatim, journals a successful change as `config.changed` **by key and not by value**, and
+reports the value the plugin now holds. A field declared `secret` is write-only: the surface never
+reports its value back.
 
 ## Registration and disposal
 

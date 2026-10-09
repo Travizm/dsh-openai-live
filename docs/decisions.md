@@ -144,3 +144,37 @@ a file* is worth more than one who counts files.
 
 **Reversal.** If the harness or a market plugin begins reading them, adopt the convention then — to
 the schema that consumer expects, not the schema we guessed.
+
+---
+
+## ADR-009 — Settings are a registry in code, and a field's class is a property of its read sites
+
+**Decision.** Every field the gate classifies is declared on `ctx.realtime.settings` with three fields of
+its own: `kind` (how a text channel parses it and a control renders it), `scope` (live, session-bound or
+restart-bound), and — for live fields only — the setter that applies a change. A key is
+`<owner>.<field>`. `apply(key, text)` answers in the gate's own vocabulary: applied, or refused with a
+machine code and a reason to relay.
+
+**Why.** The gate's rule is that *an affordance the protocol cannot honour is worse than no affordance*,
+and a classification that lives only in prose cannot refuse anything. Declaring the class also puts the
+check where the mistake is made: a `live` field must declare a setter, a frozen one must not, and the
+declared `kind` must match what `get()` actually returns — so a field that would render the wrong
+control, or claim a change it cannot apply, fails at load rather than in a user's session.
+
+**Consequence, and the reason this ADR is not just bookkeeping.** `autoStart` was classified live and is
+not. Its only read site is the boot-time `if (config.autoStart) void open()`, so no change a running
+process could make would be honoured — and a control for it would have done nothing while looking like it
+did. The class of a field follows the code that reads it, not the table it was first written in, so the
+gate moves the row and the registry refuses a `set` on it with the restart it needs. Two further
+consequences of the same rule: a secret-bearing field reports no value at all (write-only, or the surface
+breaches invariant 3 one layer out), and a change is journalled by key and not by value, because the
+journal is the one record built to be read and pasted.
+
+**Cost.** A field a plugin reads at boot must be declared frozen rather than merely treated as frozen —
+and every future field costs a declaration. Accepted: the alternative is a control plane whose claims are
+only as good as the reader's memory of which rows were true.
+
+**Left undone, deliberately.** The four session-bound fields (`provider`, `model`, `voice`,
+`instructions`) are not registered yet. Their class exists in the registry and is exercised by its tests,
+but a value that takes effect at the next session open needs the pending-value behaviour the strip's story
+specifies, and registering them without it would put a frozen control where a reconnect action belongs.

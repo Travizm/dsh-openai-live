@@ -38,7 +38,7 @@
 import Schema from '@deepseek-ai/schemastery'
 import type { Context } from '@deepseek-ai/cordis'
 import type { RealtimeDelegationSettlement } from 'dsh-realtime'
-import { redact, type Journal } from 'dsh-realtime'
+import { REALTIME_ERROR_CODES, RealtimeError, redact, type Journal } from 'dsh-realtime'
 import type { DelegationAnswer, DelegationRequest } from 'dsh-realtime-agent'
 import { createTurnRunner, type TurnOutcome } from './turn.ts'
 import type { RealtimeResponderConfig, SessionEventLike } from './types.ts'
@@ -158,6 +158,39 @@ function recordOutcome(
 }
 
 /**
+ * The values this plugin reads at the moment of use, and the only copy a change can reach.
+ *
+ * Deliberately not the resolved config: the config is the *initial* state, written once when the row
+ * loads, and reading it per turn is what made every one of these fields look live while only some of
+ * them were. This object is what the readers below actually consult, so "a change takes effect on the
+ * next use" is a property of the code rather than a claim about it.
+ */
+interface LiveValues {
+  sessionId: string
+  maxPromptChars: number
+  answerTimeoutMs: number
+  redactSecrets: readonly string[]
+}
+
+/**
+ * A count a turn can actually be run with: a whole, positive number.
+ *
+ * Refused here rather than clamped, because a budget silently changed under the caller is a bug that
+ * presents as a wrong answer somewhere else. The unit is spelled out in the reason so the person
+ * reading it knows which field they got wrong without opening this file.
+ * @param field - the setting's own name, for the reason.
+ * @param unit - what the number counts, for the reason.
+ * @param value - the proposed value.
+ * @returns the value, when it is usable.
+ */
+function requireCount(field: string, unit: string, value: number): number {
+  if (!Number.isInteger(value) || value < 1) {
+    throw new RealtimeError(`${field} must be a positive whole number of ${unit}`, REALTIME_ERROR_CODES.INVALID_SETTING)
+  }
+  return value
+}
+
+/**
  * Register the responder on the delegation bus.
  * @param ctx - the Cordis context, which must provide `sessionController`.
  * @param config - validated configuration.
@@ -169,14 +202,79 @@ export function apply(ctx: Context, config: RealtimeResponderConfig): void {
   // journal applies the shape arm on write regardless; this is the arm no pattern can perform.
   journal.addSecrets(config.redactSecrets)
 
-  const run = createTurnRunner({
+  const live: LiveValues = {
     sessionId: config.sessionId,
     maxPromptChars: config.maxPromptChars,
     answerTimeoutMs: config.answerTimeoutMs,
+    redactSecrets: config.redactSecrets,
+  }
+
+  // The four fields `docs/control-plane-fields.md` classifies as live for this plugin, declared on the
+  // seam's surface so a running conversation can be re-steered without a restart — which is the field
+  // whose boot-time constant cost two restarts and a false lead.
+  ctx.effect(function* () {
+    const release = ctx.realtime.settings.register(name, [
+      {
+        field: 'sessionId',
+        kind: 'string',
+        scope: 'live',
+        describe: 'The DSH session the voice conversation steers',
+        get: () => live.sessionId,
+        set: (value: string) => {
+          // No default and no empty: a responder pointed at the wrong session speaks another
+          // conversation's reply, and one pointed at nothing answers nobody. The refusal names the
+          // rule, and the surface carries it back to whoever tried.
+          if (value.length === 0) {
+            throw new RealtimeError('sessionId must be non-empty', REALTIME_ERROR_CODES.INVALID_SETTING)
+          }
+          live.sessionId = value
+        },
+      },
+      {
+        field: 'answerTimeoutMs',
+        kind: 'number',
+        scope: 'live',
+        describe: 'How long one turn waits for the agent before declining',
+        get: () => live.answerTimeoutMs,
+        set: (value: number) => { live.answerTimeoutMs = requireCount('answerTimeoutMs', 'milliseconds', value) },
+      },
+      {
+        field: 'maxPromptChars',
+        kind: 'number',
+        scope: 'live',
+        describe: 'Character budget for the prompt handed to the agent',
+        get: () => live.maxPromptChars,
+        set: (value: number) => { live.maxPromptChars = requireCount('maxPromptChars', 'characters', value) },
+      },
+      {
+        field: 'redactSecrets',
+        kind: 'string-list',
+        scope: 'live',
+        secret: true,
+        describe: 'Values that must never be spoken or carried on the bus',
+        get: () => live.redactSecrets,
+        set: (value: readonly string[]) => {
+          live.redactSecrets = [...value]
+          // Additive, and applied at the moment the plugin learns the value rather than at the next
+          // boot: a secret that becomes redactable only after a restart is one the journal can write
+          // in the clear in between, which is the window this whole mechanism exists to close.
+          journal.addSecrets(value)
+        },
+      },
+    ])
+    yield () => { release() }
+  }, 'realtime-responder.settings')
+
+  const run = createTurnRunner({
+    // Accessors, not values: see `LiveValues`. This is the change that makes the resolved config an
+    // initial state rather than the state.
+    sessionId: () => live.sessionId,
+    maxPromptChars: () => live.maxPromptChars,
+    answerTimeoutMs: () => live.answerTimeoutMs,
     admit: async (text: string): Promise<void> => {
       await controller.prompt({
         requestId: `realtime-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
-        sessionId: config.sessionId,
+        sessionId: live.sessionId,
         mode: 'queue',
         content: [{ type: 'text', text }],
       })
@@ -201,12 +299,12 @@ export function apply(ctx: Context, config: RealtimeResponderConfig): void {
         // Not answered. The reason is reported rather than dropped, and — the whole of S1 story 3 —
         // it is now also spoken. A failure the user cannot hear is one they describe as "it did not
         // work", which is the report this layer exists to replace.
-        ctx.emit('realtime-agent/delegation-settled', settlementFor(request, outcome, config.redactSecrets))
+        ctx.emit('realtime-agent/delegation-settled', settlementFor(request, outcome, live.redactSecrets))
         // Only a refusal has words to say. A declined or timed-out turn carries nothing, so it returns
         // undefined and the agent speaks its own notice — inventing a reason for those would be worse
         // than the honest silence they already had.
         if (outcome.kind !== 'refused') return undefined
-        return { text: boundedReason(outcome.reason, config.redactSecrets), mode: 'spoken' }
+        return { text: boundedReason(outcome.reason, live.redactSecrets), mode: 'spoken' }
       },
     )
     yield () => { dispose() }

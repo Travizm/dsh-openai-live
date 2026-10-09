@@ -180,7 +180,7 @@ describe('plugin shape', () => {
 describe('createHandlers', () => {
   const deps = (overrides: Partial<Parameters<typeof createHandlers>[0]> = {}) => {
     const calls: { closed: number; errors: Error[]; audio: Uint8Array[] } = { closed: 0, errors: [], audio: [] }
-    const transcript = new TranscriptBuffer(100)
+    const transcript = new TranscriptBuffer(() => 100)
     return {
       calls,
       transcript,
@@ -188,7 +188,7 @@ describe('createHandlers', () => {
         transcript,
         session: () => undefined,
         ask: () => undefined,
-        timeoutMs: 50,
+        timeoutMs: () => 50,
         onClosed: () => { calls.closed += 1 },
         onSessionError: (error) => { calls.errors.push(error) },
         onAudio: (pcm16) => { calls.audio.push(pcm16) },
@@ -483,5 +483,138 @@ describe('the voice tools a session exposes', () => {
 
     expect(await stop!.execute({}, {} as never)).toEqual({ closed: false })
     expect(adapter.closed).toBe(1)
+  })
+})
+
+describe('the settings it declares', () => {
+  it('declares its two live fields, and the field the gate reclassified', async () => {
+    const { ctx: context } = harness()
+    apply(context, Config({ provider: 'fake', maxTranscriptChars: 6_000 }) as RealtimeAgentConfig)
+
+    expect(context.realtime.settings.list()).toEqual([
+      {
+        key: 'realtime-agent.delegationTimeoutMs',
+        owner: 'realtime-agent',
+        field: 'delegationTimeoutMs',
+        kind: 'number',
+        scope: 'live',
+        describe: 'How long the voice model waits for a responder',
+        value: 10_000,
+      },
+      {
+        key: 'realtime-agent.maxTranscriptChars',
+        owner: 'realtime-agent',
+        field: 'maxTranscriptChars',
+        kind: 'number',
+        scope: 'live',
+        describe: 'Character budget for the transcript carried on a delegation',
+        value: 6_000,
+      },
+      {
+        // Restart-bound, and declared so that the classification bites: see the refusal below. Its one
+        // read site is the boot, so nothing a running process could do would honour a change.
+        key: 'realtime-agent.autoStart',
+        owner: 'realtime-agent',
+        field: 'autoStart',
+        kind: 'boolean',
+        scope: 'restart',
+        describe: 'Open a session as soon as the plugin mounts',
+        value: false,
+      },
+    ])
+  })
+
+  it('refuses a change to autoStart with the restart it needs, rather than ignoring it', async () => {
+    const { ctx: context, adapter } = harness()
+    apply(context, Config({ provider: 'fake' }) as RealtimeAgentConfig)
+
+    expect(context.realtime.settings.apply('realtime-agent.autoStart', 'true')).toEqual({
+      ok: false,
+      key: 'realtime-agent.autoStart',
+      code: 'FROZEN_SETTING',
+      reason: '"realtime-agent.autoStart" is claimed when the plugin loads — restart to change it',
+    })
+    // And nothing happened: a refused change must not open a session on the way past.
+    expect(adapter.handlers).toBeUndefined()
+  })
+
+  it('applies a shorter delegation window to the next delegation', async () => {
+    const { ctx: context, adapter } = harness()
+    // A responder far slower than the window under test, so the window is the only thing deciding
+    // which of the two is heard.
+    context.on('realtime-agent/delegation', async () => {
+      await new Promise((resolve) => { setTimeout(resolve, 50) })
+      return { text: 'too late', mode: 'spoken' as const }
+    })
+    apply(context, Config({ provider: 'fake', autoStart: true }) as RealtimeAgentConfig)
+    await tick()
+
+    expect(context.realtime.settings.apply('realtime-agent.delegationTimeoutMs', '5')).toMatchObject({ ok: true })
+    adapter.handlers?.onDelegation?.({ id: 'item_1', target: 'client', offsetMs: 0 })
+    await new Promise((resolve) => { setTimeout(resolve, 120) })
+
+    // The voice model is told plainly, rather than left waiting — or worse, left believing an answer
+    // that never came.
+    expect(adapter.appends).toEqual([
+      { kind: 'commentary', text: agent.UNANSWERED_NOTICE, delegationId: 'item_1' },
+    ])
+  })
+
+  it('lets the same slow answer through once the window is raised', async () => {
+    const { ctx: context, adapter } = harness()
+    context.on('realtime-agent/delegation', async () => {
+      await new Promise((resolve) => { setTimeout(resolve, 50) })
+      return { text: 'in time after all', mode: 'spoken' as const }
+    })
+    apply(context, Config({ provider: 'fake', autoStart: true }) as RealtimeAgentConfig)
+    await tick()
+
+    expect(context.realtime.settings.apply('realtime-agent.delegationTimeoutMs', '5000')).toMatchObject({ ok: true })
+    adapter.handlers?.onDelegation?.({ id: 'item_1', target: 'client', offsetMs: 0 })
+    await new Promise((resolve) => { setTimeout(resolve, 120) })
+
+    expect(adapter.appends).toEqual([
+      { kind: 'commentary', text: 'in time after all', delegationId: 'item_1' },
+    ])
+  })
+
+  it('applies the transcript budget to the next fragment, and so to the next delegation', async () => {
+    const { ctx: context, adapter } = harness()
+    const asked: DelegationRequest[] = []
+    context.on('realtime-agent/delegation', (request) => {
+      asked.push(request)
+      return { text: 'ok', mode: 'spoken' as const }
+    })
+    apply(context, Config({ provider: 'fake', autoStart: true }) as RealtimeAgentConfig)
+    await tick()
+
+    adapter.handlers?.onTranscript?.({ kind: 'input', text: 'first line', final: true })
+    expect(context.realtime.settings.apply('realtime-agent.maxTranscriptChars', '10')).toMatchObject({ ok: true })
+    adapter.handlers?.onTranscript?.({ kind: 'input', text: 'second line', final: true })
+
+    adapter.handlers?.onDelegation?.({ id: 'item_1', target: 'client', offsetMs: 0 })
+    await tick()
+
+    // The budget is read at eviction, so the change reached the very next fragment rather than the next
+    // conversation — which is the difference between a live field and a field that looks live.
+    expect(asked[0]?.transcript).toEqual([{ kind: 'input', text: 'second line' }])
+  })
+
+  it('refuses a budget that is not a positive whole number, naming the field', async () => {
+    const { ctx: context } = harness()
+    apply(context, Config({ provider: 'fake' }) as RealtimeAgentConfig)
+    expect(context.realtime.settings.apply('realtime-agent.delegationTimeoutMs', '0'))
+      .toMatchObject({ code: 'INVALID_SETTING', reason: /delegationTimeoutMs must be a positive whole number/ })
+    expect(context.realtime.settings.apply('realtime-agent.maxTranscriptChars', 'lots'))
+      .toMatchObject({ code: 'INVALID_SETTING' })
+  })
+
+  it('withdraws its settings with the fiber that registered them', async () => {
+    const { ctx: context } = harness()
+    apply(context, Config({ provider: 'fake' }) as RealtimeAgentConfig)
+    const settings = context.realtime.settings
+    await context.fiber.dispose()
+    ctx = undefined
+    expect(settings.list()).toEqual([])
   })
 })

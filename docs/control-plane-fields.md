@@ -32,15 +32,42 @@ steers* was a boot-time constant.
 | `delegationTimeoutMs` | agent | every delegation |
 | `answerTimeoutMs` | responder | every turn |
 | `maxPromptChars` | responder | every turn |
-| `maxTranscriptChars` | agent | every delegation |
+| `maxTranscriptChars` | agent | every eviction, and so every delegation |
 | `redactSecrets` | responder | every emission |
-| `autoStart` | agent | the next start, not this one |
 | `openSessionOnConnect` | audio | the next connect, not this one |
 
-**Restart-bound — a route registration or a server limit. No UI control at all.**
+**Restart-bound — a route registration, a server limit, or a field whose only read site is the boot.
+No UI control at all.**
 `path`, `maxFrameBytes`, `maxConnections`, `diagnosticsPath`. These are claimed once against the web
 server's registry or enforced by the socket itself. Offering a control for one would be the affordance
 invariant 8 forbids, so the strip shows them read-only at most.
+
+`autoStart` moved here from *live*, on review of the code rather than of this table. It has exactly one
+read site — the `if (config.autoStart) void open()` in the agent's `apply` — and nothing a running
+process could do would honour a change to it. The class a field is in is a property of the code that
+reads it, so a field with no read site a change can reach is restart-bound however it was first
+written down; classifying it live would have shipped a control that silently did nothing, which is the
+one thing this gate exists to prevent. It is registered as restart-bound (below), so a `set` on it is
+**refused with the restart it needs** rather than accepted and ignored.
+
+## How the gate is enforced, not just written down
+
+A classification in prose cannot refuse anything. Since S2 story 1 it is also a registry in code:
+`ctx.realtime.settings` (`packages/realtime/src/settings.ts`), which every plugin in the bundle declares
+its fields on and the control channel changes them through.
+
+- **A key is `<owner>.<field>`** — `realtime-responder.sessionId`, `realtime-agent.delegationTimeoutMs`.
+  Qualified because two plugins may legitimately both hold a `sessionId`, and a bare name would make one
+  of them unreachable. The owner is the plugin's `name`, so a key can be read straight off a Loader row.
+- **A `live` field declares a setter; a field in either frozen class declares none.** The registry
+  refuses a declaration that says otherwise, in either direction, so the two cannot drift apart in
+  silence.
+- **`set` answers in the gate's own vocabulary.** Applied → the value the plugin now holds. Refused →
+  a machine code (`UNKNOWN_SETTING`, `FROZEN_SETTING`, `INVALID_SETTING`) and a reason written to be
+  relayed verbatim: a session-bound field says *reconnect*, a restart-bound field says *restart*.
+- **A change is journalled as `config.changed` with its key and not its value**, and a secret-bearing
+  field (`redactSecrets`) reports no value back at all — it is write-only, because a surface that echoed
+  it would breach `design.md` invariant 3 one layer out.
 
 ## What this means for the strip (S2 stories 3-4)
 

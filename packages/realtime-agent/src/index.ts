@@ -24,6 +24,7 @@
 import Schema from '@deepseek-ai/schemastery'
 import type { Context } from '@deepseek-ai/cordis'
 import type { RealtimeDelegation, RealtimeDelegationSettlement, RealtimeSession, RealtimeSessionHandlers, RealtimeTranscript } from 'dsh-realtime'
+import { REALTIME_ERROR_CODES, RealtimeError } from 'dsh-realtime'
 import { answerDelegation, type DelegationAppend, type DelegationAsker } from './bridge.ts'
 import { voiceToolDefinitions } from './tools.ts'
 import { TranscriptBuffer } from './transcript.ts'
@@ -125,8 +126,14 @@ export interface HandlerDeps {
   readonly session: () => RealtimeSession | undefined
   /** How to reach a responder. */
   readonly ask: DelegationAsker
-  /** Bound on waiting for one. */
-  readonly timeoutMs: number
+  /**
+   * Bound on waiting for one, read at the moment the delegation is answered.
+   *
+   * An accessor because `delegationTimeoutMs` is a **live** field: the window the voice model waits in
+   * can be changed while the plugin runs, and the change must apply to the next delegation rather than
+   * to the next boot.
+   */
+  readonly timeoutMs: () => number
   /** Called when the session ended, so the caller can drop its reference. */
   readonly onClosed: () => void
   /** Where a session-scoped failure is reported. */
@@ -164,7 +171,7 @@ export function createHandlers(deps: HandlerDeps): RealtimeSessionHandlers {
         delegation,
         deps.transcript.lines(),
         deps.ask,
-        deps.timeoutMs,
+        deps.timeoutMs(),
         deps.onAcknowledged,
       ).catch(deps.onSessionError)
     },
@@ -175,23 +182,80 @@ export function createHandlers(deps: HandlerDeps): RealtimeSessionHandlers {
 }
 
 /**
+ * A count this plugin can actually be run with: a whole, positive number.
+ *
+ * Local to the plugin rather than shared from the seam, deliberately: the reason text is part of this
+ * plugin's own onboarding, and the seam has no business knowing that this plugin measures a timeout in
+ * milliseconds and a transcript in characters.
+ * @param field - the setting's own name, for the reason.
+ * @param value - the proposed value.
+ * @returns the value, when it is usable.
+ */
+function requireCount(field: string, value: number): number {
+  if (!Number.isInteger(value) || value < 1) {
+    throw new RealtimeError(`${field} must be a positive whole number`, REALTIME_ERROR_CODES.INVALID_SETTING)
+  }
+  return value
+}
+
+/**
  * Hold a session and bridge what the voice model delegates.
  * @param ctx - the Cordis context, which must already provide the `realtime` service.
  * @param config - validated configuration.
  */
 export function apply(ctx: Context, config: RealtimeAgentConfig): void {
-  const transcript = new TranscriptBuffer(config.maxTranscriptChars)
-  // This plugin owns the session, so it is the only one that can honestly write these entries. The audio
-  // route emits a *request* to open a session and deliberately records nothing for it: recording a
-  // request as an event is how a journal starts lying.
   const journal = ctx.realtime.journal
+
+  /**
+   * The two fields this plugin reads at the moment of use.
+   *
+   * `autoStart` is deliberately **not** here as a changeable value. Its only read site is the boot
+   * below, so a running process has nothing that could honour a change; the gate was corrected to say
+   * so, and it is registered below as restart-bound — which is what makes that correction bite rather
+   * than merely being written down.
+   */
+  const live = { delegationTimeoutMs: config.delegationTimeoutMs, maxTranscriptChars: config.maxTranscriptChars }
+
+  const transcript = new TranscriptBuffer(() => live.maxTranscriptChars)
   let session: RealtimeSession | undefined
+
+  // The live fields `docs/control-plane-fields.md` lists for this plugin, plus the one it reclassified:
+  // `autoStart` is registered without a setter, so a change to it is refused with the restart it needs
+  // instead of being accepted and quietly ignored.
+  ctx.effect(function* () {
+    const release = ctx.realtime.settings.register(name, [
+      {
+        field: 'delegationTimeoutMs',
+        kind: 'number',
+        scope: 'live',
+        describe: 'How long the voice model waits for a responder',
+        get: () => live.delegationTimeoutMs,
+        set: (value: number) => { live.delegationTimeoutMs = requireCount('delegationTimeoutMs', value) },
+      },
+      {
+        field: 'maxTranscriptChars',
+        kind: 'number',
+        scope: 'live',
+        describe: 'Character budget for the transcript carried on a delegation',
+        get: () => live.maxTranscriptChars,
+        set: (value: number) => { live.maxTranscriptChars = requireCount('maxTranscriptChars', value) },
+      },
+      {
+        field: 'autoStart',
+        kind: 'boolean',
+        scope: 'restart',
+        describe: 'Open a session as soon as the plugin mounts',
+        get: () => config.autoStart,
+      },
+    ])
+    yield () => { release() }
+  }, 'realtime-agent.settings')
 
   const handlers = createHandlers({
     transcript,
     session: () => session,
     ask: request => ctx.serial('realtime-agent/delegation', request),
-    timeoutMs: config.delegationTimeoutMs,
+    timeoutMs: () => live.delegationTimeoutMs,
     onClosed: () => {
       session = undefined
       journal.record('session.closed', {})

@@ -75,6 +75,26 @@ A session is opened only when `autoStart` is set. `maxTranscriptChars` bounds th
 on each request: it is the **oldest** lines that are dropped, and the most recent line is always kept,
 because a buffer that can hold nothing can answer nothing.
 
+## What can be changed while it runs
+
+`docs/control-plane-fields.md` is the gate, and it classifies this plugin's fields in three ways.
+`delegationTimeoutMs` and `maxTranscriptChars` are **live**: read at the moment they are used, so the
+seam's settings surface changes them without a restart, and a change lands on the next delegation.
+
+```
+set realtime-agent.delegationTimeoutMs=90000
+set realtime-agent.maxTranscriptChars=12000
+```
+
+`provider`, `model`, `voice` and `instructions` are **session-bound** — they travelled in the
+provider's `session.start`, so only a new session can carry new ones, and the UI that offers them must
+say *reconnect* rather than pretending an instant change is possible.
+
+`autoStart` is **restart-bound**, and this is a correction rather than a convenience: its only read site
+is the boot, so nothing a running process could do would honour a change. A `set` on it is refused with
+the restart it needs — `"realtime-agent.autoStart" is claimed when the plugin loads — restart to change
+it` — rather than accepted and quietly ignored.
+
 ## How answers are kept deliverable
 
 - **A long answer is cut, not rejected.** The seam bounds an append at 2000 characters and *throws*

@@ -59,6 +59,15 @@ export type JournalKind =
   | 'speech.sent'
   /** The configuration as resolved, so a journal can be read without the profile beside it. */
   | 'config.resolved'
+  /**
+   * A live setting changed while the plugin was running.
+   *
+   * Recorded with the setting's **key and not its value**: the value of a secret-bearing setting is
+   * exactly the text that must not be retained, and this is the one record built to be read, quoted
+   * and pasted. What a reader needs is that a change happened and which setting it was — the value is
+   * whatever the plugin now reports through the settings surface.
+   */
+  | 'config.changed'
 
 /** One retained entry. */
 export interface JournalEntry {

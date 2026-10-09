@@ -240,6 +240,20 @@ function requireCount(field: string, value: number): number {
 export function apply(ctx: Context, config: RealtimeAgentConfig): void {
   const journal = ctx.realtime.journal
 
+  // What this plugin resolved, recorded so a journal can be read without the profile beside it — the question
+  // that cost an evening was exactly "which voice did this ask for, and would it have opened on its own".
+  // `instructions` is deliberately absent: it is authored text of unbounded length, and the journal records
+  // what happened rather than copying the configuration into itself.
+  journal.record('config.resolved', {
+    plugin: 'dsh-realtime-agent',
+    provider: config.provider,
+    model: config.model,
+    ...config.voice === undefined ? {} : { voice: config.voice },
+    autoStart: String(config.autoStart),
+    delegationTimeoutMs: String(config.delegationTimeoutMs),
+    maxTranscriptChars: String(config.maxTranscriptChars),
+  })
+
   /**
    * The two fields this plugin reads at the moment of use.
    *
@@ -448,12 +462,24 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
    * @param attempt - the request to run.
    * @returns whether it achieved what it asked for, and the state afterwards.
    */
-  const requestSession = async (attempt: () => Promise<unknown>): Promise<RealtimeSessionRequestOutcome> => {
+  const requestSession = async (attempt: () => Promise<unknown>, trigger?: string): Promise<RealtimeSessionRequestOutcome> => {
+    // The ask is recorded by whoever asks: one that arrived as an event carries an asker that has already
+    // recorded it, and one this plugin decided on its own has only this place to be seen. `trigger` is set
+    // only for the second — an ask recorded twice reads as two requests.
+    if (trigger !== undefined) journal.record('session.requested', { trigger })
     try {
       await attempt()
       return { ok: true, voice: status() }
     } catch (error) {
       ctx.emit('realtime-agent/error', error as Error)
+      // The class, never the message, for the reason the provider's own error path gives: a provider error can
+      // carry the key it refused, and this plugin holds no credential to redact against. Until this entry
+      // existed, a refusal decided *before* the provider was ever called left no trace — the outcome was
+      // returned to a caller that discarded it, so "asked to and could not" read exactly like "never asked".
+      journal.record('session.failed', {
+        class: error instanceof Error ? error.name : typeof error,
+        ...trigger === undefined ? {} : { trigger },
+      })
       return { ok: false, voice: status(), refusal: refusalFor(error) }
     }
   }
@@ -504,7 +530,9 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
 
   if (config.autoStart) {
     // `apply` is synchronous, so a failed open cannot be thrown from it — it is reported on the bus
-    // instead. The plugin stays valid and a later start may succeed.
-    void open().catch((error: Error) => { ctx.emit('realtime-agent/error', error) })
+    // instead. The plugin stays valid and a later start may succeed. Routed through `requestSession` so that
+    // a boot-time refusal is *recorded* as well as emitted: this was a second path an open could fail on
+    // without leaving an entry, and the one a restart lands on.
+    void requestSession(() => open(), 'autostart')
   }
 }

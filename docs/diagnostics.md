@@ -107,6 +107,35 @@ plugin, and the first check is whether it agrees with the profile.
 4. **A scripted run-through**: replay the fixture utterance through the live session so a recording is
    reproducible rather than anecdotal — optional, and last, because steps 1-3 already answer the question.
 
+## What the journal now records about a session that never opened
+
+Three entries close the gap that made *"the voice is broken"* unanswerable. Without them, a journal for a
+session that never opened was **identical** to one for a session nobody asked for: an accept, then silence.
+
+- **`session.requested`** — recorded by **whoever asks**, at the moment of asking, with the trigger
+  (`connect`, `strip`, `autostart`). The ask and its outcome are written by *different plugins* on purpose: the
+  asker always knows it asked and the opener always knows what came of it, so the pair brackets a hand-off
+  that crosses a plugin boundary. **A request with no outcome after it says the listener never ran** — which
+  no single entry can say, because the opener's silence reads the same either way.
+- **`session.failed` for a refusal decided before the provider was called** — recorded with the error's
+  **class**, never its message, and with the trigger when this plugin is the one that asked. A refusal returns
+  to its caller as a structured outcome; where that caller is an `emit`, the outcome is discarded, so without
+  this entry such a refusal leaves no trace at all.
+- **`config.resolved`** — recorded by each plugin at apply, so the journal can be read without the profile
+  beside it. This was documented as already existing and had **no producer**: the vocabulary declared it, the
+  table above promised it, and nothing wrote it, so its *absence* read as evidence that nothing had been
+  configured. Values only, and no field that could carry a secret — `instructions` is excluded deliberately,
+  because the journal records what happened rather than copying the configuration into itself.
+
+Read in order, and the failure names itself:
+
+| The journal shows | What it means |
+|---|---|
+| `socket.accepted` → `session.requested` → nothing | the ask reached **no listener**: the agent row is absent, or its `inject` is unsatisfied |
+| `session.requested` → `session.failed` | the open was attempted and refused; the `class`, and the outcome's `refusal`, name the remedy |
+| `session.requested` → `session.opened` | the session is live, so the fault is downstream — read the harness session log |
+| no `session.requested` at all | nothing asked: check `openSessionOnConnect` in `config.resolved`, and the connection itself |
+
 ## Known failure modes to instrument, from a ticket the app's own agent wrote
 
 `voice-say-ticket.md` (in `~/dev/deepseek-harness/`) root-causes a `voice_say` failure at the wire: a

@@ -143,6 +143,17 @@ export function apply(ctx: Context, config: RealtimeAudioWsConfig): void {
     // constructor argument: the plugin that mints the token is the only one that can name it, and it
     // mints it here, after the journal already exists.
     journal.addSecrets([token])
+    // What this plugin resolved, so the journal can be read without the profile beside it. Values only, and
+    // no field that could carry a secret: `journalPath` names a file, and the token went in on the line above
+    // so that it can never reach a record in the first place.
+    journal.record('config.resolved', {
+      plugin: 'dsh-realtime-audio-ws',
+      path: config.path,
+      openSessionOnConnect: String(config.openSessionOnConnect),
+      maxConnections: String(config.maxConnections),
+      maxFrameBytes: String(config.maxFrameBytes),
+      journalPath: config.journalPath,
+    })
     // The record leaves the process when a path is named. Registered *after* the token, so that every entry
     // the file receives has already been through the redaction that knows about it — a sink is handed
     // entries after `record` has redacted them, and that ordering is the reason this is a sink rather than a
@@ -172,9 +183,13 @@ export function apply(ctx: Context, config: RealtimeAudioWsConfig): void {
       path: config.path,
       clients: () => clients.size,
       voice: () => ctx.serial('realtime-agent/status'),
-      request: (verb) => verb === 'start'
-        ? ctx.serial('realtime-agent/start')
-        : ctx.serial('realtime-agent/stop'),
+      request: (verb) => {
+        // Only a start asks for a session; a stop is answered by the close entry that already follows it.
+        if (verb === 'start') journal.record('session.requested', { trigger: 'strip' })
+        return verb === 'start'
+          ? ctx.serial('realtime-agent/start')
+          : ctx.serial('realtime-agent/stop')
+      },
     })
 
     /**
@@ -268,7 +283,13 @@ export function apply(ctx: Context, config: RealtimeAudioWsConfig): void {
             journal.record('socket.accepted', { clients: String(clients.size), url: target })
             // Ask for the session before the bridge goes in, so the first frames are written into a session
             // that is being opened rather than dropped by the mic seam's no-session rule.
-            if (live.openSessionOnConnect) ctx.emit('realtime-agent/start')
+            if (live.openSessionOnConnect) {
+              // Recorded on the side that asks. The opener records what came of the request, and the distance
+              // between the two entries is the only thing that separates a listener which never ran from a
+              // session nobody asked for — both of which are otherwise the same silence.
+              journal.record('session.requested', { trigger: 'connect', clients: String(clients.size) })
+              ctx.emit('realtime-agent/start')
+            }
             attachAudioSocket(client, {
               emitMic: (pcm16) => { ctx.emit('realtime-agent/mic', pcm16) },
               subscribeAudio: (listener) => ctx.on('realtime-agent/audio', listener),

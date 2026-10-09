@@ -180,8 +180,13 @@ describe('the journal the audio route writes', () => {
       expect(journal.snapshot().some(entry => entry.kind === 'socket.closed')).toBe(true)
     })
 
-    // Whichever way it left, the journal says so rather than trailing off after the accept.
-    expect(journal.snapshot().map(entry => entry.kind)).toEqual(['socket.accepted', 'socket.closed'])
+    // Whichever way it left, the journal says so rather than trailing off after the accept — and in order.
+    // `apply`'s `config.resolved` is the head and belongs to the plugin, so the assertion starts at the
+    // accept; the ask for a session then sits between the two socket entries, because this mount leaves
+    // `openSessionOnConnect` at its default of true.
+    const kinds = journal.snapshot().map(entry => entry.kind)
+    expect(kinds.slice(kinds.indexOf('socket.accepted')))
+      .toEqual(['socket.accepted', 'session.requested', 'socket.closed'])
   })
 
   it('lets the host page read the answer, which is cross-origin to loopback', async () => {
@@ -240,13 +245,70 @@ describe('the journal the audio route writes', () => {
 
     const allowed = await fetch(http())
     expect(allowed.status).toBe(200)
-    expect(((await allowed.json()) as { entries: unknown[] }).entries).toHaveLength(1)
+    // The journal's head is the `config.resolved` entry apply writes; this assertion is about the entry the
+    // test wrote reaching the route, not about the journal having no other entries.
+    const served = (await allowed.json()) as { entries: Array<{ kind: string }> }
+    expect(served.entries.at(-1)?.kind).toBe('delegation.seen')
 
     // The regression this route exists to prevent: the host's registry gates nothing, so the plugin
     // must, and the same verdict answers both doors.
     connection.rejection = 401
     const refused = await fetch(http())
     expect(refused.status).toBe(401)
+  })
+})
+
+describe('the ask it records, and the config it resolved', () => {
+  it('records the request for a session on the side that asks, when a client connects', async () => {
+    const { journal, url } = await mount()
+    const client = new WebSocket(url())
+    cleanups.push(() => { client.terminate() })
+    await once(client, 'open')
+
+    // The opener records what came of the request. This side records that it asked — the only thing that tells
+    // a listener which never ran apart from a session nobody asked for, whose journals are otherwise identical.
+    const asked = journal.snapshot().find(entry => entry.kind === 'session.requested')
+    expect(asked?.detail).toEqual({ trigger: 'connect', clients: '1' })
+  })
+
+  it('records a request from the control channel as the strip asking, and a stop as no request at all', async () => {
+    const { journal, url } = await mount()
+    const client = new WebSocket(url())
+    cleanups.push(() => { client.terminate() })
+    await once(client, 'open')
+
+    const strips = (): number => journal.snapshot()
+      .filter(entry => entry.kind === 'session.requested' && entry.detail.trigger === 'strip').length
+
+    client.send('stop')
+    await once(client, 'message')
+    // A stop is answered by the close entry that follows it, so it is not a request for a session.
+    expect(strips()).toBe(0)
+
+    client.send('start')
+    await once(client, 'message')
+    expect(strips()).toBe(1)
+  })
+
+  it('records what it resolved, so the journal can be read without the profile beside it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'audio-ws-config-'))
+    const { journal } = await mount({
+      path: '/dsh-realtime/audio',
+      openSessionOnConnect: false,
+      journalPath: join(dir, 'journal.jsonl'),
+    })
+
+    // The question this answers is the one nothing else can: which route, and whether anything was going to
+    // open a session on its own. `journalPath` names a file and carries no secret, and the token was handed to
+    // the journal's redaction on the line before this record, so it cannot reach here in the first place.
+    expect(journal.snapshot()[0]?.detail).toEqual({
+      plugin: 'dsh-realtime-audio-ws',
+      path: '/dsh-realtime/audio',
+      openSessionOnConnect: 'false',
+      maxConnections: '1',
+      maxFrameBytes: '480000',
+      journalPath: join(dir, 'journal.jsonl'),
+    })
   })
 })
 

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
-import { RealtimeAdapter, RealtimeRuntime, type RealtimeSession, type RealtimeSessionHandlers, type RealtimeSessionOptions } from 'dsh-realtime'
+import { RealtimeAdapter, RealtimeRuntime, type Journal, type RealtimeSession, type RealtimeSessionHandlers, type RealtimeSessionOptions } from 'dsh-realtime'
 import * as agent from '../src/index.ts'
 import { Config, createHandlers, apply } from '../src/index.ts'
 import { TranscriptBuffer } from '../src/transcript.ts'
@@ -55,6 +55,10 @@ class RecordingAdapter extends RealtimeAdapter {
       close: () => {
         if (adapter.refuseClose) return Promise.reject(new Error('the session is already gone'))
         adapter.closed += 1
+        // A real adapter reports the close — `realtime-openai/session.ts` calls this on teardown — and
+        // that report is the only way the agent learns the session is gone. A fake that stayed silent
+        // would leave the plugin journaling a close it had no way to observe.
+        adapter.handlers?.onClosed?.()
         return Promise.resolve()
       },
     })
@@ -86,15 +90,70 @@ class FakeTools extends Service {
 }
 
 /** A context with the real seam, one recording adapter on the `fake` route, and a tools service. */
-function harness(): { ctx: Context; adapter: RecordingAdapter; tools: FakeTools } {
+function harness(): { ctx: Context; adapter: RecordingAdapter; tools: FakeTools; journal: Journal } {
   const context = new Context()
-  new RealtimeRuntime(context)
+  const seam = new RealtimeRuntime(context)
   const tools = new FakeTools(context)
   const adapter = new RecordingAdapter()
   context.realtime.registerAdapter(['fake'], adapter)
   ctx = context
-  return { ctx: context, adapter, tools }
+  return { ctx: context, adapter, tools, journal: seam.journal }
 }
+
+/** The plugin applied and a session already open: the state most journal entries need. */
+async function started(): Promise<ReturnType<typeof harness>> {
+  const mounted = harness()
+  apply(mounted.ctx, Config({ provider: 'fake' }) as RealtimeAgentConfig)
+  await tick()
+  mounted.ctx.emit('realtime-agent/start')
+  await tick()
+  return mounted
+}
+
+/**
+ * A planted key and its unmistakable fragment. Assembled, not written — a credential-shaped literal in
+ * source is what the repo's leak scan denies by construction and what gitleaks fails on by entropy.
+ */
+const SENTINEL_KEY = ['sk', 'agent', 'sentinelmustneverappear'].join('-')
+const SENTINEL_TEXT = 'sentinelmustneverappear'
+
+describe('the journal the agent writes', () => {
+  it('records the session it opened and closed, because it owns that lifecycle', async () => {
+    const { ctx: context, journal } = await started()
+
+    context.emit('realtime-agent/stop')
+    await tick()
+
+    const kinds = journal.snapshot().map(entry => entry.kind)
+    // The audio route emits a *request* for a session and records nothing for it; this plugin is the
+    // one that knows whether one exists, so the entry lands here or nowhere.
+    expect(kinds).toContain('session.opened')
+    expect(kinds).toContain('session.closed')
+  })
+
+  it('records the class of a session failure and never its message', async () => {
+    const { adapter, journal } = await started()
+
+    // A provider error is exactly where a key turns up, and this plugin holds no credential to redact
+    // against — so it records the category and leaves the text to the plugin that holds the key.
+    adapter.handlers?.onError?.(new TypeError(`the provider refused key ${SENTINEL_KEY}`))
+
+    const failed = journal.snapshot().find(entry => entry.kind === 'session.failed')
+    expect(failed?.detail).toEqual({ class: 'TypeError' })
+    expect(JSON.stringify(journal.snapshot())).not.toContain(SENTINEL_TEXT)
+  })
+
+  it('records output audio as handed over, never as heard (invariant 6)', async () => {
+    const { adapter, journal } = await started()
+
+    adapter.handlers?.onAudio?.(new Uint8Array(8))
+
+    expect(journal.snapshot().find(entry => entry.kind === 'speech.sent')?.detail).toEqual({ bytes: '8' })
+    // No sink in this journal claims playback, because no host-side observer has one to claim: the ear
+    // belongs to the page. A kind named for it would be the diagnostics layer lying about itself.
+    expect(journal.snapshot().every(entry => !entry.kind.includes('played'))).toBe(true)
+  })
+})
 
 describe('plugin shape', () => {
   it('named-exports its contract and has no default export', () => {

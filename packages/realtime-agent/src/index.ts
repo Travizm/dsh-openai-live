@@ -168,6 +168,10 @@ export function createHandlers(deps: HandlerDeps): RealtimeSessionHandlers {
  */
 export function apply(ctx: Context, config: RealtimeAgentConfig): void {
   const transcript = new TranscriptBuffer(config.maxTranscriptChars)
+  // This plugin owns the session, so it is the only one that can honestly write these entries. The audio
+  // route emits a *request* to open a session and deliberately records nothing for it: recording a
+  // request as an event is how a journal starts lying.
+  const journal = ctx.realtime.journal
   let session: RealtimeSession | undefined
 
   const handlers = createHandlers({
@@ -175,9 +179,22 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
     session: () => session,
     ask: request => ctx.serial('realtime-agent/delegation', request),
     timeoutMs: config.delegationTimeoutMs,
-    onClosed: () => { session = undefined },
-    onSessionError: (error) => { ctx.emit('realtime-agent/error', error) },
-    onAudio: (pcm16) => { ctx.emit('realtime-agent/audio', pcm16) },
+    onClosed: () => {
+      session = undefined
+      journal.record('session.closed', {})
+    },
+    onSessionError: (error) => {
+      ctx.emit('realtime-agent/error', error)
+      // The class, never the message. A provider error can carry the key it refused, and this plugin
+      // holds no credential to redact against — so it records the category and leaves the text to the
+      // plugin that does. Naming the setting instead of repeating the value, applied to a log line.
+      journal.record('session.failed', { class: error.name })
+    },
+    onAudio: (pcm16) => {
+      ctx.emit('realtime-agent/audio', pcm16)
+      // Handed to the transport: all the host can observe, and no more (invariant 6).
+      journal.record('speech.sent', { bytes: String(pcm16.byteLength) })
+    },
   })
 
   /**
@@ -197,6 +214,7 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
       handlers,
     })
     session = opened
+    journal.record('session.opened', { provider: config.provider, model: config.model })
     return opened
   }
 

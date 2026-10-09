@@ -81,7 +81,7 @@ export interface RealtimeAudioWsConfig {
  * `Uint8Array`.
  */
 export interface AudioSocket {
-  send(data: Uint8Array): void
+  send(data: Uint8Array | string): void
   close(code?: number, reason?: string): void
   terminate(): void
   on(event: 'message', listener: (data: unknown, isBinary: boolean) => void): unknown

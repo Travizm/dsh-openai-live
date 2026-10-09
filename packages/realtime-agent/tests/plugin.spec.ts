@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
-import { RealtimeAdapter, RealtimeRuntime, type Journal, type RealtimeSession, type RealtimeSessionHandlers, type RealtimeSessionOptions } from 'dsh-realtime'
+import { RealtimeAdapter, RealtimeRuntime, REALTIME_ERROR_CODES, RealtimeError, type Journal, type RealtimeSession, type RealtimeSessionHandlers, type RealtimeSessionOptions } from 'dsh-realtime'
 import * as agent from '../src/index.ts'
 import { Config, createHandlers, apply } from '../src/index.ts'
 import { TranscriptBuffer } from '../src/transcript.ts'
@@ -616,5 +616,117 @@ describe('the settings it declares', () => {
     await context.fiber.dispose()
     ctx = undefined
     expect(settings.list()).toEqual([])
+  })
+})
+
+describe('answering a session request with its outcome', () => {
+  it('returns the state after a successful start, not an acknowledgement that it was asked', async () => {
+    const { ctx: context } = harness()
+    apply(context, Config({ provider: 'fake' }) as RealtimeAgentConfig)
+    await tick()
+
+    // The dispatch the control channel makes. `emit` ignores this value and `serial` waits for it, which
+    // is how one start path serves both callers.
+    await expect(context.serial('realtime-agent/start')).resolves.toEqual({
+      ok: true,
+      voice: { open: true, provider: 'fake', model: 'gpt-live-1', sessionId: 'sess-1' },
+    })
+    await expect(context.serial('realtime-agent/stop')).resolves.toEqual({
+      ok: true,
+      voice: { open: false, provider: 'fake', model: 'gpt-live-1' },
+    })
+  })
+
+  it('reports the voice a start would use, while none is open', async () => {
+    const { ctx: context } = harness()
+    apply(context, Config({ provider: 'fake', voice: 'marin' }) as RealtimeAgentConfig)
+    await tick()
+
+    // An absence would be a worse answer than this one: a status surface needs to know what it is about
+    // to open, not only that nothing is.
+    await expect(context.serial('realtime-agent/status')).resolves.toEqual({
+      open: false,
+      provider: 'fake',
+      model: 'gpt-live-1',
+      voice: 'marin',
+    })
+  })
+
+  it('carries a seam failure’s code and remedy, and never its message', async () => {
+    const { ctx: context } = harness()
+    class CodedAdapter extends RecordingAdapter {
+      override session(): Promise<RealtimeSession> {
+        return Promise.reject(new RealtimeError(
+          'the provider credential is not configured (apiKey)',
+          REALTIME_ERROR_CODES.NOT_CONFIGURED,
+          { detail: { remedy: 'Set the apiKey setting for this route, then try again.', setting: 'apiKey' } },
+        ))
+      }
+    }
+    context.realtime.registerAdapter(['coded'], new CodedAdapter())
+    apply(context, Config({ provider: 'coded' }) as RealtimeAgentConfig)
+    await tick()
+
+    const outcome = await context.serial('realtime-agent/start')
+    expect(outcome).toMatchObject({
+      ok: false,
+      voice: { open: false, provider: 'coded', model: 'gpt-live-1' },
+      refusal: { code: 'NOT_CONFIGURED', remedy: 'Set the apiKey setting for this route, then try again.' },
+    })
+    // The message names no value, but it is still dropped: the class and the code are what a caller
+    // branches on, and the plugin that holds the credential is the one that relays the text.
+    expect(JSON.stringify(outcome)).not.toContain('the provider credential is not configured')
+  })
+
+  it('carries the code alone when the failure offered no remedy', async () => {
+    const { ctx: context } = harness()
+    class BareAdapter extends RecordingAdapter {
+      override session(): Promise<RealtimeSession> {
+        return Promise.reject(new RealtimeError('throttled', REALTIME_ERROR_CODES.RATE_LIMITED))
+      }
+    }
+    context.realtime.registerAdapter(['bare'], new BareAdapter())
+    apply(context, Config({ provider: 'bare' }) as RealtimeAgentConfig)
+    await tick()
+
+    await expect(context.serial('realtime-agent/start')).resolves.toMatchObject({
+      ok: false,
+      refusal: { code: 'RATE_LIMITED' },
+    })
+  })
+
+  it('names the class of a failure that carried no code of its own', async () => {
+    const { ctx: context } = harness()
+    class RudeAdapter extends RecordingAdapter {
+      override session(): Promise<RealtimeSession> {
+        return Promise.reject('the provider said no')
+      }
+    }
+    context.realtime.registerAdapter(['rude'], new RudeAdapter())
+    apply(context, Config({ provider: 'rude' }) as RealtimeAgentConfig)
+    await tick()
+
+    await expect(context.serial('realtime-agent/start')).resolves.toMatchObject({
+      ok: false,
+      refusal: { class: 'string' },
+    })
+  })
+
+  it('reports a failed stop as well as a failed start', async () => {
+    const { ctx: context, adapter } = harness()
+    const failures: Error[] = []
+    context.on('realtime-agent/error', (error: Error) => { failures.push(error) })
+    apply(context, Config({ provider: 'fake' }) as RealtimeAgentConfig)
+    await tick()
+    await context.serial('realtime-agent/start')
+
+    adapter.refuseClose = true
+    await expect(context.serial('realtime-agent/stop')).resolves.toMatchObject({
+      ok: false,
+      voice: { open: false },
+      refusal: { class: 'Error' },
+    })
+    // Still on the bus, because a transport that only emits has nowhere else to learn about it.
+    expect(failures).toHaveLength(1)
   })
 })

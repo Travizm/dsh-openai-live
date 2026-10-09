@@ -28,7 +28,7 @@ import { REALTIME_ERROR_CODES, RealtimeError } from 'dsh-realtime'
 import { answerDelegation, type DelegationAppend, type DelegationAsker } from './bridge.ts'
 import { voiceToolDefinitions } from './tools.ts'
 import { TranscriptBuffer } from './transcript.ts'
-import type { DelegationAnswer, DelegationRequest, RealtimeAgentConfig } from './types.ts'
+import type { DelegationAnswer, DelegationRequest, RealtimeAgentConfig, RealtimeSessionRefusal, RealtimeSessionRequestOutcome, RealtimeVoiceStatus } from './types.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Events {
@@ -78,15 +78,27 @@ declare module '@deepseek-ai/cordis' {
      * Emitted by a transport when an authenticated client arrives, so that connecting a microphone is
      * enough to be heard — with no profile option and no dependence on a model choosing to call
      * `voice_start`. The session belongs to the agent, so the transport asks rather than opens one itself.
+     *
+     * Returns the request's **outcome** so a caller that is waiting for the answer can have it —
+     * `ctx.serial` from the control channel — while the transport, which only *emits*, is unaffected.
      */
-    'realtime-agent/start'(): void
+    'realtime-agent/start'(): RealtimeSessionRequestOutcome | undefined | Promise<RealtimeSessionRequestOutcome | undefined>
     /**
      * Close the voice session.
      *
      * Emitted by a transport when its last client goes away, including when the transport itself is
      * disposed — a session outliving the microphone that asked for it is a socket nobody is listening to.
+     * Returns the outcome, for the same reason `realtime-agent/start` does.
      */
-    'realtime-agent/stop'(): void
+    'realtime-agent/stop'(): RealtimeSessionRequestOutcome | undefined | Promise<RealtimeSessionRequestOutcome | undefined>
+    /**
+     * The voice session's state — a **query**, so nothing emits it.
+     *
+     * `undefined` means no listener answered, which is the honest answer for a composition with no agent
+     * row: it is distinguishable from a session that is merely closed, because the agent that is mounted
+     * always answers.
+     */
+    'realtime-agent/status'(): RealtimeVoiceStatus | undefined | Promise<RealtimeVoiceStatus | undefined>
   }
 }
 
@@ -313,6 +325,72 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
     await current?.close()
   }
 
+  /**
+   * The session's state, as only this plugin can report it.
+   *
+   * With nothing open it answers with what a start *would* use, rather than with nothing: "no session,
+   * and it would be `openai-live`/`gpt-live-1`" is a different — and more useful — answer than an
+   * absence, and it is the one a status surface needs to render a sensible control.
+   */
+  const status = (): RealtimeVoiceStatus => {
+    const current = session
+    if (current === undefined) {
+      return {
+        open: false,
+        provider: config.provider,
+        model: config.model,
+        ...config.voice === undefined ? {} : { voice: config.voice },
+      }
+    }
+    return {
+      open: true,
+      provider: current.started.provider,
+      model: current.started.model,
+      ...current.started.voice === undefined ? {} : { voice: current.started.voice },
+      sessionId: current.id,
+    }
+  }
+
+  /**
+   * Classify a failed request, carrying what a caller can act on and never the message.
+   *
+   * A seam failure carries its machine code and the remedy written to be relayed; anything else carries
+   * its **class** alone. The message is deliberately dropped: a provider error is exactly where a key
+   * turns up, and this plugin holds no credential to redact against — the same reason its journal
+   * records the class of a session failure rather than the text.
+   * @param error - whatever the attempt threw.
+   * @returns the structured refusal.
+   */
+  const refusalFor = (error: unknown): RealtimeSessionRefusal => {
+    if (error instanceof RealtimeError) {
+      return {
+        code: error.code,
+        ...error.detail?.remedy === undefined ? {} : { remedy: error.detail.remedy },
+      }
+    }
+    return { class: error instanceof Error ? error.name : typeof error }
+  }
+
+  /**
+   * Run a session request and report what it produced.
+   *
+   * The result is **returned as well as** reported on the bus, because a caller may be waiting for it:
+   * the control channel dispatches these with `serial`, so `start` can answer with the session that
+   * opened rather than with an acknowledgement that it asked. The failure still goes onto the bus, so a
+   * transport that merely emits keeps the behaviour it always had.
+   * @param attempt - the request to run.
+   * @returns whether it achieved what it asked for, and the state afterwards.
+   */
+  const requestSession = async (attempt: () => Promise<unknown>): Promise<RealtimeSessionRequestOutcome> => {
+    try {
+      await attempt()
+      return { ok: true, voice: status() }
+    } catch (error) {
+      ctx.emit('realtime-agent/error', error as Error)
+      return { ok: false, voice: status(), refusal: refusalFor(error) }
+    }
+  }
+
   // Tools are an effect, like every other contribution this plugin makes: the fiber that mounted them
   // releases them, so there is no separate teardown path to forget.
   ctx.effect(function* () {
@@ -343,17 +421,16 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
   }, 'realtime-agent.mic')
 
   // Session requests from the transport. The route knows when an authenticated client connects and the
-  // agent owns the session, so one event is the whole of the wiring between them.
+  // agent owns the session, so one event is the whole of the wiring between them. Each listener returns
+  // its outcome: `emit` ignores it, `serial` waits for it, and that is how the control channel can
+  // answer *what happened* rather than *that it was asked*.
   ctx.effect(function* () {
     const disposers = [
-      ctx.on('realtime-agent/start', () => {
-        // Fire-and-forget for the same reason `autoStart` is: a listener has no caller to catch a
-        // rejection, and the failure is reported on the bus rather than thrown into one.
-        void open().catch((error: Error) => { ctx.emit('realtime-agent/error', error) })
-      }),
-      ctx.on('realtime-agent/stop', () => {
-        void stop().catch((error: Error) => { ctx.emit('realtime-agent/error', error) })
-      }),
+      ctx.on('realtime-agent/start', () => requestSession(() => open())),
+      ctx.on('realtime-agent/stop', () => requestSession(() => stop())),
+      // A query, and the only listener that answers one. A mounted agent always answers, so a caller
+      // that gets `undefined` from the dispatch learns the agent row is absent rather than guessing.
+      ctx.on('realtime-agent/status', () => status()),
     ]
     yield () => { for (const dispose of disposers) dispose() }
   }, 'realtime-agent.session-requests')

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { attachAudioSocket, toBytes } from '../src/bridge.ts'
+import { attachAudioSocket, toBytes, toText } from '../src/bridge.ts'
 import type { AudioSocket } from '../src/types.ts'
 
 /**
@@ -8,7 +8,7 @@ import type { AudioSocket } from '../src/types.ts'
  * pinning the fake to the interface's overloads buys nothing but noise.
  */
 function fakeSocket() {
-  const sent: Uint8Array[] = []
+  const sent: (Uint8Array | string)[] = []
   const closed: { code: number | undefined; reason: string | undefined }[] = []
   let terminates = 0
   const listeners = new Map<string, ((...args: unknown[]) => void)[]>()
@@ -31,11 +31,13 @@ const deps = (over: Partial<Parameters<typeof attachAudioSocket>[1]> = {}) => {
   const mic: Uint8Array[] = []
   const detached: number[] = []
   const unsubscribed: number[] = []
+  const control: string[] = []
   let emit: ((pcm16: Uint8Array) => void) | undefined
   return {
     mic,
     detached,
     unsubscribed,
+    control,
     /** Play the host side: deliver output audio as the bus event would. */
     output: (pcm16: Uint8Array): void => { emit?.(pcm16) },
     value: {
@@ -45,6 +47,7 @@ const deps = (over: Partial<Parameters<typeof attachAudioSocket>[1]> = {}) => {
         return () => { unsubscribed.push(1) }
       },
       maxFrameBytes: 3,
+      onControl: (frame: string) => { control.push(frame) },
       onDetach: () => { detached.push(1) },
       ...over,
     },
@@ -72,6 +75,20 @@ describe('toBytes', () => {
   })
 })
 
+describe('toText', () => {
+  it('passes a string through, for a caller that already has one', () => {
+    expect(toText('status')).toBe('status')
+  })
+
+  it('decodes the bytes ws hands back, in every shape it hands them back in', () => {
+    // The same three RawData shapes `toBytes` normalises: a single buffer, a fragmented array of them,
+    // and an ArrayBuffer.
+    expect(toText(Buffer.from('steer sess-1'))).toBe('steer sess-1')
+    expect(toText([Buffer.from('set x='), Buffer.from('7')])).toBe('set x=7')
+    expect(toText(new TextEncoder().encode('status').buffer)).toBe('status')
+  })
+})
+
 describe('attachAudioSocket', () => {
   it('carries a binary frame to the microphone seam', () => {
     const { socket, fire } = fakeSocket()
@@ -89,12 +106,36 @@ describe('attachAudioSocket', () => {
     expect(harness.mic.map(frame => Array.from(frame))).toEqual([[1, 2, 3]])
   })
 
-  it('ignores a text frame — nothing on this wire is JSON', () => {
+  it('reads a text frame as a control frame, and never as audio', () => {
     const { socket, fire } = fakeSocket()
     const harness = deps()
     attachAudioSocket(socket, harness.value)
-    fire('message', Buffer.from('{"hello":true}'), false)
+    fire('message', Buffer.from('status'), false)
+    // The contract this widened: a text frame used to be ignored outright, and the comment saying so was
+    // right about the wire and wrong about what the wire could carry.
+    expect(harness.control).toEqual(['status'])
     expect(harness.mic).toEqual([])
+  })
+
+  it('writes the reply back as a text frame on the same socket', () => {
+    const { socket, sent, fire } = fakeSocket()
+    const harness = deps({ onControl: (frame, reply) => { reply(`{"ok":true,"verb":"${frame}"}`) } })
+    attachAudioSocket(socket, harness.value)
+    fire('message', Buffer.from('status'), false)
+    expect(sent).toEqual(['{"ok":true,"verb":"status"}'])
+  })
+
+  it('drops a reply that settles after the socket went away', () => {
+    const { socket, sent, fire } = fakeSocket()
+    // A control handler is asynchronous, so its reply can lose the race with a close — and writing to a
+    // closed socket throws from inside a promise nobody awaits.
+    let later: ((text: string) => void) | undefined
+    const harness = deps({ onControl: (_frame, reply) => { later = reply } })
+    attachAudioSocket(socket, harness.value)
+    fire('message', Buffer.from('status'), false)
+    fire('close')
+    later?.('too late')
+    expect(sent).toEqual([])
   })
 
   it('sends host output audio to the client', () => {

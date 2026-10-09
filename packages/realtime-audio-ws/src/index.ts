@@ -187,6 +187,7 @@ export function apply(ctx: Context, config: RealtimeAudioWsConfig): void {
               maxFrameBytes: config.maxFrameBytes,
               onDetach: () => {
                 clients.delete(client)
+                journal.record('socket.closed', { clients: String(clients.size) })
                 // The last client leaving ends the session. This also covers the transport's own disposal,
                 // which terminates its clients — so a profile reload does not leave a session nobody holds.
                 if (config.openSessionOnConnect && clients.size === 0) ctx.emit('realtime-agent/stop')

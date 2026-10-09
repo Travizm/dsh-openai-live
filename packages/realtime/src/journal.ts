@@ -39,8 +39,14 @@ export const DEFAULT_JOURNAL_CAPACITY = 200
 export type JournalKind =
   /** A voice session opened, or was asked to and could not. */
   | 'session.opened' | 'session.closed' | 'session.failed'
-  /** The audio route accepted a socket, or refused one and said why. */
-  | 'socket.accepted' | 'socket.rejected'
+  /**
+   * The audio route accepted a socket, refused one and said why, or watched one leave.
+   *
+   * A close is recorded rather than left to be inferred from the absence of later entries: a reader
+   * looking at a journal that simply stops cannot tell a client that hung up from a process that died,
+   * and that difference is the whole reason anybody opens the journal.
+   */
+  | 'socket.accepted' | 'socket.rejected' | 'socket.closed'
   /** The model raised a delegation, and the id it will be correlated by. */
   | 'delegation.seen'
   /** A delegated turn was admitted to the session, refused, declined, or ran out of window. */

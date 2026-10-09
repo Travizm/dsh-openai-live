@@ -89,3 +89,57 @@ to fix something the user should be able to hear.
 
 The profile accumulates `package.json.bak-*` and `cordis.patch.yml.bak-*` files beside the live ones.
 They are the only copy of a working configuration if an install goes wrong — leave them alone.
+
+## If it installs the wrong version
+
+**The installer resolves from a pnpm metadata cache, and that cache is not revalidated on every run.**
+Observed: the app installed `dsh-openai-live@0.3.0` while the registry's `latest` was `0.5.1` — and
+*downgraded* a profile that already held `0.4.0`. Nothing was broken. The resolver consulted a cached
+packument from roughly fifteen hours earlier and never went to the network.
+
+**Your registry check is not the installer's check.** `curl`-ing the registry proves what the registry
+*serves*; it says nothing about what the installer *resolves*. Both checks are needed, and only the
+second one predicts what lands.
+
+Two caches are involved:
+
+```
+~/Library/Caches/pnpm/v11/metadata/registry.npmjs.org/<pkg>.jsonl        # abbreviated, used for resolution
+~/Library/Caches/pnpm/v11/metadata-full/registry.npmjs.org/<pkg>.jsonl   # full packument
+```
+
+Each is newline-delimited JSON; read its `dist-tags` line to see what the installer believes `latest`
+is:
+
+```bash
+python3 -c "
+import json,sys
+p='$HOME/Library/Caches/pnpm/v11/metadata/registry.npmjs.org/<pkg>.jsonl'
+for line in open(p):
+    if line.strip():
+        d=json.loads(line)
+        if d.get('dist-tags'): print(d['dist-tags'])"
+```
+
+**Fix — park the stale entries and let the next resolution fetch fresh:**
+
+```bash
+mkdir -p /tmp/pnpm-metadata-parked
+for v in metadata metadata-full; do
+  f="$HOME/Library/Caches/pnpm/v11/$v/registry.npmjs.org/<pkg>.jsonl"
+  [ -f "$f" ] && mv "$f" /tmp/pnpm-metadata-parked/"$v-<pkg>.jsonl"
+done
+```
+
+Then re-add in the app. A missing entry is the state you want: the resolver has nothing stale to serve.
+
+**A specifier written from a bad resolution outlives it.** The installer also rewrites the pin from
+whatever it resolved — `"dsh-openai-live": "0.3.0"` became `"^0.3.0"` — and `^0.3.0` is
+`>=0.3.0 <0.4.0`: it excludes `0.5.1` **whatever the cache says**. So clearing the cache is necessary
+and not sufficient. Either re-add by name so the installer rewrites the specifier from a good
+resolution, or set the specifier explicitly and re-resolve.
+
+**Check all three, in this order:** the cache (what the installer thinks `latest` is) → the pin in the
+profile's `package.json` (what it is *allowed* to resolve) → the installed manifest in `node_modules`
+(what actually landed). A green cache with a stale pin still installs the old version, and that
+combination looks exactly like the cache fix not working.

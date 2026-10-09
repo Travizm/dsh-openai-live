@@ -55,6 +55,9 @@ function settled(ask: DelegationAsker, request: DelegationRequest): Promise<Dele
   }
 }
 
+/** Which channel an append went out on. What an acknowledgement names, and what it does not. */
+export type DelegationAppend = 'commentary' | 'thinking'
+
 /**
  * Answer one delegation, or tell the model plainly that it could not be answered.
  *
@@ -64,6 +67,7 @@ function settled(ask: DelegationAsker, request: DelegationRequest): Promise<Dele
  * @param transcript - the conversation so far, as the responder will see it.
  * @param ask - how to reach a responder.
  * @param timeoutMs - bound on waiting for one.
+ * @param onAcknowledged - called once per accepted append, which is not once per thing heard.
  * @returns a promise settling once the session has been answered.
  */
 export async function answerDelegation(
@@ -72,6 +76,7 @@ export async function answerDelegation(
   transcript: readonly AgentTranscriptLine[],
   ask: DelegationAsker,
   timeoutMs: number,
+  onAcknowledged: (append: DelegationAppend, delegationId: string) => void,
 ): Promise<void> {
   const request: DelegationRequest = {
     id: delegation.id,
@@ -89,13 +94,21 @@ export async function answerDelegation(
   const answer = await Promise.race([settled(ask, request), expired])
   const text = typeof answer?.text === 'string' ? answer.text.trim() : ''
 
+  // Every append below awaits the provider's acknowledgement rather than the send — that is the seam's
+  // session contract, written that way for a measured reason. So a resolved await **is** the
+  // acknowledgement, and this is the only honest place to record one. What it is not is delivery:
+  // nothing here says a speaker rendered anything, and keeping those two apart is the whole of
+  // invariant 6 — and the reason the fault-injection matrix has a row for exactly this pair.
   if (text.length === 0) {
     await session.appendCommentary(UNANSWERED_NOTICE, delegation.id)
+    onAcknowledged('commentary', delegation.id)
     return
   }
   if (answer?.mode === 'spoken') {
     await session.appendCommentary(boundAppend(text), delegation.id)
+    onAcknowledged('commentary', delegation.id)
     return
   }
   await session.appendThinking(boundAppend(text), delegation.id)
+  onAcknowledged('thinking', delegation.id)
 }

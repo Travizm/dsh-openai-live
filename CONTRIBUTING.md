@@ -59,6 +59,15 @@ Two non-unit tiers are required and a change cannot skip them:
   passes means a resource is outliving its operation — typically a timer armed before the operation it
   bounds.
 
+## Releasing, and refreshing the app
+
+Two operations have their own runbooks, because both have gone wrong once and both are hard to undo:
+
+- **[`docs/releasing.md`](docs/releasing.md)** — publish order, the 0.x **range** check, publishing
+  through pnpm (never npm), and what to do when a broken version reaches the registry.
+- **[`docs/refresh-the-app-profile.md`](docs/refresh-the-app-profile.md)** — update vs uninstall, the
+  profile's own patch layer that outranks the bundle, and the restart that actually loads it.
+
 ## Commits and pull requests
 
 Write the **reasoning** in the commit body: what was wrong, what was measured, what the alternative

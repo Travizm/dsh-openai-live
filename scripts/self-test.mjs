@@ -343,9 +343,8 @@ if (!existsSync(profileDir)) {
     provider.handlers?.onTranscript?.({ kind: 'input', text: 'is staging ok?', final: true })
     provider.handlers?.onDelegation?.(delegation)
     await new Promise(resolve => setTimeout(resolve, 25))
-    context.emit('session/event', undefined, {
+    context.emit('session/event', { id: 'sess-self-test' }, {
       type: 'assistant/message',
-      sessionId: 'sess-self-test',
       surfaceOp: 'append',
       data: { message: { content: [{ type: 'text', text: 'Staging is healthy.' }] } },
     })

@@ -57,6 +57,14 @@ const MILESTONE_MS = Number(process.env.MILESTONE_MS ?? 2_000)
 const CLIENT_TIMEOUT_MS = Number(process.env.CLIENT_TIMEOUT_MS ?? 0)
 const PROBE_MS = Number(process.env.PROBE_MS ?? 400)
 const PROBE_UNTIL_MS = Number(process.env.PROBE_UNTIL_MS ?? 12_000)
+/**
+ * The vendor documents that *the session timeline advances with its audio*, and that text sent to a session
+ * whose microphone is not streaming is **deferred rather than delivered** — so a client with an open mic
+ * streams silence when nobody is speaking. This probe's earlier runs stopped the input stream when the
+ * utterance ended. `KEEPALIVE=1` streams digital silence afterwards, which is what a real client does, and
+ * is the one variable that separates "the turn ended" from "the timeline stopped".
+ */
+const KEEPALIVE = process.env.KEEPALIVE === '1'
 const LATE_MS = Number(process.env.LATE_MS ?? 5_000)
 const BARGE_IN_MS = Number(process.env.BARGE_IN_MS ?? 3_000)
 const SAMPLE_RATE = 24_000
@@ -79,10 +87,22 @@ const pcm2 = SHAPE === 'interrupt' ? readFileSync(PCM2_PATH) : null
 writeFileSync(EVIDENCE, '')
 const t0 = Date.now()
 const at = () => Date.now() - t0
-/** Audio payloads are recorded as a length, never as bytes — reproducible, and the measurement is timing. */
+/**
+ * The provider's session id is `live_` + 35 base62 characters — exactly the shape of a GoCardless live
+ * access token, which is why GitHub's secret scanner raises it on every evidence file (15 open alerts, on a
+ * public repo). It is not a credential and nothing needs rotating, but it is provider-assigned, stable and
+ * unnecessary for any claim these files support, so it does not ship. The compliant path is to not record
+ * it, which is also why `scripts/leak-scan.mjs` carries the pattern: the class is catchable locally, so the
+ * next one never reaches a scanner that will call it a token.
+ */
+const SESSION_ID_REDACTED = 'redacted-session-id'
+
 const forEvidence = (event) => {
   if (event?.type === 'session.input_audio.append') return { type: event.type, audioBytes: Buffer.from(String(event.audio ?? ''), 'base64').length }
   if (event?.type === 'session.output_audio.delta') return { type: event.type, audioBytes: Buffer.from(String(event.delta ?? ''), 'base64').length }
+  if (event?.session !== undefined && typeof event.session === 'object' && event.session !== null) {
+    return { ...event, session: { ...event.session, id: SESSION_ID_REDACTED } }
+  }
   return event
 }
 const record = (dir, obj) => appendFileSync(EVIDENCE, `${JSON.stringify({ t: at(), dir, ...obj })}\n`)
@@ -139,6 +159,7 @@ console.log(`endpoint:  ${ENDPOINT}`)
 console.log(`shape:     ${SHAPE}`)
 console.log(`utterance: ${PCM_PATH} — ${(pcm.length / (SAMPLE_RATE * 2)).toFixed(2)}s${pcm2 ? ` · barge-in ${PCM2_PATH} — ${(pcm2.length / (SAMPLE_RATE * 2)).toFixed(2)}s` : ''}`)
 console.log(`agent:     turn ${TURN_MS}ms · client timeout ${CLIENT_TIMEOUT_MS === 0 ? 'none' : `${CLIENT_TIMEOUT_MS}ms`} · milestones ${MILESTONE_MS}ms`)
+console.log(`keepalive: ${KEEPALIVE ? 'ON — digital silence after the utterance (a real client with an open mic)' : 'off — the input stream stops with the utterance'}`)
 console.log(`evidence:  ${EVIDENCE}\n`)
 
 const ws = new WebSocket(ENDPOINT, { headers: { Authorization: `Bearer ${KEY}` } })
@@ -243,12 +264,21 @@ function dispatch() {
   return shapeMilestone()
 }
 
-function streamAudio(bytes) {
+/** Digital silence, one frame at a time — what an open microphone sends when nobody is speaking. */
+const SILENCE_FRAME = Buffer.alloc(BYTES_PER_FRAME, 0)
+
+function startKeepAlive() {
+  console.log(`${stamp()} -> keeping the input stream alive with silence (the session timeline advances with audio)`)
+  setInterval(() => send({ type: 'session.input_audio.append', audio: SILENCE_FRAME.toString('base64') }), FRAME_MS)
+}
+
+function streamAudio(bytes, { keepAliveAfter = false } = {}) {
   let off = 0
   const tick = setInterval(() => {
     if (off >= bytes.length) {
       clearInterval(tick)
       console.log(`${stamp()} -> utterance complete (${framesSent} frames) — waiting for endpointing`)
+      if (keepAliveAfter) startKeepAlive()
       return
     }
     framesSent += 1
@@ -338,7 +368,7 @@ ws.on('message', (buf) => {
   switch (type) {
     case 'session.started':
       console.log(`${stamp()} <- session.started`)
-      streamAudio(pcm)
+      streamAudio(pcm, { keepAliveAfter: KEEPALIVE })
       return
 
     case 'session.delegation.created': {

@@ -36,6 +36,11 @@ const PATTERNS = [
   { name: 'legacy _auth secret', re: /\b_auth\s*=\s*(?!\s|\$)[A-Za-z0-9+/=]{16,}/g },
   // A recorded fingerprint of a real credential.
   { name: 'key fingerprint', re: /\bfp=[0-9a-f]{8,}\b/gi },
+  // A provider-assigned identifier that a secret scanner reads as a token. An OpenAI Live `session.id` is
+  // `live_` + 35 base62 characters, which is exactly GitHub's GoCardless Live Access Token shape — so every
+  // tracked evidence file that recorded one raised a public "secrets detected" alert, and the compliant path
+  // is to not record it. Unambiguous here: nothing else in this tree spells `live_` followed by a token.
+  { name: 'provider session id (GoCardless-shaped live token)', re: /\blive_[A-Za-z0-9_-]{30,}/g },
   // A credential assigned a literal value. `$VAR`, `${VAR}`, and an empty value are all fine, which is
   // the compliant path: name the setting, let the composition supply it.
   {

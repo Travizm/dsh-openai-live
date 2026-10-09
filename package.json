@@ -62,6 +62,7 @@
     "test:coverage": "vitest run --coverage",
     "test:built": "node scripts/built-composition.mjs && node scripts/client-artefact.mjs",
     "probe:delegation": "node scripts/probe-delegation-path.mjs",
+    "self-test": "node scripts/self-test.mjs",
     "leakscan": "node scripts/leak-scan.mjs",
     "canary": "node scripts/protocol-canary.mjs",
     "gate": "pnpm leakscan && pnpm build && pnpm typecheck && pnpm test:coverage && pnpm test:built"

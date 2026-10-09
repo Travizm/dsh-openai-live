@@ -30,6 +30,10 @@ spike/out/
 # macOS
 .DS_Store
 
+# The self-test's per-run evidence: a diagnostic snapshot written every time anyone runs a check, not a
+# record. The probe's evidence is kept when it is being filed for a review; these are not.
+review-evidence/self-test-*.json
+
 # pnpm owns the lockfile; an npm lockfile here is a stale duplicate.
 package-lock.json
 

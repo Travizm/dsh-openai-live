@@ -90,6 +90,12 @@ Install → restart → then test.
    So a refresh cannot be verified by listening for the reason, and looking for it there sends you
    hunting a defect that is really an unbuilt story. That is the worst kind of check: one whose
    failure mode cannot tell "not implemented" from "broken".
+6. **One verdict, when you want the whole stack at once.** `pnpm self-test <profile>` runs five checks —
+   key configured, route accepting, session live, prompt admitted, canned turn returned — and prints a
+   single `PASS` / `PARTIAL` / `FAIL`, a line each, and the path of a JSON snapshot. Where
+   `probe:delegation` asks whether the delegation path works, this asks *which* of the five is wrong,
+   and it is the output to paste into a bug report. `PARTIAL` means nothing failed but something could
+   not be exercised: a key that is not configured, or a seam installed before the journal.
 
 ## The drift this procedure exists to catch
 

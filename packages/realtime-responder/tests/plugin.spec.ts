@@ -9,14 +9,17 @@ import type { RealtimeResponderConfig } from '../src/types.ts'
 /** A session controller that records what was admitted, and can be told to refuse — with any message. */
 class FakeSessionController extends Service {
   readonly prompted: unknown[] = []
+  /** The signals the responder passed, so a test can assert the one the harness requires is actually sent. */
+  readonly signals: (AbortSignal | undefined)[] = []
   refusal: string | undefined
 
   constructor(context: Context) {
     super(context, 'sessionController')
   }
 
-  prompt(request: unknown): Promise<{ accepted: true }> {
+  prompt(request: unknown, signal?: AbortSignal): Promise<{ accepted: true }> {
     this.prompted.push(request)
+    this.signals.push(signal)
     const refusal = this.refusal
     if (refusal !== undefined) return Promise.reject(new Error(refusal))
     return Promise.resolve({ accepted: true as const })
@@ -301,6 +304,24 @@ describe('answering a delegation', () => {
     // Registrations are effects. If this ever needs a teardown path of its own, that path is what gets
     // forgotten on the day it matters.
     expect(() => context.emit('session/event', { id: 'sess-1' } as never, {} as unknown as never)).not.toThrow()
+  })
+})
+
+describe('the signal the controller requires', () => {
+  it('hands it one, because the harness throws without it', async () => {
+    // The defect this pins was found in the live journal and not in any test, which is the point of pinning
+    // it here: the harness reads `signal.throwIfAborted()` before it considers the request, so a one-argument
+    // call throws on *every* delegation and arrives as a refusal whose reason reads like a plugin bug. The
+    // structural interface this plugin declares had one parameter for two releases, and nothing offline
+    // disagreed — only the real service did.
+    const { context, controller } = harness()
+    apply(context, Config({ sessionId: 'sess-1', answerTimeoutMs: 1_000 }) as RealtimeResponderConfig)
+
+    void context.serial('realtime-agent/delegation', request)
+    await Promise.resolve()
+
+    expect(controller.signals).toHaveLength(1)
+    expect(controller.signals[0]).toBeInstanceOf(AbortSignal)
   })
 })
 

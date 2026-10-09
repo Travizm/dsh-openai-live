@@ -63,7 +63,7 @@ interface SessionControllerLike {
     readonly sessionId: string
     readonly mode: 'queue' | 'steer'
     readonly content: readonly { readonly type: 'text'; readonly text: string }[]
-  }): Promise<{ readonly accepted: true }>
+  }, signal: AbortSignal): Promise<{ readonly accepted: true }>
 }
 
 /**
@@ -375,12 +375,19 @@ export function apply(ctx: Context, config: RealtimeResponderConfig): void {
     maxPromptChars: () => live.maxPromptChars,
     answerTimeoutMs: () => live.answerTimeoutMs,
     admit: async (text: string): Promise<void> => {
+      // A signal per admission. The controller **requires** one — it reads `signal.throwIfAborted()` before it
+      // considers the request — so calling `prompt` with a single argument throws
+      // `Cannot read properties of undefined (reading 'throwIfAborted')` on *every* delegation, before the
+      // prompt is reached at all. That is what this did for two releases, and the interface above declared one
+      // parameter and hid it: a hand-written structural type cannot disagree with the thing it describes
+      // unless somebody runs it. The live journal is what ran it.
+      const abort = new AbortController()
       await controller.prompt({
         requestId: `realtime-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
         sessionId: live.sessionId,
         mode: 'queue',
         content: [{ type: 'text', text }],
-      })
+      }, abort.signal)
     },
     // `session/event` listeners are called with `(session, event)`. The owning session is the FIRST
     // argument and the event carries no session id of its own, so the scope is forwarded from here. This

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import {
+  CAPTURE_BUFFER,
   GLOBAL_KEY,
   STRIP_ELEMENT_ID,
   apply,
@@ -69,6 +70,10 @@ function fakeGraph(options: { sampleRate?: number } = {}) {
   let clock = 0
   let capture: ((event: { inputBuffer: { getChannelData(): Float32Array } }) => void) | null = null
   let lastFrames = 0
+  /** What the graph was asked for when the capture node was built, so the quantum is pinned by a test. */
+  let captureArgs: number[] = []
+  /** The gain objects the client set, so the no-feedback zero is pinned rather than assumed. */
+  const gainValues: { value: number }[] = []
 
   const node = (name: string) => ({ connect: () => {}, disconnect: () => { disconnects.push(name) } })
   const context = {
@@ -76,11 +81,18 @@ function fakeGraph(options: { sampleRate?: number } = {}) {
     get currentTime(): number { return clock },
     destination: {},
     createMediaStreamSource: () => node('source'),
-    createScriptProcessor: () => ({
-      ...node('processor'),
-      set onaudioprocess(handler: typeof capture) { capture = handler },
-    }),
-    createGain: () => ({ ...node('gain'), gain: { value: 1 } }),
+    createScriptProcessor: (...args: number[]) => {
+      captureArgs = args
+      return {
+        ...node('processor'),
+        set onaudioprocess(handler: typeof capture) { capture = handler },
+      }
+    },
+    createGain: () => {
+      const gain = { value: 1 }
+      gainValues.push(gain)
+      return { ...node('gain'), gain }
+    },
     createBuffer: (_channels: number, frames: number, rate: number) => {
       lastFrames = frames
       return { duration: frames / rate, getChannelData: () => new Float32Array(frames) }
@@ -101,6 +113,8 @@ function fakeGraph(options: { sampleRate?: number } = {}) {
     started,
     disconnects,
     trackStops,
+    gainValues,
+    captureArgs: (): number[] => captureArgs,
     contextCloses: (): number => contextCloses,
     refuseClose: (): void => { refuseClose = true },
     setClock: (seconds: number): void => { clock = seconds },
@@ -192,6 +206,36 @@ describe('createAudioClient', () => {
     h.capture([0, 0.5, -0.5])
     expect(h.sent).toHaveLength(1)
     expect(Array.from(new Int16Array((h.sent[0] as Uint8Array).buffer))).toEqual([0, 16384, -16384])
+  })
+
+  it('keeps the input stream alive: every quantum ships, silence included', async () => {
+    // The reason this is a test rather than a comment. The provider's session timeline advances with the
+    // audio this client sends, and a context append is placed only while that timeline is advancing — so
+    // dropping silent blocks (an obvious-looking saving, and the most damaging single change anyone could
+    // make here) freezes the session and silently loses every append after it. Measured, with the mechanism,
+    // in `docs/usable-window.md`.
+    const h = await live()
+    // The quantum, at the 2^10 floor the API allows, and one channel in and out.
+    expect(h.captureArgs()).toEqual([CAPTURE_BUFFER, 1, 1])
+    // A zero-gain node is what keeps the processor firing without routing the microphone to the speakers.
+    expect(h.gainValues[0]?.value).toBe(0)
+
+    // Ten quanta of pure silence — what an open microphone sends when nobody is speaking.
+    const silent = new Array<number>(CAPTURE_BUFFER).fill(0)
+    for (let i = 0; i < 10; i += 1) h.capture(silent)
+
+    expect(h.sent).toHaveLength(10)
+    for (const frame of h.sent) {
+      const bytes = frame as Uint8Array
+      // A real frame at the session's declared width — a skipped beat would be a shorter one, or none.
+      expect(bytes.byteLength).toBe(CAPTURE_BUFFER * 2)
+      expect(Array.from(new Int16Array(bytes.buffer))).toEqual(silent)
+    }
+
+    // And it stops with the microphone, rather than shipping into a released socket.
+    h.client.stop()
+    h.capture(silent)
+    expect(h.sent).toHaveLength(10)
   })
 
   it('plays what comes back, advancing the playhead so frames queue in order', async () => {

@@ -359,6 +359,12 @@ export function createAudioClient(deps: ClientAudioDeps): ClientAudio {
     const source = context.createMediaStreamSource(stream)
     const node = context.createScriptProcessor(CAPTURE_BUFFER, 1, 1)
     node.onaudioprocess = (event) => {
+      // Every quantum ships, **silent ones included, and that is load-bearing rather than incidental**: the
+      // provider's session timeline advances with the audio this client sends, and a context append is
+      // placed only while that timeline is advancing — so a client that skipped silent blocks (an
+      // obvious-looking saving) would silently freeze the session and lose every append after it. Measured,
+      // with the mechanism, in `docs/usable-window.md`; guarded by the capture-continuity case in
+      // `tests/client.spec.ts`.
       const pcm16 = pcm16FromFloat32(event.inputBuffer.getChannelData(0))
       socket?.send(new Uint8Array(pcm16.buffer))
     }

@@ -453,6 +453,32 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
   }
 
   /**
+   * The safe, structured fields of a failure, for the journal.
+   *
+   * The **code**, never the message. A provider's message can carry the key it refused, and this plugin holds
+   * no credential to redact against — which is why the other half of this design defers that text to the
+   * adapter, which does. But the code is *our* vocabulary, and it is the one field that separates *add credit*
+   * from *replace the key* from *wait*: a class cannot, and a journal that records only a class is a journal
+   * that makes the reader run a probe to learn what it already knew. The remedy is ours too and is written to
+   * be relayed verbatim; `providerCode` and `setting` are short identifiers naming a provider code and a
+   * setting, never a value.
+   */
+  const failureDetail = (error: unknown): Record<string, string> => {
+    if (!(error instanceof RealtimeError)) {
+      return { class: error instanceof Error ? error.name : typeof error }
+    }
+    const detail = error.detail
+    return {
+      class: error.name,
+      code: error.code,
+      ...detail?.providerCode === undefined ? {} : { providerCode: detail.providerCode },
+      ...detail?.setting === undefined ? {} : { setting: detail.setting },
+      ...detail?.remedy === undefined ? {} : { remedy: detail.remedy },
+      ...detail?.retryable === undefined ? {} : { retryable: String(detail.retryable) },
+    }
+  }
+
+  /**
    * Run a session request and report what it produced.
    *
    * The result is **returned as well as** reported on the bus, because a caller may be waiting for it:
@@ -472,12 +498,13 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
       return { ok: true, voice: status() }
     } catch (error) {
       ctx.emit('realtime-agent/error', error as Error)
-      // The class, never the message, for the reason the provider's own error path gives: a provider error can
-      // carry the key it refused, and this plugin holds no credential to redact against. Until this entry
-      // existed, a refusal decided *before* the provider was ever called left no trace — the outcome was
-      // returned to a caller that discarded it, so "asked to and could not" read exactly like "never asked".
+      // Until this entry existed, a refusal decided *before* the provider was ever called left no trace at
+      // all — the outcome was returned to a caller that discarded it, so "asked to and could not" read
+      // exactly like "never asked". Recording the *code* is what makes it actionable rather than merely
+      // present: the first real refusal this instrument captured said `INSUFFICIENT_CREDIT` — add credit,
+      // retryable false — and the journal still could not say so, which cost a probe to discover.
       journal.record('session.failed', {
-        class: error instanceof Error ? error.name : typeof error,
+        ...failureDetail(error),
         ...trigger === undefined ? {} : { trigger },
       })
       return { ok: false, voice: status(), refusal: refusalFor(error) }

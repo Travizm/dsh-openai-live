@@ -26,9 +26,11 @@
  *   - relative and absolute paths are the package's own code; `node:` builtins are the runtime's.
  *   - a specifier has to *look* like one (`name`, `@scope/name`, `name/sub`), so ordinary prose does not
  *     qualify. It does not parse, though: a string literal containing a complete import statement — an
- *     error message quoting one — is indistinguishable from code by shape. There are none in this tree,
- *     and that is the safe direction to be wrong in: a false finding stops the gate loudly and names the
- *     file, where a missed edge is a boot error in a user's profile.
+ *     error message quoting one — is indistinguishable from code by shape, and so is **prose**: a doc comment
+ *     that separates *add credit* from *replace the key* was read as an import of `wait`, because the words
+ *     around it are the words of an import. Keep such a phrase in italics rather than quotes in a shipped
+ *     file, or teach this to strip comments. Wrong in this direction is the safe direction: a false finding
+ *     stops the gate loudly and names the file, where a missed edge is a boot error in a user's profile.
  *
  * Usage: node scripts/declared-dependencies.mjs [--root <dir>]        (after `pnpm build`)
  * Exit:  0 = every package declares what it imports · 1 = one does not, or nothing was built

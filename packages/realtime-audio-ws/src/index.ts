@@ -159,7 +159,15 @@ export function apply(ctx: Context, config: RealtimeAudioWsConfig): void {
     // entries after `record` has redacted them, and that ordering is the reason this is a sink rather than a
     // second writer with its own idea of what a secret looks like.
     if (config.journalPath.length > 0) {
-      journal.onEntry(createJournalFileSink(config.journalPath))
+      const sink = createJournalFileSink(config.journalPath)
+      // Everything recorded before this sink existed — every plugin's boot record, in whatever order the
+      // plugins happened to load — reaches the file here, or it reaches it never. The file is the record
+      // meant to be read without the profile beside it, so an entry that depends on load order is an entry
+      // that lies by omission. This plugin's own `config.resolved` is written above this line, which is
+      // exactly why the replay is here: the first version of that record never reached the file at all, and
+      // the file's silence looked like a plugin that had failed to load.
+      for (const entry of journal.snapshot()) sink(entry)
+      journal.onEntry(sink)
     }
     // The injection event is declared by `@deepseek-ai/dsh-host-webserver`, which this package deliberately
     // does not import: importing it would augment `Context` with a second declaration of `webServer` and

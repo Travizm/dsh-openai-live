@@ -103,6 +103,21 @@ async function mount(over: Partial<RealtimeAudioWsConfig> = {}) {
 }
 
 describe('the journal it writes to a file', () => {
+  it('carries the boot record too, because an entry that depends on load order lies by omission', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'audio-ws-boot-'))
+    const path = join(dir, 'journal.jsonl')
+    const { journal } = await mount({ journalPath: path })
+
+    // `config.resolved` is recorded *before* the sink attaches — this plugin writes its own boot record above
+    // the `onEntry` call — so without the replay at attach it reaches the in-memory journal and never the
+    // file. Observed in production: a file that simply stopped looked like a plugin that failed to load, and
+    // the absence of a record was read as evidence about a process.
+    const kinds = readFileSync(path, 'utf8').trim().split('\n').map(line => (JSON.parse(line) as { kind: string }).kind)
+    expect(kinds).toContain('config.resolved')
+    // And the replay is a copy, not a second life: the in-memory journal is unchanged by it.
+    expect(journal.snapshot().filter(entry => entry.kind === 'config.resolved')).toHaveLength(1)
+  })
+
   it('appends to the path it was given, and never the token', async () => {
     // Off by default is a policy rather than an oversight: a plugin that writes files because it was
     // installed is a plugin writing files in somebody else's directory. This is the deployment that named
@@ -113,8 +128,12 @@ describe('the journal it writes to a file', () => {
     journal.record('session.closed', {})
 
     const written = readFileSync(path, 'utf8')
+    // The file carries what was recorded *before* the sink attached as well as after it. This plugin writes
+    // its own `config.resolved` above the `onEntry` call, so without the replay at attach the boot record
+    // reaches the in-memory journal and never the file — and a file that omits its own first entry is a file
+    // that lies by omission.
     expect(written.trim().split('\n').map(line => (JSON.parse(line) as { kind: string }).kind))
-      .toEqual(['session.closed'])
+      .toEqual(['config.resolved', 'session.closed'])
     // The token is registered as a secret *before* the sink is registered, so an entry that carried it would
     // still be redacted on its way to the file. This is that ordering, observed on disk.
     expect(written).not.toContain(token)

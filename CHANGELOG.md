@@ -4,6 +4,30 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.6] — 2026-10-10
+
+### Added
+
+- **A refusal now says where to go, not only what to do.** `dsh-realtime` 0.2.7 · `dsh-realtime-openai` 0.2.1 ·
+  `dsh-realtime-agent` 0.2.11 · `dsh-realtime-audio-ws` 0.2.7. `INSUFFICIENT_CREDIT` renders in the app's panel
+  as the code, the remedy **and a link to the provider's billing page** — the first refusal this system
+  captured said *add credit* and left a person to find the billing page themselves, because the URL lives in
+  the provider's own message and the message is exactly what this design refuses to carry (a provider message
+  is where a key turns up, and the plugin that classifies the failure holds no credential to redact against).
+  So the page travels as its own detail field, from the provider's own table — one entry per class rather than
+  per code, with the pages named once. Credentials point at the API keys, entitlement and throttling at the
+  limits page, and the adapter's own "no credential at all" refusal at the same keys page the provider's
+  refusal of one points at.
+
+### Fixed
+
+- **The panel answered the most likely failure with "refused: no reason given".** `dsh-realtime-audio-ws`
+  0.2.7. A *session* refusal nests its own classified code, remedy and page and leaves the control-level
+  `reason` unset — and the panel read only that field. It now relays the nested refusal, which is what the
+  field was always meant to carry: the panel said nothing at the exact moment the system knew what to do. The
+  page is rendered as an anchor, the only `href` the panel emits, and it comes from our own table rather than
+  from text a provider sent.
+
 ## [0.6.5] — 2026-10-10
 
 ### Added

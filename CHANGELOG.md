@@ -4,6 +4,31 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.5] — 2026-10-10
+
+### Added
+
+- **`pnpm probe:open` — the provider, asked directly.** `spike/open-failure-probe.mjs`. It drives the
+  **production adapter** with the **production payload** and prints the refusal **redacted against the key** —
+  the one thing `self-test` cannot do (it substitutes the provider) and the one thing the canary misses (a
+  handshake sends no `session.start`, so it passes on an account with no credit, which is exactly what it
+  did). Its first run named `INSUFFICIENT_CREDIT` / `credit_balance_exhausted` / `retryable=false` in a
+  second, after an evening of instruments that could not.
+
+### Fixed
+
+- **A refusal's `code` is recorded, so the journal says what to *do*.** `dsh-realtime-agent` 0.2.10. The entry
+  carried the error's class and nothing else, so the first real refusal it captured read
+  `class=RealtimeError` — a value that cannot distinguish *add credit* from *replace the key* from *wait*.
+  It now carries the seam's `code`, the provider's `providerCode`, the `remedy` and `retryable`: our own
+  vocabulary, or a short provider identifier, and never the message — the message is where a key turns up,
+  and the plugin that holds the key and can redact against it is the adapter, not the agent.
+- **The file sink receives the entries recorded before it attached.** `dsh-realtime-audio-ws` 0.2.6.
+  `config.resolved` is written at apply, above the `onEntry` call, so it reached the in-memory journal and
+  never the file — and the file's silence then read as a plugin that had failed to load. A record that
+  depends on load order lies by omission; the sink is handed everything the journal already holds before it
+  is attached. Found by the first production run of that entry, which is what an instrument is for.
+
 ## [0.6.4] — 2026-10-10
 
 ### Added

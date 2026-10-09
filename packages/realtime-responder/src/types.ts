@@ -35,12 +35,17 @@ export interface RealtimeResponderConfig {
 /**
  * One committed session event, narrowed to what this plugin reads.
  *
+ * **There is deliberately no `sessionId` here.** The harness delivers a session event to a
+ * `session/event` listener as `(session, event)`, and the event object itself carries only
+ * `{ type, seq, time, data }` — so a reader that looked for the owning session *on the event* would match
+ * nothing, silently, for ever, and every delegated turn would end in `timeout`. The session arrives as the
+ * listener's first argument; `TurnDeps.subscribe` forwards its id beside the event for exactly that reason.
+ *
  * `surfaceOp: 'append'` matters: a session log can replay the same message on a surface operation other
  * than an append, and answering a delegation with a replayed message would speak history as news.
  */
 export interface SessionEventLike {
   readonly type?: unknown
-  readonly sessionId?: unknown
   readonly surfaceOp?: unknown
   readonly data?: { readonly message?: { readonly content?: unknown } }
 }

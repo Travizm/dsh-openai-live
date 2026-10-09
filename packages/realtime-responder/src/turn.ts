@@ -40,8 +40,15 @@ export interface TurnDeps {
   readonly answerTimeoutMs: () => number
   /** Admit one prompt. Rejects when the controller refuses it. */
   readonly admit: (prompt: string) => Promise<void>
-  /** Observe session events; returns the disposer that stops observing. */
-  readonly subscribe: (listener: (event: SessionEventLike) => void) => () => void
+  /**
+   * Observe session events, with the id of the session each one belongs to.
+   *
+   * The id is passed **beside** the event rather than read off it, because the harness does not put one
+   * there: a `session/event` listener is called as `(session, event)`, and the event carries only
+   * `{ type, seq, time, data }`. A subscriber that read the session off the event would match nothing.
+   * Returns the disposer that stops observing.
+   */
+  readonly subscribe: (listener: (event: SessionEventLike, sessionId: string) => void) => () => void
 }
 
 /**
@@ -84,16 +91,19 @@ export function promptFrom(request: DelegationRequest, maxChars: number): string
 /**
  * The assistant's completed text, when the event is one.
  *
- * Returns `undefined` for anything that is not an appended `assistant/message` for this session, so the
- * caller can feed it every event on the bus without pre-filtering and without a wrong answer ever
- * resolving the wait.
+ * Returns `undefined` for anything that is not an appended `assistant/message`, so the caller can feed it
+ * every event on the bus without pre-filtering and without a wrong answer ever resolving the wait.
+ *
+ * It does **not** decide which session the event belongs to, on purpose: the owning session is the
+ * listener's first argument and is never a field on the event, so the caller scopes it. This function used
+ * to read `event.sessionId`, a field the harness does not set — which made it return `undefined` for every
+ * event ever delivered and every turn end in `timeout`, while a hand-built test event carrying the field
+ * passed. See {@link SessionEventLike}.
  * @param event - one session event.
- * @param sessionId - the session this responder is attached to.
- * @returns the spoken text, or `undefined` when this event is not this session's answer.
+ * @returns the spoken text, or `undefined` when this event is not an answer.
  */
-export function answerText(event: SessionEventLike, sessionId: string): string | undefined {
+export function answerText(event: SessionEventLike): string | undefined {
   if (event.type !== 'assistant/message') return undefined
-  if (event.sessionId !== sessionId) return undefined
   if (event.surfaceOp !== 'append') return undefined
   const content = event.data?.message?.content
   if (!Array.isArray(content)) return undefined
@@ -145,8 +155,11 @@ export function createTurnRunner(deps: TurnDeps): (request: DelegationRequest) =
     let settle!: (text: string | undefined) => void
     const answered = new Promise<string | undefined>((resolve) => { settle = resolve })
     const timer = setTimeout(() => { settle(undefined) }, deps.answerTimeoutMs())
-    const unsubscribe = deps.subscribe((event) => {
-      const text = answerText(event, sessionId)
+    const unsubscribe = deps.subscribe((event, eventSessionId) => {
+      // Scoped here, from the id the subscriber supplies: the owning session is the listener's first
+      // argument and is never a field on the event, so this is the only place the comparison can be made.
+      if (eventSessionId !== sessionId) return
+      const text = answerText(event)
       if (text === undefined) return
       settle(text)
     })

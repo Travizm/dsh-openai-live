@@ -74,10 +74,9 @@ const SECRET = ['route', 'token', 'fault', String(Math.trunc(Math.random() * 1e9
 /** A delegation as the provider raises one: metadata only, no task text (see the seam's contract). */
 const DELEGATION: RealtimeDelegation = { id: 'item_1', target: 'client', offsetMs: 0 }
 
-/** The assistant's reply, as the session controller reports it. */
+/** The assistant's reply, as the session controller reports it. No session id on the event, on purpose. */
 const ANSWER_EVENT = {
   type: 'assistant/message',
-  sessionId: 'sess-1',
   surfaceOp: 'append',
   data: { message: { content: [{ type: 'text', text: 'Staging is green.' }] } },
 }
@@ -316,8 +315,10 @@ async function driveAckedWithoutPlayback(): Promise<Journal> {
   await vi.waitFor(() => {
     expect(mounted.controller.prompted).toHaveLength(1)
   })
-  // `session/event` listeners take (session, event); the session is unused here.
-  mounted.context.emit('session/event', undefined as never, ANSWER_EVENT as never)
+  // `session/event` listeners take (session, event): the owning session is the FIRST argument, and the event
+  // carries no session id of its own. Emitting it the harness's way is what makes this matrix an assertion
+  // about the plugin rather than about the shape this file invented.
+  mounted.context.emit('session/event', { id: 'sess-1' } as never, ANSWER_EVENT as never)
   await vi.waitFor(() => {
     expect(mounted.journal.snapshot().some(entry => entry.kind === 'append.acknowledged')).toBe(true)
   })

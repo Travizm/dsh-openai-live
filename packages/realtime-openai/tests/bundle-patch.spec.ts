@@ -199,7 +199,11 @@ describe('the shipped bundle patch', () => {
     // that waits is diagnosable, and a row that loaded and silently contributed nothing would not be. Its
     // functional behaviour with the services present is proven against a real socket in
     // packages/realtime-audio-ws/tests/plugin.spec.ts.
-    expect(unloaded).toEqual(['dsh-realtime-responder', 'dsh-realtime-audio-ws'])
+    // Sorted, because this is a **set** and the loader's entry order is not ours: the claim is *which* rows
+    // wait — and that both do — not the order they were registered in. Comparing the arrays directly failed
+    // roughly one run in five with the same two names in the other order, which is a flake in the assertion
+    // rather than in the plugin, and a flake that reddens a gate is indistinguishable from a regression.
+    expect([...unloaded].sort()).toEqual(['dsh-realtime-audio-ws', 'dsh-realtime-responder'])
 
     expect(loaded.realtime).toBeInstanceOf(RealtimeRuntime)
     // The route name comes from the patch's `provider`, so this asserts the config was actually

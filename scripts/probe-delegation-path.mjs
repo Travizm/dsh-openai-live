@@ -176,9 +176,12 @@ if (findings.length === 0) {
     transcript: [{ kind: 'input', text: 'is staging ok?' }],
   })
 
+  // Shaped the way the harness delivers one: the owning session is the listener's FIRST argument and the
+  // event carries no session id. This used to put `sessionId` on the event — a shape the harness never
+  // produces — which is why this probe reported an `answered` case for a plugin that could not match an
+  // answer in a real composition. A probe that authors its own input shape is testing its author.
   const answerEvent = (text) => ({
     type: 'assistant/message',
-    sessionId: 'sess-probe',
     surfaceOp: 'append',
     data: { message: { content: [{ type: 'text', text }] } },
   })
@@ -198,7 +201,7 @@ if (findings.length === 0) {
   // Let the listener reach its admission and start listening before the answer lands — the turn
   // runner subscribes before admitting, so this ordering is the one the plugin actually relies on.
   await new Promise(resolve => setTimeout(resolve, 0))
-  context.emit('session/event', undefined, answerEvent('Staging is healthy.'))
+  context.emit('session/event', { id: 'sess-probe' }, answerEvent('Staging is healthy.'))
   const speech = await answered
   const admitted = controller.admitted.at(-1)
   record('answered', {

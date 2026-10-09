@@ -1,186 +1,175 @@
 # S3 story 1 — the usable window, measured
 
-**Date:** 2026-10-09 · **Status:** ✅ answered — it is a number, and it is not ours
-**Probe:** `spike/usable-window.mjs` · **Evidence:** `spike/evidence/usable-window-*.jsonl` (9 tracked runs)
+**Date:** 2026-10-09 · **Status:** ✅ answered — the window is the session timeline, and it is as long as the
+microphone is streaming
+**Probe:** `spike/usable-window.mjs` · **Evidence:** `spike/evidence/usable-window-*.jsonl` (14 tracked runs)
 
-Story 2 established *where* an append lands — into the model's currently generating speech, or nowhere at
-all — and promoted this story from neighbour to prerequisite by making the window itself the question. The
-plan states the experiment: controlled **3-, 45- and 90-second** agent turns with `delegationTimeoutMs` set
-below and above completion, a final answer against milestone commentary, interruption and late-result
-cases, under the 500-token append cap. Nine real sessions later it is a number, and the number is smaller
-than the plan's smallest turn.
+> **Corrected the same day, an hour after it merged.** The first version of this document concluded that the
+> window was the model's own turn and closed ≈2.7 s after `session.delegation.created`. That was wrong — and
+> wrong in the direction that mattered, because it said narration could not be paced across a long wait,
+> which is what story 3 exists to do. The cause was the probe: it stopped streaming input audio when the
+> utterance ended, and **the session timeline advances with its audio**. The wrong reading, and the
+> observation that refuted it, are kept below rather than deleted — a reader who has not yet measured this
+> will reason from the same two facts and reach the same conclusion.
 
 ## The result in one line
 
-**The usable window is the model's own turn, and it closes ≈2.7 s after `session.delegation.created`.**
-Placement stops when the turn's output timeline ends, which is 2.39–2.99 s past the delegation in eight
-independent runs. An append must be **sent within ≈2 s** of the delegation, because injection itself takes
-~0.7 s. Every controlled turn in the plan — 3 s, 45 s, 90 s — missed it. Nothing the plugin owns can
-widen it.
+**The window is the session's timeline, and it advances for as long as the client's microphone is
+streaming.** With the input stream kept alive — which is what a real client does, and what the vendor
+documents — a delegated result was placed **3 s, 45 s and 90 s** after `session.delegation.created`, with
+**zero** errors, and 24 spoken milestones across a 46-second window were all placed. **The plan's design is
+buildable as written and story 3 is unblocked.**
 
 ## What was measured
 
 One session per run, `wss://api.openai.com/v1/live/sessions`, `gpt-live-1`, `delegation: { type: 'client' }`,
 each streaming `spike/fixtures/audio/deleg.pcm` (4.44 s: *"check the deployment status of the staging
-environment"*) so a turn existed to place into. One variable moves per run.
+environment"*). One variable moves per run, and from run ten onward it is the one that decides everything:
+**whether the input stream stays alive after the utterance.**
 
-| run | shape | appends | placed | turn end, past `delegation.created` | output transcript |
+**With the input stream kept alive (`KEEPALIVE=1`, digital silence — see [Why the first reading was
+wrong](#why-the-first-reading-was-wrong)):**
+
+| run | agent turn | appends | placed | last placed send, past `delegation.created` | timeline |
 |---|---|---|---|---|---|
-| `frontier` | silent probe every 400 ms | 30 | **5** | **+2637 ms** | "Okay, checking now." |
-| `final` @3 s | the plan's shortest turn | 1 | **0** | +2693 ms | "Okay, checking that deployment status now." |
-| `final` @45 s | the plan's mid turn | 1 | **0** | +2568 ms | "Okay, checking that." |
-| `final` @90 s | the plan's long turn | 1 | **0** | +2994 ms | "Sure, checking the staging deployment now." |
-| `milestone` @45 s | spoken milestones every 2 s | 24 | **2** | +2899 ms | "Okay, I'll check on that. Progress one:" |
-| `stall` @45 s | milestones + "keep talking while you wait" | 24 | **1** | +2644 ms | "Sure, I'll check that. Checking in now," |
-| `early` @3 s | instructions to delegate *before* speaking | 1 | **0** | +2776 ms | "One moment." |
-| `timeout` @45 s | client gives up at 10 s, sends nothing | 0 | — | +2390 ms | "Checking that now." |
-| `interrupt` | barge in at +3 s, result at +8 s | 1 | **1** | +12517 ms *(two turns)* | "Sure, checking that now. **Done: 3 of 3 replicas healthy, no failed**" |
+| `final` @3 s | 3 s | 1 | **1** | **+3004 ms** | 13.4 s |
+| `final` @45 s | 45 s | 1 | **1** | **+45006 ms** | 55.6 s |
+| `final` @90 s | 90 s | 1 | **1** | **+90007 ms** | 99.4 s |
+| `frontier` | silent probe, 1 s cadence | 25 | **25** | +24034 ms | 31.1 s |
+| `milestone` @45 s | 45 s, milestones every 2 s | 24 | **24** | +46037 ms | 53.5 s |
 
-Cost: nine sessions, 6.9 session-minutes in total, ≈US$0.35 at the published $0.05 per voice-session
-minute (billed per second, no rounding). Every append was ≤61 bytes, far under the 500-token cap; the cap
-itself was measured in story 2 and is not re-measured here.
+Every controlled turn in the plan delivered, and so did a milestone stream spanning the whole wait.
+`context_injection_incomplete` was **0** in all five runs. Injection latency across the 52 placements: 602 /
+748 / 959 ms (min / median / max).
 
-## The number
+**With the input stream stopped when the utterance ended (the first nine runs):**
 
-**The window, as a deadline to send an append:**
+| run | appends | placed | timeline stopped at | note |
+|---|---|---|---|---|
+| `frontier` | 30 | 5 | +2637 ms | the probe's own cadence, frozen mid-stream |
+| `final` @3 s / @45 s / @90 s | 1 each | **0** | +2390 … +2994 ms | the plan's turns, all missed |
+| `milestone` @45 s | 24 | 2 | +2899 ms | transcript cut mid-clause reading a milestone |
+| `stall` @45 s | 24 | 1 | +2644 ms | "keep talking while you wait", cut mid-clause |
+| `interrupt` | 1 | 1 | +12517 ms | placed because the barge-in **restarted the audio** |
+| `timeout` @45 s | 0 | — | +2390 ms | client gave up; provider neither expired nor complained |
 
-```
-delegation.created                        t = 0
-turn's output timeline ends                +2390 … +2994 ms   (median +2668, n = 8)
-injection latency (ack − send)             +642 … +924 ms     (median ≈ +740)
-──────────────────────────────────────────────────────────────
-an append must be SENT by                 +1650 … +2255 ms   (median ≈ +1930)
-latest send that was placed, observed     +2003 ms            (milestone-2)
-earliest send that was NOT placed         +2005 ms            (frontier probe-6)
-```
+Cost: fourteen sessions, 10.4 session-minutes, ≈US$0.52 at the published $0.05 per voice-session minute
+(billed per second, no rounding). Every append was ≤61 bytes, far under the 500-token cap; the cap itself was
+measured in story 2 and is not re-measured here.
 
-The frontier run locates the edge from both sides: probe-5 (sent +1604 ms) was placed; probe-6 (sent
-+2005 ms) was not. The milestone run placed an append sent at +2003 ms and refused the next at +4005 ms.
-Both agree with `turn end − injection latency`, so the rule is **injection must land before the turn's
-timeline runs out**, not "the send must be early" in itself.
+## The mechanism
 
-**Why it is that short:** `session.delegation.created` does not arrive at the start of the turn. It arrives
-≈4.4–4.9 s into it, every time, in all nine runs. The turn's timeline is ≈7.1–7.5 s long (7.11, 7.20, 7.20,
-7.22, 7.23, 7.27, 7.30, 7.45, 7.45 s). The window is the remainder.
+The vendor states it, and the runs confirm it — in that order, which is the order it should have been read
+in:
 
-**The first reading here was wrong, and this is what refuted it.** I read the `output_audio.delta` stream as
-the model speaking, so a 7.2 s turn looked like 7.2 s of speech and the pattern looked like a speech-length
-cap. It is not: decoding the **full payloads** in W1's evidence (`spike/evidence/w1-m4-events.jsonl`, which
-records audio bytes, unlike these runs) gives an RMS envelope in which **49 of 74 deltas are digital silence
-(RMS 0)**. The model's audible speech — "Okay, checking now." — begins at the 50th delta, ~300 ms *after*
-the delegation. So the turn's timeline is mostly silence, the model says very little, and the emitted
-audio length is not the model's utterance length. (These runs record audio as a byte count rather than as
-bytes — deliberate: the PCM is reproducible from the tracked fixture and the measurement here is timing.
-The envelope therefore comes from W1's run, which used the same session shape and the same utterance.)
+> *"A Live session's timeline advances with its audio, so text sent to a session whose microphone is not
+> streaming is **deferred rather than delivered**."* — *Managing GPT-Live sessions*
 
-## The three hypotheses
+> *"The acknowledgment arrives when the session timeline reaches the estimated end of added context … If the
+> session timeline **stops**, the acknowledgment can remain pending."* — same page
 
-| # | hypothesis | verdict | the observation that decided it |
+> *"Active session time includes time when the user speaks, the assistant speaks, both are silent, or the
+> backend is working."* — *Cost optimization*
+
+Three consequences, each measured here:
+
+1. **The output audio is one continuous track for the life of the session, silent between replies.** 557
+   deltas / 55.6 s over a 60-second session; 995 / 99.4 s over a 90-second one. The first nine runs' "7.2 s
+   of output audio" was not the model's turn — it was how long the timeline ran before the probe stopped
+   feeding it.
+2. **`start_ms` / `end_ms` are positions on that timeline, and they advance in step with real time.** In the
+   frontier run the 25 placements landed at start offsets 5400, 6400, 7400 … 29600 — exactly +1000 ms per
+   1000 ms of cadence.
+3. **`usage.seconds` is the same clock, and it is cumulative.** 14 / 56 / 101 seconds at close for 13.4 /
+   55.6 / 99.4-second timelines, emitted roughly every 15 s. It only looked frozen in the earlier runs
+   because the timeline was frozen.
+
+## The three hypotheses, and what decided each
+
+| # | hypothesis | verdict | the observation |
 |---|---|---|---|
-| 1 | completion tracks the local setting → ownership of the timeout is real | **confirmed as ownership, refuted as leverage** | The `timeout` run sent nothing and the session sat silent for 45 s: the client's own 10 s bound, and only it, decided that nothing was ever delivered. So the timeout is ours. But setting it above the turn (`final` @45 s, @90 s) delivered nothing either, so owning it buys **no** window. |
-| 2 | provider expiry is independent of it → we do not own the whole window | **not supported — no expiry observed** | Two sessions were held open with an unanswered delegation for 45 s and 90 s. Nothing expired, nothing complained: no error, no event, no turn, only `session.usage.updated` every ~15 s until `session.closed`. The only thing that ever stopped a placement was the turn ending. |
-| 3 | the window is the model's *generation* and it closes first | **confirmed** | Placement stops exactly where the turn's output timeline stops, in eight runs, from both sides of the edge. And the positive control: the `interrupt` run placed a result **+8010 ms** after the delegation — far outside any 2.7 s window — because a barge-in had started a *new* turn, and the model spoke it aloud ("Done: 3 of 3 replicas healthy, no failed"). The window is not the delegation's; it is whatever turn is generating. |
+| 1 | completion tracks the local setting → ownership of the timeout is real | **the timeout is ours; the window is not** | The `timeout` run sent nothing and the provider neither expired the delegation nor complained for 45 s — so `delegationTimeoutMs` governs when *our client* stops waiting, and setting it to 45 s or 90 s is what let the result be sent at all. Real ownership, of the client's patience. It does not govern the window. |
+| 2 | provider expiry is independent of it → we do not own the whole window | **not supported** | No expiry, error or event of any kind in sessions held open 45 s and 90 s with a delegation outstanding. |
+| 3 | the window is the model's *generation* and it closes first | **refuted** | 25 silent (`thinking`) placements succeeded across 24 s while the model generated nothing, and the 90-second result landed. Placement requires the timeline to advance, not the model to speak. |
 
-**What would falsify hypothesis 3** — the observation to go and get if it is ever doubted: a single append
-placed while no turn's timeline was running, i.e. an acknowledgement for a send made ≳3 s after the last
-`output_audio.delta` of the current turn with no new turn in between. Four runs waited 12–45 s for that and
-saw none.
+## Why the first reading was wrong
 
-**Hypothesis 2's falsifier** is the mirror image: an append silently dropped, or a typed refusal, at a
-*time* horizon that does not move with the turn — or any event naming an expired delegation. None appeared
-within 90 s.
+The first version of this document read `session.output_audio.delta` as "the model generating", so a 7.2 s
+track looked like a 7.2 s turn, and placement stopping when the track stopped looked like *"the window is the
+model's turn"*. Two things were wrong with that, and the codebase had already been told the first one:
 
-**Two hypotheses about the window's *elasticity* were also tested, and both failed:**
+- **The track is not the model.** 49 of 74 deltas were digital silence (RMS 0 on the decoded PCM). That part
+  was caught in the first pass, from W1's full-payload evidence — and it was recorded as a curiosity instead
+  of followed to its consequence, which is that the track measures the **session**, not the turn.
+- **The track stops when the audio stops, and that was the probe's doing.** `dsh-realtime-audio-ws`'s client
+  half captures through a `ScriptProcessorNode`, which fires on every buffer quantum **while connected** — so
+  a real client streams frames continuously, silence included, and never freezes the timeline. The probe sent
+  89 frames and then nothing.
 
-- **Milestones do not buy time.** 24 spoken milestones at 2 s cadence: two placed, then the turn ended and
-  the remaining 22 were dead. The transcript shows the model being **cut mid-clause while reading the
-  injected milestone** — "Okay, I'll check on that. Progress one:" — which is a truncation, not the end of
-  a sentence the model chose to finish.
-- **Instructions do not move it.** The `stall` instructions asked the model to keep talking until the
-  result arrived; the turn ended at +2644 ms like every other, cut mid-clause at "Checking in now,". And
-  the `early` run asked it to delegate *before saying anything*: it complied — its entire utterance is
-  "One moment." — and `delegation.created` still arrived ≈4.5 s into the turn. The delegation lands where
-  it lands.
+The refutation was one run with one variable changed (`KEEPALIVE=1`): **25 of 25 placed, spanning 24 s**,
+against 5 of 30 for the identical schedule without it. The vendor's sentence was the hypothesis; the run was
+the observation. This is the repository's own pitfall in its purest form — *a negative is only as good as the
+reach of the search behind it, and a variable that moves with the one under test will be read as its cause* —
+with the probe's own behaviour as the variable that moved.
 
-## The interruption and late-result cases (invariant 7)
+**What would falsify the corrected reading**, if it is ever doubted: a session whose microphone is streaming
+continuously in which an append sent well after `delegation.created` is *not* acknowledged, or a session
+whose microphone has stopped in which one *is*.
 
-Invariant 7 says interruption is not cancellation, and the plan asks for the late-result case explicitly.
-Both halves are now measured:
+## What this means for the plugin — the load-bearing consequence
 
-- **A late result with no new turn is lost silently.** `final` @45 s and @90 s: one `context_injection_incomplete`
-  at close, one per append, nothing heard.
-- **A late result with a new turn is placed and spoken.** The `interrupt` run barged in at +3 s, and
-  delivered the first delegation's result at +8010 ms. It was acknowledged in 924 ms, the model spoke it
-  verbatim, and the session closed with **zero** `context_injection_incomplete`. A barge-in did not cancel
-  the delegation, and it re-opened the window.
+1. **The client half must keep audio frames flowing for the life of the call, including silence.** Ours does:
+   `ScriptProcessorNode` fires while it is connected, so the plugin is correct **by construction** — but by
+   construction is not the same as by test, and a client that stops when the user goes quiet silently loses
+   every append. That deserves a regression test on the capture path, not a comment.
+2. **`muteInput()` is a plausible window-freezer and must not be used while a delegation is outstanding.** It
+   stops the provider *consuming* audio; whether a muted session's timeline keeps advancing is **not measured
+   here**. The observation that would settle it: a session that mutes, streams nothing, and still places an
+   append 30 s later.
+3. **Narration can be paced across a long wait after all, and the milestones are spoken.** The `milestone`
+   run placed 24 of 24 and the model read them out for 53.5 s ("Checking the deployment status now. Still
+   checking. And still checking…"). Story 2's conclusion that milestones die with the turn is **wrong for the
+   same reason**, and is corrected in `commentary-pacing.md`.
+4. **A responder is not racing a two-second deadline.** It is bounded by the client's own
+   `delegationTimeoutMs` — ours, and raisable — and by whether audio is in flight. A result arriving after the
+   session has closed has nowhere to land; a result arriving 45 s into a live session lands and is spoken.
+5. **Do not read the length of the emitted audio as the length of anything else** — not the model's utterance,
+   not the turn, not the window. It is a playout track.
 
-That is the design's opening: narration cannot extend one turn, but a *new turn* is a fresh window, and the
-provider gives you one for free every time the user speaks — or when anything else makes the model generate.
+## Open questions, recorded rather than guessed
 
-## What this means for narration (the design fill-in)
+- **Does `session.input_audio.mute` freeze the timeline?** Unmeasured; one run answers it (see 2 above).
+- **Is there an upper bound on the window?** None found up to 90 s, which is as far as this probe looked.
+- **The turn-length question from the first version is now closed** — the "≈7.2 s cap" was the frozen
+  timeline, not a cap: with the stream kept alive the model spoke for 53.5 s.
 
-1. **Narration has about two seconds, not two minutes.** From `delegation.created`, an append must be sent
-   within ≈1.9 s (measured 1.65–2.26 s) to be injected before the turn's timeline ends. A responder that
-   answers quickly still makes it; a responder that thinks for three seconds does not.
-2. **The plan's "speak the milestones during the 45-second wait" is not merely unpaced — it is out of the
-   window by a factor of ~20.** Story 2's reading stands and is now quantified.
-3. **The plugin cannot widen the window.** `delegationTimeoutMs` is genuinely ours (hypothesis 1) and
-   genuinely useless for this: it governs when *our* client stops waiting, and the provider does not care —
-   it will hold an unanswered delegation open for at least 90 s and say nothing. **Do not raise
-   `delegationTimeoutMs` expecting to be heard longer** (story 4's decision, now evidence-backed).
-4. **What the responder must do when its answer would land after the window.** Three outcomes already
-   exist at the consumer (story 2): placed, refused, and *queued into nothing*. The third is the one a slow
-   answer hits, and — this is the part the protocol does not help with — it is **silent until the session
-   closes**. So the responder must infer it locally: an append that is not acknowledged within the observed
-   injection latency (642–924 ms) should be treated as **not heard**, not as sent. Its options are then (a)
-   hold the result and deliver it on the next generation — measured to work, and the only route that needs
-   nothing from the user — or (b) surface it in text. It cannot wait for the provider to tell it.
-5. **Do not equate "the turn is over" with "the model stopped talking".** The turn's timeline is mostly
-   silence; a consumer reasoning about audibility from the transcript will misjudge the window.
-6. **What to measure next if the window is to be exploited.** The window's length is `turn length −
-   delegation offset`, and both are the provider's. This probe could not move either. So the only lever the
-   plugin has is *when the responder answers*, and the only path it owns for a late answer is the next
-   turn. Story 3 should be designed against that, not against the 45-second wait it was imagined around.
+## Corrections carried to earlier documents
 
-## Open question, recorded rather than guessed
-
-**What sets the turn's length (~7.2 s) and why the delegation lands ≈4.5 s in.** Ten measurements agree
-closely, and two instructions aimed at widening the window changed nothing, which is consistent with a
-provider-side turn budget. It is *not* established: the model may simply be declining to talk, and this
-probe cannot separate a cap from a choice, because every generation it elicited stopped at the same point.
-What would settle it: one turn that generates materially longer **without** a new user turn — e.g. a much
-longer input utterance, or a longer spoken response the model is willing to give. That is a protocol
-question, not a narration one, and the window measurement here does not depend on the answer: whichever it
-is, ~2.7 s is what the current session shape offers.
-
-## Corrections to earlier docs, from this evidence
-
-- **`session.usage.updated` arrives every ~15 s, not "roughly once a minute."** Measured intervals: 15.10,
-  14.95, 15.05, 14.95, 14.96 s in the 90-second run. The earlier figure was inferred from a 23-second
-  session in which only one update fitted. `docs/protocol.md` and `docs/w1-delegation-envelope.md` are
-  corrected.
-- **`session.closed`'s `usage` is not cumulative.** Every update *and* the final payload carried
-  `{"seconds": 7}` — identical values, 15 s in and at close — in all seven single-turn runs, and `13` in
-  the two-turn run. A 90-second session closed at `7`. It is not a session-duration meter, and a consumer
-  that presents it as "total session usage" is misreporting. What it does count is not separated here.
+- **`docs/commentary-pacing.md` (story 2)** — its headline, *"an append is placed into the model's currently
+  generating speech, or it is not placed at all"*, is **superseded**: placement requires the timeline to
+  advance, and 25 silent appends were placed while the model generated nothing. Its run-1/run-4 "scope"
+  post-mortem stands — it was the same confound, and its conclusions about *scope* are unaffected.
+- **`docs/protocol.md` and `docs/w1-delegation-envelope.md`** — the claim this document made on the first
+  pass, that `session.usage.updated` "does not accumulate", is **withdrawn**. It is cumulative, emitted
+  roughly every 15 s, and it advances with the timeline.
 
 ## Reproduce
 
 ```bash
-# one run per shape; SHAPE selects the experiment and EVIDENCE names the tracked file
-SHAPE=frontier  EVIDENCE=spike/evidence/usable-window-frontier.jsonl      node spike/usable-window.mjs
-SHAPE=final   TURN_MS=3000   EVIDENCE=spike/evidence/usable-window-final-3000.jsonl    node spike/usable-window.mjs
-SHAPE=final   TURN_MS=45000  EVIDENCE=spike/evidence/usable-window-final-45000.jsonl   node spike/usable-window.mjs
-SHAPE=final   TURN_MS=90000  EVIDENCE=spike/evidence/usable-window-final-90000.jsonl   node spike/usable-window.mjs
-SHAPE=milestone TURN_MS=45000 MILESTONE_MS=2000 EVIDENCE=…/usable-window-milestone-45000.jsonl node spike/usable-window.mjs
-SHAPE=stall     TURN_MS=45000 MILESTONE_MS=2000 EVIDENCE=…/usable-window-stall-45000.jsonl     node spike/usable-window.mjs
-SHAPE=interrupt BARGE_IN_MS=3000 LATE_MS=5000   EVIDENCE=…/usable-window-interrupt.jsonl       node spike/usable-window.mjs
-SHAPE=final     TURN_MS=45000 CLIENT_TIMEOUT_MS=10000 EVIDENCE=…/usable-window-timeout-10000.jsonl node spike/usable-window.mjs
-SHAPE=early     TURN_MS=3000    EVIDENCE=…/usable-window-early-3000.jsonl                     node spike/usable-window.mjs
+# KEEPALIVE=1 is the realistic shape: an open microphone streams silence when nobody is speaking.
+KEEPALIVE=1 SHAPE=frontier PROBE_MS=1000 PROBE_UNTIL_MS=25000 \
+  EVIDENCE=spike/evidence/usable-window-frontier-keepalive.jsonl node spike/usable-window.mjs
+KEEPALIVE=1 SHAPE=final TURN_MS=45000  EVIDENCE=…/usable-window-final-45000-keepalive.jsonl  node spike/usable-window.mjs
+KEEPALIVE=1 SHAPE=final TURN_MS=90000  EVIDENCE=…/usable-window-final-90000-keepalive.jsonl  node spike/usable-window.mjs
+KEEPALIVE=1 SHAPE=milestone TURN_MS=45000 MILESTONE_MS=2000 \
+  EVIDENCE=spike/evidence/usable-window-milestone-45000-keepalive.jsonl node spike/usable-window.mjs
+
+# Without it the timeline freezes when the utterance ends — the defect this document is named after.
+SHAPE=final TURN_MS=45000 EVIDENCE=spike/evidence/usable-window-final-45000.jsonl node spike/usable-window.mjs
 ```
 
 Each run writes JSONL to `spike/evidence/` and prints a per-append table with send times, acknowledgement
-latencies, injection offsets and any refusal verbatim, plus a `--- usable window ---` block naming the
-frontier. The key is read from `OPENAI_LIVE_API_KEY` (or `VOICE_TOOLS_OPENAI_KEY` / `OPENAI_API_KEY`) and is
-never logged, written or echoed; the evidence files contain events only — audio payloads are reduced to
-their byte length, since the PCM is reproducible from the tracked fixture.
+latencies, injection offsets and any refusal verbatim, plus a `--- usable window ---` block. The key is read
+from `OPENAI_LIVE_API_KEY` (or `VOICE_TOOLS_OPENAI_KEY` / `OPENAI_API_KEY`) and is never logged, written or
+echoed; the evidence contains events only — audio payloads are reduced to a byte length, and the provider's
+`session.id` is elided because it is `live_`-prefixed and reads as a token to a secret scanner.

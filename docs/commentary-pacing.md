@@ -1,7 +1,22 @@
 # S3 story 2 — what pacing does the append path actually support?
 
-**Date:** 2026-10-09 · **Status:** ✅ answered, and it changes the narration design
+**Date:** 2026-10-09 · **Status:** ⚠️ superseded in part — see the correction below
 **Probe:** `spike/commentary-pacing.mjs` · **Evidence:** `spike/evidence/commentary-{pacing,narration,session-scope}.jsonl`
+
+> **Corrected 2026-10-09 by [story 1](usable-window.md).** The headline below — *an append is placed into the
+> model's currently generating speech, or it is not placed at all* — is **superseded**. Placement requires the
+> session **timeline** to advance, and the timeline advances with the session's audio. Every measurement in
+> this document was taken with the probe's input stream **stopped** once the utterance ended, which froze the
+> timeline ≈2.7 s after `delegation.created` and deferred everything sent afterwards. With the input stream
+> kept alive — what a real client does; the probe's `KEEPALIVE=1` — **25 of 25 appends were placed across
+> 24 s while the model generated nothing**, and a 45-second milestone stream placed 24 of 24.
+>
+> **What survives unchanged:** the scope finding (run 1 vs run 4 — `delegation_id: null` is placed by the same
+> mechanism as a per-delegation id, and run 1's silence is explained by the same missing audio, not by scope);
+> the 500-token refusal verbatim; the ack's shape, latency and lack of content; `session.close`; and the rule
+> that an unacknowledged append must not be reported as sent.
+> **What does not:** the pacing conclusion, and the claim that the placement window is the model's
+> *generation* — a silent `thinking` append is placed whenever the timeline is running.
 
 S3 story 3 wants narration "spoken for milestones, silent for chatter". That sentence is unfalsifiable
 until somebody measures the append path, and the plan says so: *answer before designing*. Four real
@@ -89,13 +104,13 @@ are kept as evidence for that reason, and the probe now runs the scope under tes
    append milestones during the 45-second wait while the model holds the turn — is precisely the case that
    measured as *never placed*. The placement window is the model's **generation**, not its turn's
    lifetime, and a model waiting for a delegation is not generating.
-2. **This makes S3 story 1 the prerequisite rather than the neighbour.** The usable window is now the
-   measured question — **and it is answered: see [story 1](usable-window.md)**, which puts the window at
-   ≈2.7 s past `delegation.created` with a ≈2 s send deadline, and names the observation that decided it.
-   `completion tracking the local setting` would mean ownership of the
-   timeout is real; `provider expiry independent of it` would refute ownership of the whole window — and
-   this probe adds a third possibility the design must test: **the placement window closing long before
-   either**, which is what runs 2 and 3 already saw at 4.4 s and 3.3 s respectively.
+2. **This makes S3 story 1 the prerequisite rather than the neighbour** — and it is answered, twice: see
+   [story 1](usable-window.md). The window is the session **timeline**, and it advances while audio is in
+   flight, so a delegated result was placed at +3 s, +45 s and +90 s with the input stream kept alive, and
+   never with it stopped. **This document's own conclusion is the artefact:** the probe stopped streaming
+   audio, which froze the timeline. The design question the plan was built around is therefore open again in
+   the *permissive* direction — progress can be narrated during a long wait, provided the client keeps
+   feeding the timeline.
 3. **The result append is the thing at risk.** In run 3 the delegation's *result* — the only append that
    must be heard — was sent after the model stopped generating and was never placed. The existing
    responder answers quickly enough to land inside the window today, which is why nobody has seen this;

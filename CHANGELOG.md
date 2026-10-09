@@ -4,6 +4,25 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.3] — 2026-10-09
+
+### Fixed
+
+- **The diagnostics route now lets its own page read it.** `dsh-realtime-audio-ws` 0.2.2. The route
+  authenticated the request and answered `200`, and the browser discarded the body: a cross-origin
+  response with no `Access-Control-Allow-Origin` is unreadable however correct it is, and the host's page
+  is always cross-origin to loopback. The cause is an assumption carried from the sibling route —
+  **WebSocket upgrades are exempt from CORS**, so the audio route never needed the header and the HTTP
+  route inherited the design without the exemption. The header now reflects the caller's own origin,
+  because the capability token is the authorisation here and not the origin; it travels with `Vary:
+  Origin`, on the refusal branch as well as the answer, and a preflight is answered only after the
+  verdict. Every test had asserted the HTTP status, which was right the entire time.
+
+- **A journal entry for a session that opened is exactly that.** Stated here because it cost a
+  wrong diagnosis: `session.opened` is written only after the provider session resolves, and the
+  credential is resolved inside that call — so the entry is proof the credential was present. Reading it
+  as a local optimism sent a search for a missing key that was configured all along, in `$DSH_HOME/.env`.
+
 ## [0.5.2] — 2026-10-09
 
 ### Added

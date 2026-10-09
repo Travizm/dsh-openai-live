@@ -72,9 +72,17 @@ const reduce = (frame) => {
   return out
 }
 
+/**
+ * The provider's session id is not a credential, but the leak scan reads its shape as one — a bare `live_`
+ * plus 35 base62 characters — and the scan is right to: it cannot tell this apart from a partner key, and a
+ * scanner that tried would be one nobody could rely on. So it is elided at the recorder, which is the only
+ * place that can guarantee no run ever commits one.
+ */
+const SESSION_ID_SHAPE = /\blive_[A-Za-z0-9_-]{20,}\b/g
+
 const record = (arm, dir, frame) => {
   const entry = { arm, dir, at: Date.now(), frame: reduce(frame) }
-  appendFileSync(EVIDENCE, `${JSON.stringify(entry)}\n`)
+  appendFileSync(EVIDENCE, `${JSON.stringify(entry).replace(SESSION_ID_SHAPE, 'SESSION_ID_REDACTED')}\n`)
 }
 
 const stamp = () => new Date().toISOString().slice(11, 23)

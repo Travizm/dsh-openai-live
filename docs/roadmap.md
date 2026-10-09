@@ -117,14 +117,54 @@ provider be a choice.
 
 ## Where this is right now
 
-`dsh-openai-live 0.6.0`, six packages, 100% coverage on every file, published and verified by real
-install. It works, and since 0.5.2 it **explains itself**: a bounded journal the plugins write to, the
-controller's reason carried on the wire *and spoken*, a `GET /dsh-realtime/diagnostics` route, and
-`pnpm self-test <profile>` for one verdict worth pasting into a bug report. What it does not yet do is
-survive a long tool turn — an all-or-nothing answer still has to fit inside one delegation window — and
-a dropped socket still ends the conversation rather than being rejoined. Those two are the next
-releases.
+`dsh-openai-live 0.6.1`, six packages, 100% coverage on every file, published and verified by real install.
+It works, and since 0.5.2 it **explains itself**: a bounded journal the plugins write to, the controller's
+reason carried on the wire *and spoken*, a `GET /dsh-realtime/diagnostics` route, and `pnpm self-test
+<profile>` for one verdict worth pasting into a bug report.
 
-Since 0.6.0 it is no longer started from a devtools global: the strip in the app's own page carries
-start, stop, a session picker and a control for every field whose read site can honour a change, and the
-same channel refuses the ones it cannot with a reason rather than a shrug.
+Since 0.6.0 it is no longer started from a devtools global: the strip in the app's own page carries start,
+stop, a session picker and a control for every field whose read site can honour a change, and the same channel
+refuses the ones it cannot with a reason rather than a shrug.
+
+Since 0.6.1 a delegated turn **narrates** — steps are carried while the agent works, spoken or silent by
+policy, paced against a window that story 1 measured rather than assumed (`docs/usable-window.md`).
+
+Still true, and owed: an all-or-nothing answer must fit inside one delegation window, and a dropped socket
+ends the conversation rather than being rejoined.
+
+And two things are newly known to be false, both the same shape — **a failure with no voice**:
+
+- **A pinned session id rots silently.** The profile pins one; the app creates a new session on restart; the
+  delegation is admitted against a session the user has left, nothing says so, and the model then *improvises*
+  an explanation for the silence. Diagnosed in `docs/steering.md`, with the prior art from `codex app-server`.
+- **The journal lives only in the app's memory.** It is served, but only to a caller holding a per-boot
+  capability token — so it cannot be handed over, and it cannot be read after the fact. Scoped in
+  `docs/diagnostics.md`.
+
+## The next cycle — anything required to answer "why did nothing happen?"
+
+A user cannot debug what the product will not say. Both defects above are one defect: the plugin knows its own
+state and does not report it. Ordered, smallest first.
+
+1. **Speak the failure.** When there is no target session — or the configured one is not *attached* — say so
+   out loud, naming the session, instead of admitting into the void and leaving the model to invent a reason.
+   `SessionController.inspect` distinguishes attached from persisted, and `ApiSessionNotFound` is an exported,
+   catchable name for the case. This alone turns a two-hour investigation into one sentence at the moment it
+   happens. **Acceptance:** a stale pin produces a spoken sentence naming the session, never a silent no-op.
+2. **Follow the live binding rather than the pin.** Default the target to the live-control state from
+   `control()` — the app's own — and demote the configured id to a deliberate override. That is Codex's
+   auto-subscribe in our vocabulary, and it is what "operate across the harness layer" means mechanically.
+   **Acceptance:** restarting the app does not require a `Steer` before the voice works.
+3. **Write the journal to a file.** The seam already holds it; mirror it to JSONL on disk so a run can be
+   handed over and audited without a token. **Acceptance:** a run yields a file that says which link broke,
+   with no debugger and no live session.
+4. **A delegation trace in the responder.** It already subscribes to `session/event`, so it already sees
+   `turn/start`, `step/*`, `tool/call` and `tool/result`. Record them per delegation. **Acceptance:**
+   "answered" becomes "answered, and here are the tool calls it made".
+5. **A recording control in the strip** — start, stop, show-path — so a run is something a human can trigger
+   and hand over.
+6. **Confirm the narration window in a real turn** — story 3's demo, still owed: a long agent turn, narrated,
+   and heard.
+
+Steps 1 and 3 are worth doing before the others: together they make every later bug one reading rather than
+one investigation, which is the whole argument of this document applied to the failures now known to exist.

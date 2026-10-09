@@ -64,8 +64,9 @@
     "probe:delegation": "node scripts/probe-delegation-path.mjs",
     "self-test": "node scripts/self-test.mjs",
     "leakscan": "node scripts/leak-scan.mjs",
+    "declared-deps": "node scripts/declared-dependencies.mjs",
     "canary": "node scripts/protocol-canary.mjs",
-    "gate": "pnpm leakscan && pnpm build && pnpm typecheck && pnpm test:coverage && pnpm test:built"
+    "gate": "pnpm leakscan && pnpm build && pnpm declared-deps && pnpm typecheck && pnpm test:coverage && pnpm test:built"
   },
   "dependencies": {
     "dsh-realtime": "workspace:^",

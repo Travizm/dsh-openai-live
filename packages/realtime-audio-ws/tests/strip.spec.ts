@@ -40,6 +40,18 @@ describe('stripRows', () => {
     ])
   })
 
+  it('is opaque, because the page it covers has its own text behind it', () => {
+    // The defect this pins, reported from a screenshot of the running app: an 8% wash let the host page's
+    // text read *through* the panel, so two texts sat superimposed and neither was legible. Opacity is not
+    // decoration here — it is the accessibility requirement — and no DOM test can see what is *behind* an
+    // element, which is why this asserts the paint rather than a rendered pixel.
+    const markup = stripMarkup()
+    expect(markup).not.toMatch(/background:[^;]*transparent/)
+    expect(markup).toMatch(/background:color-mix\(in srgb, ?Canvas/)
+    // Above the page rather than blended into it.
+    expect(markup).toMatch(/box-shadow:/)
+  })
+
   it('carries an element the client can find, and no behaviour of its own', () => {
     const markup = stripMarkup()
     expect(markup).toContain(`id="${STRIP_ELEMENT_ID}"`)

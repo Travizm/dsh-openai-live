@@ -36,10 +36,17 @@ export const STRIP_ELEMENT_ID = 'dsh-realtime-strip'
 /**
  * The panel's container, as markup.
  *
- * Fixed to the bottom right and deliberately nearly unstyled: it sits inside the host's own page, so it
- * inherits that page's font and colour rather than inventing a second visual language beside it. A
- * translucent wash rather than a border, because a border here would be visual noise around a strip whose
- * job is to be glanced at.
+ * Fixed to the bottom right, inheriting the host's font and colour rather than inventing a second visual
+ * language beside it — but **opaque**, and that is a correction rather than a taste. This panel sits over
+ * the host's own text, so a translucent wash lets the page show through and the two become unreadable
+ * together: two texts superimposed, neither of them legible. That was reported from a screenshot of the
+ * running app, which is the only way it was ever going to be found — nothing in a DOM test can see what is
+ * *behind* the panel.
+ *
+ * `Canvas` is the theme's own surface colour, so the panel follows light or dark mode without naming a
+ * palette of its own, and the 6% tint of the inherited colour keeps the surface from reading as a hole
+ * punched in the page. The soft shadow says it sits above the page — not a border, which would be visual
+ * noise around a strip whose job is to be glanced at.
  * @returns one `html` row's payload.
  */
 export function stripMarkup(): string {
@@ -48,7 +55,8 @@ export function stripMarkup(): string {
     ' style="position:fixed;right:12px;bottom:12px;z-index:40;',
     'max-width:26rem;max-height:60vh;overflow:auto;padding:10px 12px;',
     'font:inherit;color:inherit;line-height:1.4;',
-    'background:color-mix(in srgb, currentColor 8%, transparent);border-radius:10px">',
+    'background:color-mix(in srgb, Canvas 94%, currentColor);',
+    'box-shadow:0 4px 16px rgb(0 0 0 / 0.18);border-radius:10px">',
     '</div>',
   ].join('')
 }

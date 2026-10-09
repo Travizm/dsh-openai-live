@@ -82,6 +82,9 @@ importers:
 
   packages/realtime-audio-ws:
     dependencies:
+      dsh-realtime:
+        specifier: workspace:^
+        version: link:../realtime
       dsh-realtime-agent:
         specifier: workspace:^
         version: link:../realtime-agent

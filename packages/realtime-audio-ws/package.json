@@ -55,6 +55,7 @@
     "typecheck": "tsc -b --dry"
   },
   "dependencies": {
+    "dsh-realtime": "workspace:^",
     "dsh-realtime-agent": "workspace:^",
     "ws": "^8.22.0"
   },

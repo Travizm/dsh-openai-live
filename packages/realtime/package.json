@@ -1,6 +1,6 @@
 {
   "name": "dsh-realtime",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Realtime voice capability seam for DeepSeek Harness: a provider registry plus the session adapter base.",
   "type": "module",
   "main": "lib/index.js",

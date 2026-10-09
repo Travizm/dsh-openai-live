@@ -67,6 +67,14 @@ export interface RealtimeAudioWsConfig {
    * more to a stranger than an empty socket.
    */
   readonly diagnosticsPath: string
+  /**
+   * File the journal is appended to, one JSON object per line. Empty means no file.
+   *
+   * Off by default, and named by the deployment that wants a recording: the journal is held in memory and
+   * served over a route that wants a capability token, so a deployment that needs the record to outlive the
+   * process — or to be handed to somebody else — says so here.
+   */
+  readonly journalPath: string
 }
 
 /**

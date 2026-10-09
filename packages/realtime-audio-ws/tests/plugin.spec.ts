@@ -8,6 +8,9 @@
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
+import { mkdtempSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context, Service } from '@deepseek-ai/cordis'
 import RealtimeRuntime from 'dsh-realtime'
@@ -98,6 +101,25 @@ async function mount(over: Partial<RealtimeAudioWsConfig> = {}) {
     http: (path = DEFAULT_DIAGNOSTICS_PATH, query = ''): string => `http://127.0.0.1:${String(port)}${path}${query}`,
   }
 }
+
+describe('the journal it writes to a file', () => {
+  it('appends to the path it was given, and never the token', async () => {
+    // Off by default is a policy rather than an oversight: a plugin that writes files because it was
+    // installed is a plugin writing files in somebody else's directory. This is the deployment that named
+    // one, and the assertion is about the file — not the buffer — because the file is the whole point.
+    const path = join(mkdtempSync(join(tmpdir(), 'audio-ws-journal-')), 'records.jsonl')
+    const { journal, token } = await mount({ journalPath: path })
+
+    journal.record('session.closed', {})
+
+    const written = readFileSync(path, 'utf8')
+    expect(written.trim().split('\n').map(line => (JSON.parse(line) as { kind: string }).kind))
+      .toEqual(['session.closed'])
+    // The token is registered as a secret *before* the sink is registered, so an entry that carried it would
+    // still be redacted on its way to the file. This is that ordering, observed on disk.
+    expect(written).not.toContain(token)
+  })
+})
 
 describe('the journal the audio route writes', () => {
   it('records an accepted socket with its target, redacting the token the page presented', async () => {

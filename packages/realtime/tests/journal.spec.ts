@@ -74,14 +74,17 @@ describe('Journal', () => {
     expect(Math.abs(third.at - Date.now())).toBeLessThan(5_000)
   })
 
-  it('keeps an acknowledgement and a delivery separate (invariant 6)', () => {
+  it('keeps an acknowledgement and a handover separate (invariant 6)', () => {
     const journal = new Journal()
     journal.record('append.acknowledged', { eventId: 'event_1' })
-    journal.record('speech.played', { eventId: 'event_1' })
+    journal.record('speech.sent', { eventId: 'event_1' })
 
-    // Two entries, two kinds. Merging them into one "sent" line is what the invariant forbids.
+    // Two entries, two kinds, and neither one claims delivery. The acknowledgement says a provider took
+    // the append; the sent entry says the host handed audio to the transport. Whether a speaker rendered
+    // it is known only to the page, so merging these into one "delivered" line is what the invariant
+    // forbids — and naming the second one `played` would be the same mistake with better manners.
     expect(journal.size).toBe(2)
-    expect(journal.snapshot().map(entry => entry.kind)).toEqual(['append.acknowledged', 'speech.played'])
+    expect(journal.snapshot().map(entry => entry.kind)).toEqual(['append.acknowledged', 'speech.sent'])
   })
 
   it('hands out a detached snapshot that cannot tamper with the record', () => {

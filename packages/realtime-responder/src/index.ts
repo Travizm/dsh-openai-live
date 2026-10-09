@@ -37,6 +37,7 @@
 
 import Schema from '@deepseek-ai/schemastery'
 import type { Context } from '@deepseek-ai/cordis'
+import type { SessionController } from '@deepseek-ai/dsh-api-session-controller'
 import type { RealtimeDelegationSettlement } from 'dsh-realtime'
 import { REALTIME_ERROR_CODES, RealtimeError, redact, type Journal } from 'dsh-realtime'
 import type { DelegationAnswer, DelegationRequest } from 'dsh-realtime-agent'
@@ -52,19 +53,33 @@ const MAX_REASON_CHARS = 500
 /**
  * The slice of the session controller this plugin uses, described structurally rather than imported.
  *
- * Importing the controller package would augment `Context` with its own declaration for the same
- * property, and two declarations of one property with different types is a compile error — a
- * dependency taken purely to borrow a type, in exchange for a collision. This plugin needs four fields
- * of one method; it states those four fields and takes no dependency.
+ * It **borrows the real type** instead of restating one, and that is a correction with a body count. This
+ * used to declare its own four-field shape of `prompt` — with a **single** parameter, while the real method
+ * takes two, the second a required `AbortSignal` that the harness reads before it will consider the request.
+ * The result was `Cannot read properties of undefined (reading 'throwIfAborted')` on **every** delegation,
+ * in production, for two releases: a hand-written structural type cannot disagree with the thing it
+ * describes, because it never talks to it. A `Pick` of the real method makes the call site the compiler's
+ * business instead of the author's memory.
+ *
+ * The collision this comment used to warn about does not apply, and never did. Importing the controller
+ * package *does* augment `Context` with its own `sessionController` declaration — but this plugin never
+ * declares that property; it reads the controller through the cast below, so there is no second declaration
+ * for it to collide with. The warning was written from reasoning rather than from a compile error, and it
+ * cost more than the collision would have.
+ *
+ * Type-only, and erased: no runtime dependency is taken, and the harness package remains the host's.
  */
-interface SessionControllerLike {
-  prompt(request: {
-    readonly requestId: string
-    readonly sessionId: string
-    readonly mode: 'queue' | 'steer'
-    readonly content: readonly { readonly type: 'text'; readonly text: string }[]
-  }, signal: AbortSignal): Promise<{ readonly accepted: true }>
-}
+type SessionControllerLike = Pick<SessionController, 'prompt'>
+
+/**
+ * The request the real method takes, derived from the method rather than imported by name.
+ *
+ * `Parameters<…>[0]` rather than `SessionPromptRequest`, `SessionId` and `SessionRequestId`: the package
+ * re-exports its types unevenly, and names that are not exported cannot be borrowed. Deriving from the
+ * signature means this file tracks whatever the harness actually declares — which is the entire point of
+ * borrowing the type in the first place.
+ */
+type SessionPromptRequestLike = Parameters<SessionController['prompt']>[0]
 
 /**
  * The slice of the session store this plugin reads: every session the harness currently has live.
@@ -382,9 +397,14 @@ export function apply(ctx: Context, config: RealtimeResponderConfig): void {
       // parameter and hid it: a hand-written structural type cannot disagree with the thing it describes
       // unless somebody runs it. The live journal is what ran it.
       const abort = new AbortController()
+      // Two brands, cast at the one boundary where they belong. A session id reaches this plugin as **text**
+      // out of a profile's YAML and can never be a branded type; and the request id is *minted here*, which
+      // the harness's own docstring calls "client-minted identity". These casts are the opposite of the one
+      // this file used to hide behind — that one silenced a real mismatch between two signatures, whereas
+      // this is the point at which a string genuinely becomes an identity.
       await controller.prompt({
-        requestId: `realtime-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
-        sessionId: live.sessionId,
+        requestId: `realtime-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}` as SessionPromptRequestLike['requestId'],
+        sessionId: live.sessionId as SessionPromptRequestLike['sessionId'],
         mode: 'queue',
         content: [{ type: 'text', text }],
       }, abort.signal)

@@ -77,19 +77,21 @@ Install → restart → then test.
    while the right one is.
 2. **No harness shadow.** `node_modules/@deepseek-ai` must be **absent** from the profile. Any entry
    there is a second copy of a harness package, which breaks the host's own tools silently.
-3. **The symbol is present, not just the version.** For S0 that means `delegation-settled` in the
-   installed `dsh-realtime-responder/lib/`. A version number is a claim; the code is the evidence.
+3. **The symbols are present, not just the versions.** For S1 that means `redact.js` in the installed
+   `dsh-realtime/lib/`, the diagnostics module in `dsh-realtime-audio-ws/lib/`, and the settled
+   outcomes in the responder. A version number is a claim; the code is the evidence.
 4. **It is loaded and working.** `pnpm probe:delegation <profile>` from the repo is the check: green,
    with `refused` carrying the controller's reason and the key redacted. Run it against the *app*
    profile, not the workspace — it resolves the bundle from the profile's own `node_modules`, which is
    the only thing that makes it an installed-profile check.
-5. **The spoken reason is NOT a refresh check.** S0 preserves the reason on the bus as
-   `realtime-agent/delegation-settled`; **narrating it through `appendCommentary` is S1's story
-   *Spoken failures*, and has not landed.** Until it does, a failure still speaks
-   `UNANSWERED_NOTICE` — *"Sorry — I can't take care of that right now."* — exactly as before S0.
-   So a refresh cannot be verified by listening for the reason, and looking for it there sends you
-   hunting a defect that is really an unbuilt story. That is the worst kind of check: one whose
-   failure mode cannot tell "not implemented" from "broken".
+5. **The reason is now spoken.** A refused turn narrates the controller's own reason through
+   `appendCommentary` — redacted, bounded, the useful part first — so a refresh can be verified by
+   failing a request and **hearing why**. Two things must hold, and each fails differently, which is why
+   this step says both: the bundle must be the S1 one (below `0.5.2` it speaks the flat notice again,
+   *"Sorry — I can't take care of that right now."*), and the credential must be configured where the
+   host will find it — `OPENAI_LIVE_API_KEY`, because the app is launched by launchd and inherits no
+   shell environment. With no key, a refusal names the missing setting, which is the reason, and the
+   check still passes *as a check*.
 6. **One verdict, when you want the whole stack at once.** `pnpm self-test <profile>` runs five checks —
    key configured, route accepting, session live, prompt admitted, canned turn returned — and prints a
    single `PASS` / `PARTIAL` / `FAIL`, a line each, and the path of a JSON snapshot. Where

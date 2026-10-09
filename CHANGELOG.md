@@ -4,7 +4,52 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.2] — 2026-10-09
+
+### Added
+
+- **A journal, owned by the seam.** `dsh-realtime` 0.2.2. A bounded ring buffer over the events the
+  plugins already emit and consume — session open and close, socket verdicts, delegation seen, prompt
+  admitted or refused **with the reason**, window elapsed, append acknowledged — readable as JSON. The
+  seam owns it because it is the one object every bundle plugin already holds: a reader must not have
+  to correlate three partial records to answer one question. Secrets arrive additively
+  (`addSecrets`) rather than at construction, because plugins load in an order nobody guarantees, and
+  entries are redacted **at emission**, by shape and by value.
+
+- **A failure you can hear.** `dsh-realtime-responder` 0.2.2. A refused turn now speaks the session
+  controller's own reason through `commentary.append`, rather than leaving the user the model's flat
+  notice — the useful part first, nothing framed in front of it, redacted and bounded. A declined or
+  timed-out turn keeps the flat notice **deliberately**: those carry no words, and inventing a reason
+  for them would be worse than the honest silence they already had.
+
+- **`GET /dsh-realtime/diagnostics`.** `dsh-realtime-audio-ws` 0.2.1. The journal as JSON, behind the
+  same policy as the audio route itself — one `verdictFor`, two doors — so the two cannot drift until
+  one of them holds the weaker answer. A rejected request records the verdict alone, because a wrong
+  token is still a credential. `TOKEN_PARAM` is published with the route: nothing can address it
+  without that query parameter, and a consumer restating the literal is a consumer that drifts.
+
+- **A fault matrix, a self-test, and a redaction sweep.** Five faults — a controller refusal, an
+  inactive responder, socket loss, an append acknowledged without playback, and barge-in — each driven
+  through the real plugins and read back from one journal, asserted to leave **five distinguishable
+  records**. `pnpm self-test <profile>` distils five checks into one verdict worth pasting into a bug
+  report, printing the reason verbatim when something fails. The sweep plants a sentinel and drives it
+  through every sink. None of this ships to a consumer; all of it is what makes the rest checkable.
+
+### Changed
+
+- **`speech.played` is now `speech.sent`.** The host hands frames to a transport; whether a speaker
+  rendered them is known only to the page, and no host-side record can honestly assert it. A kind named
+  for playback would be the diagnostics lying about itself — invariant 6, applied to a name.
+
+### Fixed
+
+- **A barge-in is not recorded, because the protocol never reports one.** Measured across the whole
+  live vocabulary — nine event types and not one of them an interruption — and `design.md` invariant 2
+  forbids the host detecting one for itself, because endpointing belongs to the engine. The fault
+  matrix asserts the **absence**, so the day that vocabulary grows an interruption event a test fails,
+  rather than a journal quietly claiming to have seen something no observer has.
+
+## [0.5.1] — 2026-10-09
 
 ### Added
 

@@ -226,19 +226,20 @@ if (!existsSync(profileDir)) {
     const controller = new SelfTestController(context)
     new SelfTestTools(context)
     const web = new SelfTestWebServer(context)
-    new SelfTestConnection(context)
+    const connection = new SelfTestConnection(context)
     const provider = makeProvider(seamModule.RealtimeAdapter)
     context.realtime.registerAdapter(['self-test'], provider)
 
     await context.plugin(
       { name: agentModule.name, inject: agentModule.inject, apply: agentModule.apply },
-      // A model id is not optional to the seam, and an empty one is the kind of failure that reads as
-      // "the provider is down". The self-test names its own stand-in rather than borrowing a real one.
-      { provider: 'self-test', model: 'self-test' },
+      // Each plugin is mounted through its own Schema, as the Loader does. Mounting with a plain object
+      // silently skips the defaults — and a plugin whose `apply` reads a defaulted field crashes on an
+      // undefined it was entitled to expect, which is a load-time failure the harness caused itself.
+      agentModule.Config({ provider: 'self-test', model: 'self-test' }),
     )
     await context.plugin(
       { name: responderModule.name, inject: responderModule.inject, apply: responderModule.apply },
-      { sessionId: 'sess-self-test', maxPromptChars: 4_000, answerTimeoutMs: 1_000 },
+      responderModule.Config({ sessionId: 'sess-self-test', maxPromptChars: 4_000, answerTimeoutMs: 1_000 }),
     )
     // The audio route declares no `inject` — it is mounted by calling its `apply` with its own validated
     // config, which is what the bundle's composition smoke does. Registering it through `context.plugin`
@@ -305,9 +306,13 @@ if (!existsSync(profileDir)) {
       if (opened) warn('route', `accepted an authorised socket on ${audioPath}; no diagnostics door to refuse at yet`)
       else fail('route', `the authorised socket did not open on ${audioPath}`)
     } else {
-      // The same policy, the other door, without a token. If this came back anything but a refusal the
-      // accept above would prove nothing.
+      // The route's policy is the connection service's verdict, overridden by a valid token — so an
+      // *unauthorised* caller is one the connection objects to, not merely one carrying no token. With no
+      // rejection set the route accepts, correctly, and reading that as a leak would be wrong about the
+      // harness rather than right about the route.
+      connection.rejection = 401
       const unauthorised = await fetch(`http://127.0.0.1:${port}${diagnosticsPath}`)
+      connection.rejection = undefined
       if (opened && (unauthorised.status === 401 || unauthorised.status === 403)) {
         pass('route', `accepted an authorised socket on ${audioPath}; refused ${String(unauthorised.status)} without a token`)
       } else {
@@ -349,7 +354,14 @@ if (!existsSync(profileDir)) {
     else fail('prompt', 'no turn reached the controller — a session with nothing to admit into')
 
     const speech = await answered
-    const acknowledged = kinds().includes('append.acknowledged')
+    // The append is the agent's own async chain, one hop behind the responder's return — so poll for the
+    // entry rather than reading the journal the instant the answer resolves. That gap is the difference
+    // between a check and a race, and a race here reads as "the agent never acknowledged anything".
+    let acknowledged = kinds().includes('append.acknowledged')
+    for (let attempt = 0; attempt < 40 && !acknowledged; attempt += 1) {
+      await new Promise(resolve => { setTimeout(resolve, 25) })
+      acknowledged = kinds().includes('append.acknowledged')
+    }
     if (speech?.text !== 'Staging is healthy.') {
       fail('turn', `returned ${JSON.stringify(speech ?? null)} instead of the canned answer`)
     } else if (journal === undefined) {

@@ -140,6 +140,13 @@ if (findings.length === 0) {
   const responder = await import(pathToFileURL(entry).href)
 
   const context = new Context()
+  // The seam first, and not for its own sake: the responder injects `realtime` as well as the controller
+  // — it records outcomes in the seam's journal — and a plugin whose injects are not all visible never
+  // applies at all. No listener, every case `undefined`, and the runbook's own verification step reports
+  // five plugin defects that are really one missing service.
+  const seamEntry = profileRequire.resolve('dsh-realtime')
+  const seam = await import(pathToFileURL(seamEntry).href)
+  new seam.default(context)
   controller = new ProbeSessionController(context)
 
   const settlements = []
@@ -149,8 +156,18 @@ if (findings.length === 0) {
   // apply would never run and this probe would hang — which is exactly the failure it exists to catch.
   await context.plugin(
     { name: responder.name, inject: responder.inject, apply: responder.apply },
-    { sessionId: 'sess-probe', maxPromptChars: 4_000, answerTimeoutMs: 300 },
+    // Through the plugin's own Schema, as the Loader mounts it. A plain object skips the defaults, and
+    // the responder's `apply` reads `redactSecrets` — defaulted to `[]` — so an unvalidated config
+    // crashes the plugin at load with "values is not iterable", which looks like a defect in the plugin.
+    responder.Config({ sessionId: 'sess-probe', maxPromptChars: 4_000, answerTimeoutMs: 300 }),
   )
+
+  // The Loader applies a plugin once every service it injects is visible, which is a microtask later.
+  // Asking the delegation bus before that lands on no listener at all: `serial` returns undefined, every
+  // case records a null verdict, and five harness races read exactly like five plugin defects.
+  await Promise.resolve()
+  await Promise.resolve()
+  await new Promise(resolve => setTimeout(resolve, 0))
 
   const delegation = (id) => ({
     id,
@@ -208,7 +225,16 @@ if (findings.length === 0) {
     returnedSpeech: refused ?? null,
     settlement: refusalSettlement ?? null,
   })
-  check(refused === undefined, 'a refused turn should decline, not answer')
+  // S1 story *Spoken failures* changed this deliberately, and the old assertion is now the wrong one: a
+  // refusal is the single failure the controller gives words for, so the responder returns those words
+  // for the agent to speak rather than declining. `refused === undefined` was right for S0 — and the
+  // silence it encoded is precisely what the story removed.
+  check(refused?.mode === 'spoken' && typeof refused?.text === 'string' && refused.text.includes('invalid api key'),
+    'a refused turn should answer with the controller reason, as speech')
+  // The reason is redacted on its way out, and `records` below carries the returned speech — so the
+  // sentinel checks that follow now cover the spoken sink as well as the journal, without a second copy.
+  check(refused === undefined || !JSON.stringify(refused).includes(SENTINEL),
+    `a credential escaped the spoken path (${SENTINEL_TEXT} was returned as speech)`)
   check(refusalSettlement?.outcome === 'refused', 'the refusal was not reported as a refusal')
   check(typeof refusalSettlement?.reason === 'string' && refusalSettlement.reason.includes('invalid api key'),
     'the controller\'s reason did not survive — the open question is still open')

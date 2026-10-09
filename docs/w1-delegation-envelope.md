@@ -88,6 +88,30 @@ VAD* — and vindicates it.
    final value. The count advances with the session; a session whose timeline has stopped reports a value
    that appears not to move.
 
+## What makes the model delegate — measured, because it was guessed wrong
+
+The shipped plugin's voice model delegates with **no instructions at all**, and that is worth writing down
+because the opposite was believed. The only reference in this repo that had ever produced a
+`session.delegation.created` (`spike/commentary-pacing.mjs`) also passes an instruction telling the model to
+delegate, and it is easy to read that instruction as the trigger. When the shipped plugin appeared to produce
+no tool call, the missing instruction was the first suspect — it is absent from the bundle (`instructions` is
+`Schema.string().required(false)`) and from the profile.
+
+`spike/delegation-trigger.mjs` ran both arms against `gpt-live-1` on the same 4.44 s utterance:
+
+| arm | instructions | result |
+|---|---|---|
+| `bare` | none — exactly what `sessionStart(model, undefined, voice)` builds | **delegation created at +7316 ms** |
+| `instructed` | the reference instruction, verbatim | delegation created at +6708 ms |
+
+The hypothesis is **refuted**. The instruction changes nothing, and the model answered the request itself in
+neither arm. `delegation: { type: 'client' }` in `session.start` is the whole of the trigger, which is what
+`wire.ts:168` already sends.
+
+The consequence is the useful part: **a missing instruction is not why a request goes unworked on, and a search
+for that cause must start downstream of `session.delegation.created`** — at what the client does with the
+delegation it has already been handed, not at whether one arrives.
+
 ## Consequence for the runtime contract (v8 → v9)
 
 The bump carries the **client-delegation** vocabulary above — the append trio, the

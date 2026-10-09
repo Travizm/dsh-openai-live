@@ -3,7 +3,7 @@
 **When:** a release is published and you want the desktop app to run it. **Cost:** one update, one
 restart.
 
-The app and the repo drift apart easily and silently. This is the procedure, and the two things that
+The app and the repo drift apart easily and silently. This is the procedure, and the three things that
 have gone wrong doing it.
 
 ## What the profile records
@@ -17,14 +17,17 @@ have gone wrong doing it.
 
 - **`dsh.profile.bundles` holds the bundle *id*.** It is a set of ids, so installing a new version of
   the *same* id is an **update** — the id is already there and gets replaced.
-- **The dependency is an exact pin**, not a range. It will not move on its own; an update has to
-  rewrite the pin.
+- **The dependency specifier is not yours to keep.** It is written by the installer from whatever it
+  resolved, and re-derived on the next install. An exact `"0.4.0"` came back as `"^0.3.0"` — a caret
+  range — without anyone asking for it. Treat the specifier as output, not as configuration.
 
 ## Do not uninstall first
 
 The bundle id is unchanged between versions, so installing `0.5.x` over `0.4.0` is an update. An
 uninstall is not merely unnecessary — it is worse: it removes the row the running app is serving from,
-and an interruption between the two leaves the app with no voice plugin at all.
+and an interruption between the two leaves the app with no voice plugin at all. Worse still, the
+profile's own patch layer carries a `dsh-realtime-responder` row (below), so a naked uninstall leaves
+that row pointing at a package that is not installed — a boot error, discovered at restart.
 
 If an install is ever needed for a *different* id, that is a different situation: two rows with the
 same id across layers is the conflict that aborts boot.
@@ -67,11 +70,15 @@ Install → restart → then test.
 
 ## Verify
 
-1. **The pin moved.** `~/.dsh/profiles/<name>/package.json` shows the new version.
-2. **The manifest moved.** `node_modules/dsh-openai-live/package.json` shows the new version. Read the
-   manifest, not a directory listing — a listing is not evidence about resolution.
-3. **No harness shadow.** `node_modules/@deepseek-ai` must be **absent** from the profile. Any entry
+1. **The manifest moved.** `node_modules/dsh-openai-live/package.json` shows the new version, and so
+   does each sibling the bundle pulls in. Read the manifest, not a directory listing — a listing is not
+   evidence about resolution. **Do not verify on the pin alone:** the installer rewrites it from its
+   own resolution, so it can read correctly while the wrong version is installed, and can read wrongly
+   while the right one is.
+2. **No harness shadow.** `node_modules/@deepseek-ai` must be **absent** from the profile. Any entry
    there is a second copy of a harness package, which breaks the host's own tools silently.
+3. **The symbol is present, not just the version.** For S0 that means `delegation-settled` in the
+   installed `dsh-realtime-responder/lib/`. A version number is a claim; the code is the evidence.
 4. **It is loaded and working.** Speak a request and hear a failure *reason* rather than the model's
    flat refusal. That is the S0 behaviour and it is the only check that exercises the whole chain.
 
@@ -87,59 +94,80 @@ to fix something the user should be able to hear.
 
 ## Profile backups
 
-The profile accumulates `package.json.bak-*` and `cordis.patch.yml.bak-*` files beside the live ones.
-They are the only copy of a working configuration if an install goes wrong — leave them alone.
+The profile accumulates `package.json.bak-*`, `pnpm-workspace.yaml.bak-*` and `cordis.patch.yml.bak-*`
+files beside the live ones. They are the only copy of a working configuration if an install goes wrong
+— leave them alone.
 
 ## If it installs the wrong version
 
-**The installer resolves from a pnpm metadata cache, and that cache is not revalidated on every run.**
-Observed: the app installed `dsh-openai-live@0.3.0` while the registry's `latest` was `0.5.1` — and
-*downgraded* a profile that already held `0.4.0`. Nothing was broken. The resolver consulted a cached
-packument from roughly fifteen hours earlier and never went to the network.
+**First suspect, and the one that has actually bitten: the profile runs a supply-chain gate that
+refuses anything published in the last 24 hours.** It is not in your global npm or pnpm config, which
+is why checking there says the gate is unset. It is in the profile:
+
+`~/.dsh/profiles/<name>/pnpm-workspace.yaml`, and pnpm records the *effective* values into
+`~/.dsh/profiles/<name>/node_modules/.pnpm-workspace-state-v1.json` — which is the authoritative
+copy, since it is what pnpm actually applied:
+
+```yaml
+minimumReleaseAge: 1440          # minutes — 24 hours
+minimumReleaseAgeExclude:        # versions exempted from that gate
+  - dsh-openai-live@0.3.0
+  - dsh-openai-live@0.4.0
+```
+
+So a just-published release is **not installable, by design**, and the resolver silently falls back to
+the newest version that *is* permitted — usually an older one an earlier install allow-listed.
+Observed: `dsh-openai-live@0.3.0` installed **twice** while the registry served `0.5.1`, because every
+S0 package was 38–43 minutes old and the newest permitted version was `0.3.0`. No error, no warning:
+the gate is working exactly as intended, and the result looks like a bug.
+
+Measure it before theorising:
+
+```bash
+python3 -c "
+import json,subprocess,datetime
+d=json.loads(subprocess.run(['npm','view','<pkg>','time','--json'],capture_output=True,text=True).stdout)
+now=datetime.datetime.now(datetime.timezone.utc)
+for v in ('0.4.0','0.5.0','0.5.1'):
+    age=(now-datetime.datetime.fromisoformat(d[v].replace('Z','+00:00'))).total_seconds()/60
+    print(f'  {v:8} age={age:7.1f} min  ' + ('EXCLUDED by the 24h gate' if age < 1440 else 'permitted'))"
+```
+
+**Two ways out.** *Wait* — the gate opens 24 hours after publish, with no edit at all, and it is the
+honest option. Or *allow-list the release*, which is the app's own mechanism (it appends each version
+it installs to `minimumReleaseAgeExclude`): add the bundle **and every sibling it brings**, because the
+gate applies to each package independently.
+
+**The `overrides:` block will defeat half a release without failing.** The same file can pin a sibling
+to a version the new bundle does not accept:
+
+```yaml
+overrides:
+  dsh-realtime-agent: 0.2.3      # new bundle requires ^0.2.5 — the override wins, silently
+```
+
+Overrides beat dependency ranges. The bundle upgrades, the overridden sibling does not, and the release
+looks complete while being half-landed: the responder arrives and the agent-side change does not.
+Check `overrides:` against the new bundle's `dependencies` on every refresh. This is the failure that
+only a symbol check catches.
+
+**Second suspect: a stale pnpm metadata cache.** Real, but it was *not* the cause above — the installer
+had already fetched fresh metadata (`dist-tags` showed `0.5.1`) and rejected it on age. Check it only
+after the gate:
+
+```
+~/Library/Caches/pnpm/v11/metadata/registry.npmjs.org/<pkg>.jsonl        # abbreviated
+~/Library/Caches/pnpm/v11/metadata-full/registry.npmjs.org/<pkg>.jsonl   # full packument
+```
+
+Each is newline-delimited JSON; read its `dist-tags` line to see what the installer believes `latest`
+is. A missing entry is the state you want — nothing stale to serve.
 
 **Your registry check is not the installer's check.** `curl`-ing the registry proves what the registry
 *serves*; it says nothing about what the installer *resolves*. Both checks are needed, and only the
 second one predicts what lands.
 
-Two caches are involved:
-
-```
-~/Library/Caches/pnpm/v11/metadata/registry.npmjs.org/<pkg>.jsonl        # abbreviated, used for resolution
-~/Library/Caches/pnpm/v11/metadata-full/registry.npmjs.org/<pkg>.jsonl   # full packument
-```
-
-Each is newline-delimited JSON; read its `dist-tags` line to see what the installer believes `latest`
-is:
-
-```bash
-python3 -c "
-import json,sys
-p='$HOME/Library/Caches/pnpm/v11/metadata/registry.npmjs.org/<pkg>.jsonl'
-for line in open(p):
-    if line.strip():
-        d=json.loads(line)
-        if d.get('dist-tags'): print(d['dist-tags'])"
-```
-
-**Fix — park the stale entries and let the next resolution fetch fresh:**
-
-```bash
-mkdir -p /tmp/pnpm-metadata-parked
-for v in metadata metadata-full; do
-  f="$HOME/Library/Caches/pnpm/v11/$v/registry.npmjs.org/<pkg>.jsonl"
-  [ -f "$f" ] && mv "$f" /tmp/pnpm-metadata-parked/"$v-<pkg>.jsonl"
-done
-```
-
-Then re-add in the app. A missing entry is the state you want: the resolver has nothing stale to serve.
-
-**A specifier written from a bad resolution outlives it.** The installer also rewrites the pin from
-whatever it resolved — `"dsh-openai-live": "0.3.0"` became `"^0.3.0"` — and `^0.3.0` is
-`>=0.3.0 <0.4.0`: it excludes `0.5.1` **whatever the cache says**. So clearing the cache is necessary
-and not sufficient. Either re-add by name so the installer rewrites the specifier from a good
-resolution, or set the specifier explicitly and re-resolve.
-
-**Check all three, in this order:** the cache (what the installer thinks `latest` is) → the pin in the
-profile's `package.json` (what it is *allowed* to resolve) → the installed manifest in `node_modules`
-(what actually landed). A green cache with a stale pin still installs the old version, and that
-combination looks exactly like the cache fix not working.
+**Check all four, in this order:** the gate (`minimumReleaseAge` plus the exclude list) → the
+`overrides:` rows → the installed manifest in `node_modules` (and the symbol inside it) → and only then
+the cache. A green registry behind a closed gate still installs the old version, and that looks exactly
+like everything else failing.

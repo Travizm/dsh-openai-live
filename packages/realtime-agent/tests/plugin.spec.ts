@@ -208,6 +208,7 @@ describe('the journal the agent writes', () => {
           providerCode: 'credit_balance_exhausted',
           retryable: false,
           remedy: 'add credit to the OpenAI account — the balance is exhausted',
+          link: 'https://platform.openai.com/settings/organization/billing/',
         },
       },
     )
@@ -222,6 +223,7 @@ describe('the journal the agent writes', () => {
       code: 'INSUFFICIENT_CREDIT',
       providerCode: 'credit_balance_exhausted',
       remedy: 'add credit to the OpenAI account — the balance is exhausted',
+      link: 'https://platform.openai.com/settings/organization/billing/',
       retryable: 'false',
     })
     // The message is where a key turns up — this plugin holds no credential to redact against, which is why

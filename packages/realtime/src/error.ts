@@ -84,6 +84,15 @@ export interface RealtimeFailureDetail {
   retryable?: boolean
   /** The provider's own error code, verbatim. Never a translated or inferred value. */
   providerCode?: string
+  /**
+   * Where the remedy is carried out, when there is a page for it.
+   *
+   * An absolute `https` URL, and the only detail field a user is invited to *visit* — so it names a page the
+   * provider publishes rather than one composed here. A remedy that says "add credit" without saying where is
+   * half an instruction, and the half nobody can guess: the URL is in the provider's own message, and the
+   * message is the thing this design refuses to carry.
+   */
+  link?: string
 }
 
 /** Expected `typeof` for each optional detail field. Data, so the check costs one loop and not a branch each. */
@@ -92,6 +101,7 @@ const DETAIL_FIELD_TYPES = Object.freeze({
   setting: 'string',
   providerCode: 'string',
   retryable: 'boolean',
+  link: 'string',
 })
 
 /**

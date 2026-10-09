@@ -799,6 +799,52 @@ describe('mountStrip', () => {
     expect(strip.state().notice).toBe('voice started')
   })
 
+  it('relays a session refusal with its remedy AND the page, instead of "no reason given"', async () => {
+    // The failure a user is most likely to meet: an account that cannot pay. The reply nests its own
+    // classified code, remedy and page, and leaves the control-level `reason` unset — so reading only `reason`
+    // made this panel say "refused: no reason given" at the exact moment it knew what to do.
+    const { element, strip, click } = panel({
+      replies: [
+        statusReply(),
+        {
+          ok: false,
+          verb: 'start',
+          refusal: {
+            code: 'INSUFFICIENT_CREDIT',
+            remedy: 'add credit to the OpenAI account — the balance is exhausted',
+            link: 'https://platform.openai.com/settings/organization/billing/',
+          },
+        },
+        statusReply(),
+      ],
+    })
+    await strip.refresh()
+    click({ action: 'voice-start' })
+    await new Promise((resolve) => { setTimeout(resolve, 0) })
+
+    expect(strip.state().notice)
+      .toBe('INSUFFICIENT_CREDIT: add credit to the OpenAI account — the balance is exhausted')
+    expect(strip.state().noticeLink).toBe('https://platform.openai.com/settings/organization/billing/')
+    // The page travels with the remedy: naming an action without naming where to take it is half an
+    // instruction. This anchor is the only `href` the panel emits.
+    expect(element.innerHTML)
+      .toContain('data-dsh-strip-link href="https://platform.openai.com/settings/organization/billing/"')
+    expect(element.innerHTML).toContain('rel="noreferrer noopener"')
+    expect(element.innerHTML).not.toContain('no reason given')
+  })
+
+  it('still says something for a session refusal that explained itself badly', async () => {
+    const { strip, click } = panel({ replies: [statusReply(), { ok: false, verb: 'start', refusal: {} }, statusReply()] })
+    await strip.refresh()
+    click({ action: 'voice-start' })
+    await new Promise((resolve) => { setTimeout(resolve, 0) })
+
+    // No code, no class, no remedy and no page: named as refused rather than invented, and no anchor is
+    // emitted for a remedy that named no destination. The same honesty the control-level path keeps below.
+    expect(strip.state().notice).toBe('refused: no reason given')
+    expect(strip.state().noticeLink).toBe('')
+  })
+
   it('connects and disconnects the microphone — the on-switch that used to be a console global', async () => {
     const page = fakePanel()
     let live = false

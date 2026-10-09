@@ -115,7 +115,19 @@ interface ProviderFailure {
   readonly code: RealtimeErrorCode
   readonly retryable: boolean
   readonly remedy: string
+  /** Where the remedy is carried out, when the provider publishes a page for it. */
+  readonly link?: string
 }
+
+/** The pages a user goes to in order to fix each kind of account problem.
+ *
+ * Named rather than repeated, because the same page answers more than one code, and a URL written twice is a
+ * URL that will eventually be corrected once. Exported because the adapter's own pre-flight refusal — no
+ * credential at all — needs the same page as the provider's refusal of one.
+ */
+export const BILLING_URL = 'https://platform.openai.com/settings/organization/billing/'
+export const API_KEYS_URL = 'https://platform.openai.com/api-keys'
+const LIMITS_URL = 'https://platform.openai.com/settings/organization/limits'
 
 /**
  * The provider's error codes, mapped to classes.
@@ -127,15 +139,53 @@ interface ProviderFailure {
  * Only codes the provider documents are listed. An unrecognised code is **not** guessed into a class
  * — see the caller.
  */
+/**
+ * One entry per class, rather than per code: the same user action answers several provider codes, and the
+ * provider's own code still travels beside the class in `providerCode`.
+ */
+const CREDENTIAL_REFUSED: ProviderFailure = {
+  code: 'CREDENTIAL_REJECTED',
+  retryable: false,
+  remedy: 'replace the configured OpenAI credential — it was refused',
+  link: API_KEYS_URL,
+}
+
+/** The balance and the quota are one action — the provider's code says which ran out, this says where to fix it. */
+const NO_CREDIT: ProviderFailure = {
+  code: 'INSUFFICIENT_CREDIT',
+  retryable: false,
+  remedy: 'add credit to the OpenAI account — the balance is exhausted',
+  link: BILLING_URL,
+}
+
+const QUOTA_EXHAUSTED: ProviderFailure = {
+  ...NO_CREDIT,
+  remedy: 'add credit to the OpenAI account — the quota is exhausted',
+}
+
+const NOT_ENTITLED: ProviderFailure = {
+  code: 'NOT_ENTITLED',
+  retryable: false,
+  remedy: 'request a model this OpenAI account is entitled to use',
+  link: LIMITS_URL,
+}
+
+const THROTTLED: ProviderFailure = {
+  code: 'RATE_LIMITED',
+  retryable: true,
+  remedy: 'retry after a short pause — the provider is throttling',
+  link: LIMITS_URL,
+}
+
 const PROVIDER_FAILURES: ReadonlyMap<string, ProviderFailure> = new Map([
-  ['invalid_api_key', { code: 'CREDENTIAL_REJECTED', retryable: false, remedy: 'replace the configured OpenAI credential — it was refused' }],
-  ['authentication_error', { code: 'CREDENTIAL_REJECTED', retryable: false, remedy: 'replace the configured OpenAI credential — it was refused' }],
-  ['insufficient_quota', { code: 'INSUFFICIENT_CREDIT', retryable: false, remedy: 'add credit to the OpenAI account — the quota is exhausted' }],
-  ['credit_balance_exhausted', { code: 'INSUFFICIENT_CREDIT', retryable: false, remedy: 'add credit to the OpenAI account — the balance is exhausted' }],
-  ['model_not_found', { code: 'NOT_ENTITLED', retryable: false, remedy: 'request a model this OpenAI account is entitled to use' }],
-  ['permission_denied', { code: 'NOT_ENTITLED', retryable: false, remedy: 'request a model this OpenAI account is entitled to use' }],
-  ['rate_limit_exceeded', { code: 'RATE_LIMITED', retryable: true, remedy: 'retry after a short pause — the provider is throttling' }],
-  ['too_many_requests', { code: 'RATE_LIMITED', retryable: true, remedy: 'retry after a short pause — the provider is throttling' }],
+  ['invalid_api_key', CREDENTIAL_REFUSED],
+  ['authentication_error', CREDENTIAL_REFUSED],
+  ['insufficient_quota', QUOTA_EXHAUSTED],
+  ['credit_balance_exhausted', NO_CREDIT],
+  ['model_not_found', NOT_ENTITLED],
+  ['permission_denied', NOT_ENTITLED],
+  ['rate_limit_exceeded', THROTTLED],
+  ['too_many_requests', THROTTLED],
 ])
 
 /**
@@ -177,6 +227,10 @@ export function toProviderError(event: ParsedServerEvent): RealtimeError {
       ...codeText === undefined ? {} : { providerCode: codeText },
       retryable: known?.retryable ?? false,
       ...known === undefined ? {} : { remedy: known.remedy },
+      // Carried because the remedy names an action and this names where to take it. The provider's own
+      // message contains the URL — and the message is exactly what this design will not carry, so the link
+      // has to survive on its own or the user is told what to do and not where.
+      ...known?.link === undefined ? {} : { link: known.link },
     },
   })
 }

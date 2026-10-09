@@ -447,6 +447,8 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
       return {
         code: error.code,
         ...error.detail?.remedy === undefined ? {} : { remedy: error.detail.remedy },
+        // What to do, and where to do it. A refusal that names an action and not its page is half relayed.
+        ...error.detail?.link === undefined ? {} : { link: error.detail.link },
       }
     }
     return { class: error instanceof Error ? error.name : typeof error }
@@ -474,6 +476,7 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
       ...detail?.providerCode === undefined ? {} : { providerCode: detail.providerCode },
       ...detail?.setting === undefined ? {} : { setting: detail.setting },
       ...detail?.remedy === undefined ? {} : { remedy: detail.remedy },
+      ...detail?.link === undefined ? {} : { link: detail.link },
       ...detail?.retryable === undefined ? {} : { retryable: String(detail.retryable) },
     }
   }

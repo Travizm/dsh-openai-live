@@ -197,6 +197,27 @@ describe('toProviderError', () => {
     expect(error?.code).toBe('CREDENTIAL_REJECTED')
     expect(error?.detail).toMatchObject({ providerCode: 'invalid_api_key', retryable: false })
     expect(error?.detail?.remedy).toBeDefined()
+    // The page a person acts on travels with the remedy. Written as a literal rather than read from the table
+    // under test: a check that derives its expectation from its subject can only ever agree with it.
+    expect(error?.detail?.link).toBe('https://platform.openai.com/api-keys')
+  })
+
+  it('sends an account with no credit to the billing page, not just the words "add credit"', () => {
+    const error = toProviderError({
+      type: 'error',
+      error: { code: 'credit_balance_exhausted', message: 'You have no credits remaining.' },
+    })
+
+    expect(error?.code).toBe('INSUFFICIENT_CREDIT')
+    expect(error?.detail).toMatchObject({
+      providerCode: 'credit_balance_exhausted',
+      retryable: false,
+      link: 'https://platform.openai.com/settings/organization/billing/',
+    })
+    // The provider's message contains this URL and the message is deliberately not carried — a provider
+    // message is where a key turns up. So the page has to survive on its own, or the remedy names an action
+    // and not its destination, which is the half nobody can guess.
+    expect(error?.detail?.remedy).toContain('add credit')
   })
 
   it('marks a throttle retryable, which a refusal is not', () => {

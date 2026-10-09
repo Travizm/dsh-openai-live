@@ -188,3 +188,33 @@ second one predicts what lands.
 `overrides:` rows → the installed manifest in `node_modules` (and the symbol inside it) → and only then
 the cache. A green registry behind a closed gate still installs the old version, and that looks exactly
 like everything else failing.
+
+## Three ways a release that was already published failed to install
+
+All three happened on **one** release, each only visible after the previous was fixed, and each wearing the
+costume of something else.
+
+**1. `pnpm publish` refuses any branch but the publish branch — and reports it with exit code 0.**
+`ERR_PNPM_GIT_UNCLEAN` (the version bump is uncommitted) and `ERR_PNPM_GIT_NOT_CORRECT_BRANCH` (you are on
+the release branch) are both real refusals, and both print `0` to the shell. Worse, what `tail` shows is the
+two-line *hint*; the error itself is at the **head** of the log, above an interactive `(Y/n)` prompt that a
+non-tty answers "no". So read the head, believe the log over the exit code, and sequence it: **commit the
+version bump → land it via PR → merge → publish from `main` on a clean tree.** Publishing runs *after* the
+merge precisely because it changes nothing in the repo.
+
+**2. `minimumReleaseAgeExclude` does not exempt the lockfile check.** With `minimumReleaseAge: 1440` and
+`minimumReleaseAgeStrict: True` (pnpm's default), an install whose *lockfile* already records versions
+published inside the window is refused outright — *"the lockfile contains entries that the active policies
+reject"* — **even when every one of them is already in the exclude list.** The exclusion governs
+*resolution*; the lockfile validation hard-fails regardless. For a release you published yourself minutes
+ago, the bypass is the mechanism **the app itself uses**, and its use is recorded: read
+`node_modules/.pnpm-workspace-state-v1.json` → `settings` — the authoritative copy of what pnpm actually
+applied, and the only place the *effective* overrides are visible. A last install that ran with
+`--config.minimumReleaseAge=0` leaves `settings.minimumReleaseAge: 0` there for ever after.
+
+**3. A version in the packument is not an installable version.** npm writes the version metadata *before* it
+replicates the tarball, so an install 404s on `…/-/<pkg>-<version>.tgz` for a version the packument lists,
+with a `dist.tarball` and a shasum, minutes after a `✅ Published` line. The packument is the wrong
+instrument for this question; **poll the tarball URL** (`curl -s -o /dev/null -w '%{http_code}'`) and install
+once it answers `200`. Measured: ~3 minutes for the tarball against ~2.5 for the packument, and the two lags
+are independent — a green packument behind a 404 tarball reads exactly like a failed publish.

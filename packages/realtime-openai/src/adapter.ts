@@ -7,7 +7,7 @@
 import { RealtimeAdapter, RealtimeError } from 'dsh-realtime'
 import type { RealtimeModelInfo, RealtimeProviderInfo, RealtimeSession } from 'dsh-realtime'
 import { OpenAiLiveSession } from './session.ts'
-import { toStarted, toProviderError } from './translate.ts'
+import { API_KEYS_URL, toStarted, toProviderError } from './translate.ts'
 import { isKnownServerEvent, parseServerEvent, sessionStart } from './wire.ts'
 import type { OpenAiLiveConfig, LiveSessionTarget, RealtimeTransportFactory } from './types.ts'
 
@@ -42,6 +42,9 @@ export function resolveApiKey(config: OpenAiLiveConfig): string {
           retryable: false,
           remedy: `set "${API_KEY_SETTING}" (or the OPENAI_LIVE_API_KEY environment variable) to an`
             + ' OpenAI key, then start the voice session again',
+          // The same page the provider's own refusal points at: one is "you have no key" and the other is
+          // "that key is wrong", and both are answered by the same URL.
+          link: API_KEYS_URL,
         },
       },
     )

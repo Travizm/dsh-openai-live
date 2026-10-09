@@ -112,6 +112,13 @@ export interface RealtimeSessionRefusal {
   readonly code?: string
   /** What to do about it, written to be relayed verbatim to whoever is trying to use the feature. */
   readonly remedy?: string
+  /**
+   * Where the remedy is carried out, when the provider publishes a page for it.
+   *
+   * The remedy says *what* to do and this says *where*: a UI that shows one without the other tells a user to
+   * add credit and leaves them to find the billing page themselves.
+   */
+  readonly link?: string
   /** The failing class, when there was no code to carry. A class, never an instance's message. */
   readonly class?: string
 }

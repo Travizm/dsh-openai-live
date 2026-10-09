@@ -142,6 +142,19 @@ export interface ControlReplyLike {
   readonly verb?: string
   readonly code?: string
   readonly reason?: string
+  /**
+   * A *session* refusal, nested inside the reply.
+   *
+   * A control-level refusal sets `code` and `reason`; a session-level one carries its own classified code, the
+   * remedy written to be relayed, and the page the remedy is carried out on. Reading only the top level made
+   * the panel answer the failure a user is most likely to meet with "refused: no reason given".
+   */
+  readonly refusal?: {
+    readonly code?: string
+    readonly class?: string
+    readonly remedy?: string
+    readonly link?: string
+  }
   readonly key?: string
   readonly value?: unknown
   readonly voice?: { readonly open: boolean; readonly provider?: string; readonly model?: string; readonly sessionId?: string } | null
@@ -519,6 +532,15 @@ export interface StripState {
   readonly notes: Readonly<Record<string, string>>
   /** Anything with no field to belong to — a transport failure, or what a start or stop produced. */
   readonly notice: string
+  /**
+   * Where a notice points, when it points anywhere.
+   *
+   * A remedy that says "add credit" without saying where is half an instruction, and the URL lives in the
+   * provider's own message — which this design never carries. So it travels as its own field and is rendered
+   * as an anchor: the one `href` this panel emits, and it comes from the provider table, never from text a
+   * provider sent. Optional, because most notices point nowhere.
+   */
+  readonly noticeLink?: string
   /** What the microphone is doing. */
   readonly audio: ClientAudioState
 }
@@ -587,7 +609,14 @@ export function renderStrip(state: StripState): string {
   const reply = state.reply
   const lines = [`<p data-dsh-strip-voice>${escapeHtml(summariseVoice(reply, state.audio))}</p>`]
   if (reply !== null) lines.push(`<p data-dsh-strip-route>${escapeHtml(summariseRoute(reply))}</p>`)
-  if (state.notice !== '') lines.push(`<p data-dsh-strip-notice>${escapeHtml(state.notice)}</p>`)
+  if (state.notice !== '') {
+    const link = state.noticeLink ?? ''
+    const anchor = link === ''
+      ? ''
+      : ` <a data-dsh-strip-link href="${escapeHtml(link)}" target="_blank"`
+        + ' rel="noreferrer noopener">open ↗</a>'
+    lines.push(`<p data-dsh-strip-notice>${escapeHtml(state.notice)}${anchor}</p>`)
+  }
   lines.push(`<p data-dsh-strip-buttons>${buttons(state.audio)}</p>`)
   // Restart-bound settings are omitted rather than shown read-only: the gate says no control at all, and a
   // row that cannot be changed is a row a reader will try to change.
@@ -711,9 +740,11 @@ export function mountStrip(deps: StripDeps): Strip {
   let reply: ControlReplyLike | null = null
   const notes: Record<string, string> = {}
   let notice = ''
+  /** The page the current notice points at, or empty. Set only where a refusal carried one. */
+  let noticeLink = ''
 
   const paint = (): void => {
-    deps.root.innerHTML = renderStrip({ reply, notes, notice, audio: deps.audio() })
+    deps.root.innerHTML = renderStrip({ reply, notes, notice, noticeLink, audio: deps.audio() })
   }
 
   const refresh = async (): Promise<void> => {
@@ -738,8 +769,18 @@ export function mountStrip(deps: StripDeps): Strip {
     try {
       const answer = await deps.request(frame)
       // A refusal carries the reason written to be relayed verbatim, so it is relayed rather than
-      // translated — including for a field frozen by its class.
-      line = answer.ok ? done : `${answer.code ?? 'refused'}: ${answer.reason ?? 'no reason given'}`
+      // translated — including for a field frozen by its class. A **session** refusal nests its own classified
+      // code, remedy and page and leaves the control-level `reason` unset, so reading only that answered the
+      // failure a user is most likely to meet with "refused: no reason given" — a panel saying nothing at the
+      // exact moment it knows what to do.
+      const refusal = answer.refusal
+      if (!answer.ok && refusal !== undefined) {
+        noticeLink = refusal.link ?? ''
+        line = `${refusal.code ?? refusal.class ?? 'refused'}: ${refusal.remedy ?? 'no reason given'}`
+      } else {
+        noticeLink = ''
+        line = answer.ok ? done : `${answer.code ?? 'refused'}: ${answer.reason ?? 'no reason given'}`
+      }
     } catch (error) {
       line = error instanceof Error ? error.message : String(error)
     }
@@ -757,6 +798,7 @@ export function mountStrip(deps: StripDeps): Strip {
       // Cleared per action: a notice from the last one is about the last one, and leaving it up would make
       // a successful reconnect read as a failed one.
       notice = ''
+      noticeLink = ''
       switch (action) {
         case 'refresh': await refresh(); return
         case 'disconnect': deps.disconnect(); await refresh(); return
@@ -777,7 +819,7 @@ export function mountStrip(deps: StripDeps): Strip {
 
   deps.root.addEventListener('click', onClick)
 
-  return { refresh, state: () => ({ reply, notes, notice, audio: deps.audio() }) }
+  return { refresh, state: () => ({ reply, notes, notice, noticeLink, audio: deps.audio() }) }
 }
 
 /**

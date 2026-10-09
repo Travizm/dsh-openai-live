@@ -101,7 +101,9 @@ sent. Endpointing is the engine's job — a commit is not merely unnecessary, it
    intent from the input transcript plus application state.
 4. **Appends are capped at 500 tokens.**
 5. **Interruption does not cancel delegated work.** Handle late and orphaned results.
-6. **Usage is audio-seconds**, emitted ~once/minute, final at `session.closed`.
+6. **Usage is audio-seconds**, emitted every **~15 s** (measured, `docs/usable-window.md`) — not once a
+   minute, and the figure does **not** accumulate over the session: `session.closed` carries the same value
+   as the last update, and a 90-second session closed at `{"seconds": 7}`.
 7. **Errors name their field.** They are the fastest available specification — read them literally.
 
 ## Entitlement and billing (gotcha with a free check)

@@ -90,8 +90,9 @@ are kept as evidence for that reason, and the probe now runs the scope under tes
    measured as *never placed*. The placement window is the model's **generation**, not its turn's
    lifetime, and a model waiting for a delegation is not generating.
 2. **This makes S3 story 1 the prerequisite rather than the neighbour.** The usable window is now the
-   measured question: how long does the model keep generating after it decides to delegate, and what do the
-   appends do at 3 s, 45 s and 90 s? `completion tracking the local setting` would mean ownership of the
+   measured question — **and it is answered: see [story 1](usable-window.md)**, which puts the window at
+   ≈2.7 s past `delegation.created` with a ≈2 s send deadline, and names the observation that decided it.
+   `completion tracking the local setting` would mean ownership of the
    timeout is real; `provider expiry independent of it` would refute ownership of the whole window — and
    this probe adds a third possibility the design must test: **the placement window closing long before
    either**, which is what runs 2 and 3 already saw at 4.4 s and 3.3 s respectively.

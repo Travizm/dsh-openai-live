@@ -40,6 +40,17 @@ export type JournalKind =
   /** A voice session opened, or was asked to and could not. */
   | 'session.opened' | 'session.closed' | 'session.failed'
   /**
+   * A voice session was asked for — recorded by whoever asked, at the moment of asking.
+   *
+   * The ask and its outcome are recorded by **different plugins** deliberately. The asker always knows it
+   * asked and the opener always knows what came of it, so the pair brackets a hand-off that crosses a plugin
+   * boundary. A request with no outcome after it therefore says something the outcome alone cannot: that
+   * nothing on the other side ran. Without this entry a session nobody asked for and an ask that reached no
+   * listener are identical — three entries of silence — and the difference between them is the whole
+   * diagnosis.
+   */
+  | 'session.requested'
+  /**
    * The audio route accepted a socket, refused one and said why, or watched one leave.
    *
    * A close is recorded rather than left to be inferred from the absence of later entries: a reader

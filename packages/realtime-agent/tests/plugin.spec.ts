@@ -157,6 +157,65 @@ describe('the journal the agent writes', () => {
     // belongs to the page. A kind named for it would be the diagnostics layer lying about itself.
     expect(journal.snapshot().every(entry => !entry.kind.includes('played'))).toBe(true)
   })
+
+  it('records the ask and the refusal when a boot-time open fails, so a restart cannot be silent', async () => {
+    const mounted = harness()
+    mounted.adapter.refuseOpen = true
+
+    apply(mounted.ctx, Config({ provider: 'fake', autoStart: true }) as RealtimeAgentConfig)
+    await tick()
+
+    // This path used to raise the failure on the bus and record nothing, so a journal read after a restart
+    // showed no trace of an open that was attempted and refused — the same three entries of silence as a
+    // session nobody asked for. It is routed through `requestSession` for exactly that reason.
+    const kinds = mounted.journal.snapshot().map(entry => entry.kind)
+    expect(kinds).toContain('session.requested')
+    expect(mounted.journal.snapshot().find(entry => entry.kind === 'session.requested')?.detail)
+      .toEqual({ trigger: 'autostart' })
+    expect(mounted.journal.snapshot().find(entry => entry.kind === 'session.failed')?.detail)
+      .toEqual({ class: 'Error', trigger: 'autostart' })
+  })
+
+  it('records no ask of its own for a request that arrived as an event', async () => {
+    const { ctx: context, adapter, journal } = harness()
+    apply(context, Config({ provider: 'fake' }) as RealtimeAgentConfig)
+    await tick()
+
+    adapter.refuseOpen = true
+    context.emit('realtime-agent/start')
+    await tick()
+
+    // The asker records the ask — the route does, on the connection that prompted it — so echoing it here
+    // would write two requests for one, and the pair that brackets the hand-off would read as a duplicate.
+    expect(journal.snapshot().some(entry => entry.kind === 'session.requested')).toBe(false)
+    expect(journal.snapshot().find(entry => entry.kind === 'session.failed')?.detail)
+      .toEqual({ class: 'Error' })
+  })
+
+  it('records what it resolved, so a journal can be read without the profile beside it', async () => {
+    const { ctx: context, journal } = harness()
+    apply(context, Config({
+      provider: 'fake',
+      model: 'gpt-live-1',
+      voice: 'marin',
+      autoStart: true,
+      instructions: SENTINEL_TEXT,
+    }) as RealtimeAgentConfig)
+    await tick()
+
+    expect(journal.snapshot().find(entry => entry.kind === 'config.resolved')?.detail).toEqual({
+      plugin: 'dsh-realtime-agent',
+      provider: 'fake',
+      model: 'gpt-live-1',
+      voice: 'marin',
+      autoStart: 'true',
+      delegationTimeoutMs: '10000',
+      maxTranscriptChars: '6000',
+    })
+    // `instructions` is authored text of unbounded length: the journal records what happened, rather than
+    // copying the configuration into itself. The sentinel is the same one the leak test uses.
+    expect(JSON.stringify(journal.snapshot())).not.toContain(SENTINEL_TEXT)
+  })
 })
 
 describe('plugin shape', () => {

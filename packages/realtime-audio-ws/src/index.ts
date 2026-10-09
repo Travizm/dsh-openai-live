@@ -43,6 +43,14 @@ import {
 } from './types.ts'
 
 export * from './types.ts'
+/**
+ * The query parameter carrying the capability token.
+ *
+ * Published with the route rather than kept internal: nothing can address the route without it, and a
+ * consumer restating the literal is a consumer that drifts. It is one string; the rest of `injection.ts`
+ * stays where it is.
+ */
+export { TOKEN_PARAM } from './injection.ts'
 export { attachAudioSocket, toBytes, type AudioSocketBridgeDeps } from './bridge.ts'
 export { createUpgradeAcceptor, rejectUpgrade, type UpgradeAcceptor } from './upgrade.ts'
 export { diagnosticsRoute, type DiagnosticsDeps, type DiagnosticsJournal, type DiagnosticsRoute } from './diagnostics.ts'

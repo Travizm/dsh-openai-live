@@ -40,7 +40,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { RealtimeDelegationSettlement } from 'dsh-realtime'
 import { REALTIME_ERROR_CODES, RealtimeError, redact, type Journal } from 'dsh-realtime'
 import type { DelegationAnswer, DelegationRequest } from 'dsh-realtime-agent'
-import { createTurnRunner, type TurnOutcome } from './turn.ts'
+import { createTurnRunner, phraseTable, type MilestonePolicy, type TurnOutcome } from './turn.ts'
 import type { RealtimeResponderConfig, SessionEventLike } from './types.ts'
 
 export * from './types.ts'
@@ -94,6 +94,31 @@ export const Config = Schema.object({
   maxPromptChars: Schema.number().default(4_000).description('Character budget for the prompt handed to the agent'),
   answerTimeoutMs: Schema.number().default(45_000).description('How long to wait for the agent before declining'),
   redactSecrets: Schema.array(Schema.string()).default([]).description('Values that must never be spoken or carried on the bus'),
+  // Narration. The words are content — this plugin's own prose, keyed by the tool's name — and the three
+  // fields under them are operational and live. `milestonePhrases` is deliberately **not** a live setting:
+  // a phrase table is prose a user edits in `cordis.yml` beside `instructions`, and a text box in a call
+  // panel is the wrong control for it.
+  //
+  // Flat `tool=phrase` strings rather than a nested object schema, because a schema containing an object
+  // cannot be *named* by the declaration this package emits (`TS2883`: the inferred type reaches
+  // schemastery's `Dict` through cosmokit) — and a config shape that cannot be published is not a config
+  // shape. See `phraseTable` for what a malformed entry does.
+  milestonePhrases: Schema.array(Schema.string()).default([
+    'read_file=Reading a file.',
+    'write_file=Writing a file.',
+    'patch=Editing a file.',
+    'search_files=Searching the files.',
+    'terminal=Running a command.',
+    'bash=Running a command.',
+    'execute_code=Running some code.',
+    'web_search=Looking that up.',
+    'web_extract=Reading a page.',
+    'delegate_task=Working on that.',
+  ]).description('Spoken phrase for each tool, written `tool=phrase` — e.g. `read_file=Reading a file.`'),
+  milestoneFallback: Schema.string().default('Working on it.').description('Spoken phrase for a tool the phrase table does not name'),
+  milestoneIntervalMs: Schema.number().default(4_000).description('Shortest gap between two spoken milestones'),
+  maxSpokenMilestones: Schema.number().default(3).description('Most milestones spoken aloud in one turn'),
+  speakMilestones: Schema.boolean().default(true).description('Speak a step aloud as the agent works, rather than only carrying it'),
 })
 
 /**
@@ -182,6 +207,12 @@ interface LiveValues {
   maxPromptChars: number
   answerTimeoutMs: number
   redactSecrets: readonly string[]
+  /** The narration phrase table as written in config, and the three operational fields beside it. */
+  milestonePhrases: readonly string[]
+  milestoneFallback: string
+  milestoneIntervalMs: number
+  maxSpokenMilestones: number
+  speakMilestones: boolean
 }
 
 /**
@@ -219,6 +250,29 @@ export function apply(ctx: Context, config: RealtimeResponderConfig): void {
     maxPromptChars: config.maxPromptChars,
     answerTimeoutMs: config.answerTimeoutMs,
     redactSecrets: config.redactSecrets,
+    milestonePhrases: [...config.milestonePhrases],
+    milestoneFallback: config.milestoneFallback,
+    milestoneIntervalMs: config.milestoneIntervalMs,
+    maxSpokenMilestones: config.maxSpokenMilestones,
+    speakMilestones: config.speakMilestones,
+  }
+
+  /**
+   * The narration policy as it stands for the next turn.
+   *
+   * The phrase is chosen from the **tool's name** and nothing else. A tool's arguments are the model's own
+   * words, and the one path this plugin lets model-authored text take to a user's ear is the answer, which
+   * is redacted on the way out — so no phrase is ever derived from them, however tempting the detail in
+   * them looks.
+   */
+  const milestonePolicy = (): MilestonePolicy => {
+    const table = phraseTable(live.milestonePhrases)
+    return {
+      phrase: (toolName: string) => table.get(toolName) ?? live.milestoneFallback,
+      intervalMs: live.milestoneIntervalMs,
+      maxSpoken: live.maxSpokenMilestones,
+      speak: live.speakMilestones,
+    }
   }
 
   /**
@@ -286,6 +340,30 @@ export function apply(ctx: Context, config: RealtimeResponderConfig): void {
           journal.addSecrets(value)
         },
       },
+      {
+        field: 'speakMilestones',
+        kind: 'boolean',
+        scope: 'live',
+        describe: 'Speak a step aloud as the agent works, rather than only carrying it silently',
+        get: () => live.speakMilestones,
+        set: (value: boolean) => { live.speakMilestones = value },
+      },
+      {
+        field: 'maxSpokenMilestones',
+        kind: 'number',
+        scope: 'live',
+        describe: 'Most steps spoken aloud in one turn',
+        get: () => live.maxSpokenMilestones,
+        set: (value: number) => { live.maxSpokenMilestones = requireCount('maxSpokenMilestones', 'steps', value) },
+      },
+      {
+        field: 'milestoneIntervalMs',
+        kind: 'number',
+        scope: 'live',
+        describe: 'Shortest gap between two spoken steps',
+        get: () => live.milestoneIntervalMs,
+        set: (value: number) => { live.milestoneIntervalMs = requireCount('milestoneIntervalMs', 'milliseconds', value) },
+      },
     ])
     yield () => { release() }
   }, 'realtime-responder.settings')
@@ -314,6 +392,12 @@ export function apply(ctx: Context, config: RealtimeResponderConfig): void {
         listener(event as SessionEventLike, typeof session?.id === 'string' ? session.id : '')
       },
     ),
+    // Narration. A step is *emitted* rather than appended here: the agent holds the session, and the bus is
+    // how the two halves of this bundle already talk — the settlement of a failed turn travels the same way.
+    milestone: milestonePolicy,
+    onStep: (step) => {
+      ctx.emit('realtime-agent/delegation-progress', { id: step.id, channel: step.channel, text: step.text })
+    },
   })
 
   // A listener is a contribution like any other: the fiber that registered it releases it, so there is

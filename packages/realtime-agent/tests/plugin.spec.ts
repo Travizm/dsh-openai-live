@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
-import { RealtimeAdapter, RealtimeRuntime, REALTIME_ERROR_CODES, RealtimeError, type Journal, type RealtimeSession, type RealtimeSessionHandlers, type RealtimeSessionOptions } from 'dsh-realtime'
+import { RealtimeAdapter, RealtimeRuntime, REALTIME_ERROR_CODES, RealtimeError, type Journal, type RealtimeDelegationProgress, type RealtimeSession, type RealtimeSessionHandlers, type RealtimeSessionOptions } from 'dsh-realtime'
 import * as agent from '../src/index.ts'
 import { Config, createHandlers, apply } from '../src/index.ts'
 import { TranscriptBuffer } from '../src/transcript.ts'
@@ -16,6 +16,8 @@ class RecordingAdapter extends RealtimeAdapter {
   closed = 0
   /** Make the next audio write fail, as a session that closed mid-flight does. */
   refuseAudio = false
+  /** Make the next append fail, as a provider that will not take it does. */
+  refuseAppend = false
   /** Make opening fail, as a provider that refuses the session does. */
   refuseOpen = false
   /** Make closing fail, as a session that is already gone does. */
@@ -45,10 +47,12 @@ class RecordingAdapter extends RealtimeAdapter {
       unmuteInput(): void {},
       appendCommentary(text, delegationId) {
         appends.push({ kind: 'commentary', text, delegationId })
+        if (adapter.refuseAppend) return Promise.reject(new Error('the provider refused the append'))
         return Promise.resolve()
       },
       appendThinking(text, delegationId) {
         appends.push({ kind: 'thinking', text, delegationId })
+        if (adapter.refuseAppend) return Promise.reject(new Error('the provider refused the append'))
         return Promise.resolve()
       },
       appendInstructions: () => Promise.resolve(),
@@ -342,6 +346,91 @@ describe('apply', () => {
     adapter.handlers?.onDelegation?.({ id: 'item_2', target: 'client', offsetMs: 0 })
     await tick()
     expect(adapter.appends).toHaveLength(1)
+  })
+})
+
+describe('narrating a turn', () => {
+  /** A live session whose delegations are answered, so a turn stays open long enough to be stepped. */
+  const running = async () => {
+    const mounted = harness()
+    mounted.ctx.on('realtime-agent/delegation', () => ({ text: 'Staging is green.', mode: 'spoken' }))
+    apply(mounted.ctx, Config({ provider: 'fake', autoStart: true }) as RealtimeAgentConfig)
+    await tick()
+    return mounted
+  }
+
+  const step = (id: string, channel: 'commentary' | 'thinking' = 'commentary'): RealtimeDelegationProgress =>
+    ({ id, channel, text: 'Reading a file.' })
+
+  it('carries a step to the session while the turn is still waiting', async () => {
+    const { ctx: context, adapter } = await running()
+    adapter.handlers?.onDelegation?.({ id: 'item_1', target: 'client', offsetMs: 0 })
+    // Emitted synchronously, while the delegation is outstanding: the only moment the provider will place
+    // an append at all is while it is generating, which is while this turn is still open.
+    context.emit('realtime-agent/delegation-progress', step('item_1'))
+    await tick()
+
+    expect(adapter.appends).toEqual([
+      { kind: 'commentary', text: 'Reading a file.', delegationId: 'item_1' },
+      { kind: 'commentary', text: 'Staging is green.', delegationId: 'item_1' },
+    ])
+  })
+
+  it('carries a silent step the same way — the channel is the emitter\u2019s choice, not this half\u2019s', async () => {
+    const { ctx: context, adapter } = await running()
+    adapter.handlers?.onDelegation?.({ id: 'item_1', target: 'client', offsetMs: 0 })
+    context.emit('realtime-agent/delegation-progress', step('item_1', 'thinking'))
+    await tick()
+
+    expect(adapter.appends[0]).toEqual({ kind: 'thinking', text: 'Reading a file.', delegationId: 'item_1' })
+  })
+
+  it('acknowledges a step it placed, on the same rule as an answer', async () => {
+    const { ctx: context, adapter, journal } = await running()
+    adapter.handlers?.onDelegation?.({ id: 'item_1', target: 'client', offsetMs: 0 })
+    context.emit('realtime-agent/delegation-progress', step('item_1'))
+    await tick()
+
+    const acknowledged = journal.snapshot().filter(entry => entry.kind === 'append.acknowledged')
+    expect(acknowledged.map(entry => entry.detail.append)).toEqual(['commentary', 'commentary'])
+  })
+
+  it('drops a step for a delegation nobody is waiting on', async () => {
+    const { ctx: context, adapter } = await running()
+    context.emit('realtime-agent/delegation-progress', step('item_9'))
+    await tick()
+
+    expect(adapter.appends).toEqual([])
+  })
+
+  it('drops a step that arrives after the turn settled, rather than talking into the next one', async () => {
+    const { ctx: context, adapter } = await running()
+    adapter.handlers?.onDelegation?.({ id: 'item_1', target: 'client', offsetMs: 0 })
+    await tick()
+    const answered = adapter.appends.length
+
+    context.emit('realtime-agent/delegation-progress', step('item_1'))
+    await tick()
+
+    expect(adapter.appends).toHaveLength(answered)
+  })
+
+  it('records a step the provider does not take, so a dropped narration is not silent', async () => {
+    const { ctx: context, adapter, journal } = await running()
+    adapter.refuseAppend = true
+    adapter.handlers?.onDelegation?.({ id: 'item_1', target: 'client', offsetMs: 0 })
+    context.emit('realtime-agent/delegation-progress', step('item_1'))
+    await tick()
+
+    const dropped = journal.snapshot().find(entry => entry.kind === 'progress.dropped')
+    expect(dropped?.detail).toEqual({ id: 'item_1', channel: 'commentary' })
+  })
+
+  it('does nothing for a step when no session is open', async () => {
+    const { ctx: context } = harness()
+    apply(context, Config({ provider: 'fake' }) as RealtimeAgentConfig)
+
+    expect(() => { context.emit('realtime-agent/delegation-progress', step('item_1')) }).not.toThrow()
   })
 })
 

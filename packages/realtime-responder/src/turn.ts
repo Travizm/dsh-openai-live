@@ -49,6 +49,15 @@ export interface TurnDeps {
    * Returns the disposer that stops observing.
    */
   readonly subscribe: (listener: (event: SessionEventLike, sessionId: string) => void) => () => void
+  /**
+   * The narration policy, read once at the start of the turn. Absent means no narration at all.
+   *
+   * Absent rather than defaulted, so a caller that has not thought about narration gets silence rather than
+   * a plugin deciding on its own to talk during someone's conversation.
+   */
+  readonly milestone?: () => MilestonePolicy
+  /** Where a step is reported, once the policy has decided whether it is spoken or silent. */
+  readonly onStep?: (step: TurnStep) => void
 }
 
 /**
@@ -68,6 +77,38 @@ export type TurnOutcome =
   | { readonly kind: 'refused'; readonly reason: string }
   /** The admission was accepted and nothing came back inside the bound. */
   | { readonly kind: 'timeout' }
+
+/**
+ * One step of a delegated turn, ready to be narrated.
+ *
+ * The two channels are the seam's own distinction, reused rather than reinvented: `commentary` is spoken
+ * aloud, `thinking` is context the model may use without saying it. "Spoken for milestones, silent for
+ * chatter" is a choice about **this field** and nothing else.
+ */
+export interface TurnStep {
+  /** The delegation this step belongs to. Carried so the narrator can address the right turn. */
+  readonly id: string
+  readonly channel: 'commentary' | 'thinking'
+  readonly text: string
+}
+
+/**
+ * What may be said, as it stands when a turn starts.
+ *
+ * A *policy* rather than a bare set of numbers, so the split is explicit: the words are a configuration
+ * question and belong to the plugin, while pacing is per-turn state and belongs to the runner. Every field
+ * is read once, at the start of the turn, like the session and the budgets beside it.
+ */
+export interface MilestonePolicy {
+  /** The phrase to say for a tool, by the tool's own name. Never derives words from tool arguments. */
+  readonly phrase: (toolName: string) => string
+  /** Shortest gap between two spoken milestones. */
+  readonly intervalMs: number
+  /** Most milestones spoken aloud in one turn. */
+  readonly maxSpoken: number
+  /** When false every step is silent — the off switch, which is not the same as a cap of zero. */
+  readonly speak: boolean
+}
 
 /**
  * Build the prompt for one delegated turn from the conversation the model sent.
@@ -117,6 +158,48 @@ export function answerText(event: SessionEventLike): string | undefined {
 }
 
 /**
+ * The tool a session event names, when it names one at all.
+ *
+ * **A `tool/call` is not a surface event**, so it carries no `surfaceOp` — a filter written the way
+ * {@link answerText}'s is (`surfaceOp === 'append'`) drops every step, silently and for ever, and the
+ * narration simply never happens. The event `type` is the whole filter, which is why this is a function
+ * with a test rather than an inline condition.
+ * @param event - one session event.
+ * @returns the tool's name, or `undefined` when this event is not a tool call.
+ */
+export function stepTool(event: SessionEventLike): string | undefined {
+  if (event.type !== 'tool/call') return undefined
+  const name = event.data?.name
+  return typeof name === 'string' && name.length > 0 ? name : undefined
+}
+
+/**
+ * The phrase table that a list of `tool=phrase` entries describes.
+ *
+ * Configuration is a flat list of strings because a schema containing an object cannot be *named* by the
+ * declaration this package emits, and a config shape that cannot be published is not a config shape.
+ *
+ * The consequence is worth stating rather than discovering: an entry with no `=`, an empty name, or an
+ * empty phrase names **nothing**, so it can attribute a phrase to no tool at all, and that tool falls
+ * through to the fallback exactly as an unlisted tool does. Degrading to the fallback is the whole of it —
+ * no entry is ever half-applied, and a mistyped entry can never speak a tool's name as if it were prose.
+ * @param entries - the configured `tool=phrase` strings.
+ * @returns the phrases, by tool name. Only entries that name a tool and a phrase appear.
+ */
+export function phraseTable(entries: readonly string[]): Map<string, string> {
+  const table = new Map<string, string>()
+  for (const entry of entries) {
+    const separator = entry.indexOf('=')
+    if (separator <= 0) continue
+    const tool = entry.slice(0, separator).trim()
+    const phrase = entry.slice(separator + 1).trim()
+    if (tool.length === 0 || phrase.length === 0) continue
+    table.set(tool, phrase)
+  }
+  return table
+}
+
+/**
  * The controller's own words for a refusal, or a stated absence.
  *
  * A rejection that carries no message is still a rejection, and naming it is more useful to a reader
@@ -155,10 +238,31 @@ export function createTurnRunner(deps: TurnDeps): (request: DelegationRequest) =
     let settle!: (text: string | undefined) => void
     const answered = new Promise<string | undefined>((resolve) => { settle = resolve })
     const timer = setTimeout(() => { settle(undefined) }, deps.answerTimeoutMs())
+    // Narration state, per turn: how many milestones have been spoken, and when the last one was. The
+    // policy is read once, with the session and the budgets, so a change lands on the next turn.
+    const milestone = deps.milestone?.()
+    const onStep = deps.onStep
+    let spoken = 0
+    let lastSpokenAt = 0
     const unsubscribe = deps.subscribe((event, eventSessionId) => {
       // Scoped here, from the id the subscriber supplies: the owning session is the listener's first
       // argument and is never a field on the event, so this is the only place the comparison can be made.
       if (eventSessionId !== sessionId) return
+      if (milestone !== undefined && onStep !== undefined) {
+        const tool = stepTool(event)
+        if (tool !== undefined) {
+          const now = Date.now()
+          // The first milestone is never held back by the interval: a turn that has said nothing yet has
+          // nothing to be paced against, and "I am on it" is the one update worth having immediately.
+          const speaks = milestone.speak && spoken < milestone.maxSpoken
+            && (spoken === 0 || now - lastSpokenAt >= milestone.intervalMs)
+          if (speaks) {
+            spoken += 1
+            lastSpokenAt = now
+          }
+          onStep({ id: request.id, channel: speaks ? 'commentary' : 'thinking', text: milestone.phrase(tool) })
+        }
+      }
       const text = answerText(event)
       if (text === undefined) return
       settle(text)

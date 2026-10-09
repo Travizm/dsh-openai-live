@@ -30,6 +30,22 @@ export interface RealtimeResponderConfig {
    * honest, but not sufficient, and this is the difference between those two words.
    */
   readonly redactSecrets: readonly string[]
+  /**
+   * Spoken phrase for each tool, keyed by the tool name the session reports.
+   *
+   * The only source of a spoken step. A tool's `arguments` are the model's own text and are never read
+   * here, however tempting the detail in them: the one path this bundle lets model-authored words take to
+   * a user's ear is the answer, and that is redacted on the way out.
+   */
+  readonly milestonePhrases: readonly string[]
+  /** Spoken phrase for a tool the phrase table does not name. */
+  readonly milestoneFallback: string
+  /** Shortest gap between two spoken milestones, in milliseconds. */
+  readonly milestoneIntervalMs: number
+  /** Most milestones spoken aloud in one turn. */
+  readonly maxSpokenMilestones: number
+  /** When false every step is silent — an off switch, which is not the same as a cap of zero. */
+  readonly speakMilestones: boolean
 }
 
 /**
@@ -41,11 +57,17 @@ export interface RealtimeResponderConfig {
  * nothing, silently, for ever, and every delegated turn would end in `timeout`. The session arrives as the
  * listener's first argument; `TurnDeps.subscribe` forwards its id beside the event for exactly that reason.
  *
- * `surfaceOp: 'append'` matters: a session log can replay the same message on a surface operation other
- * than an append, and answering a delegation with a replayed message would speak history as news.
+ * `surfaceOp: 'append'` matters for a *message*: a session log can replay the same message on a surface
+ * operation other than an append, and answering a delegation with a replayed message would speak history as
+ * news. It is deliberately **not** required for `tool/call`, which is not a surface event at all and
+ * therefore carries no `surfaceOp` — requiring one there would drop every step, silently.
  */
 export interface SessionEventLike {
   readonly type?: unknown
   readonly surfaceOp?: unknown
-  readonly data?: { readonly message?: { readonly content?: unknown } }
+  readonly data?: {
+    readonly message?: { readonly content?: unknown }
+    /** `tool/call` carries the tool's own name and its raw, unparsed arguments. */
+    readonly name?: unknown
+  }
 }

@@ -234,3 +234,28 @@ export interface RealtimeDelegationSettlement {
   /** The controller's own reason, redacted, when the outcome is `refused`. */
   readonly reason?: string
 }
+
+/**
+ * One progress step of a delegated turn, on its way to an ear or to the model's own context.
+ *
+ * The vocabulary of a **narration**, not of the protocol: the provider's append is the transport, and this
+ * is what a plugin says through it. `channel` reuses the distinction the seam already carries on an answer
+ * — `commentary` is spoken aloud, `thinking` is context the model may use without saying it — because
+ * "spoken for milestones, silent for chatter" is a choice about that one field.
+ *
+ * Deliberately carries **no tool arguments, ever**. A step is derived from the tool's own *name* against a
+ * configured phrase table; a tool's raw arguments are model-authored text, and the only model-authored text
+ * that may reach a user's ear is the answer, which is redacted on the way out.
+ *
+ * How long the window lasts, and why a step is placed at all, is measured in
+ * [`usable-window.md`](https://github.com/Travizm/dsh-openai-live/blob/main/docs/usable-window.md): a step
+ * is placed while the session's timeline advances, which is while the client's microphone is streaming.
+ */
+export interface RealtimeDelegationProgress {
+  /** The delegation this step belongs to. A step for an id nobody is waiting on is dropped. */
+  readonly id: string
+  /** `commentary` is spoken; `thinking` is context the model may keep to itself. */
+  readonly channel: 'commentary' | 'thinking'
+  /** The words — authored by configuration, never by the model. */
+  readonly text: string
+}

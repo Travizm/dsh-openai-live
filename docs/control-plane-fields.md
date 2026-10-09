@@ -34,6 +34,9 @@ steers* was a boot-time constant.
 | `maxPromptChars` | responder | every turn |
 | `maxTranscriptChars` | agent | every eviction, and so every delegation |
 | `redactSecrets` | responder | every emission |
+| `speakMilestones` | responder | every turn — whether a step is spoken or only carried |
+| `maxSpokenMilestones` | responder | every turn |
+| `milestoneIntervalMs` | responder | every turn |
 | `openSessionOnConnect` | audio | the next connect, not this one |
 
 **Restart-bound — a route registration, a server limit, or a field whose only read site is the boot.
@@ -49,6 +52,14 @@ reads it, so a field with no read site a change can reach is restart-bound howev
 written down; classifying it live would have shipped a control that silently did nothing, which is the
 one thing this gate exists to prevent. It is registered as restart-bound (below), so a `set` on it is
 **refused with the restart it needs** rather than accepted and ignored.
+
+## Two fields deliberately off the registry
+
+The responder's `milestonePhrases` and `milestoneFallback` are read every turn, so they are live in the only
+sense that matters — but they are **not** declared on the registry and have **no** control. A phrase table is
+*prose*: the kind of value a user writes down once in `cordis.yml` beside `instructions`, not one they poke
+during a call. A control is for a value somebody changes while it runs; putting a text box on a phrase table
+would be an affordance for an edit nobody makes mid-conversation.
 
 ## How the gate is enforced, not just written down
 

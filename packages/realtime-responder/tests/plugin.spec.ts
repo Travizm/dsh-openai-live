@@ -116,12 +116,17 @@ describe('answering a delegation', () => {
     expect('reason' in settled[0]!).toBe(false)
   })
 
-  it('declines when the controller refuses the turn, rather than hanging the voice model', async () => {
+  it("speaks the controller's refusal, rather than hanging the voice model", async () => {
     const { context, controller } = harness()
     controller.refusal = 'session/model-unavailable'
     apply(context, Config({ sessionId: 'sess-1', answerTimeoutMs: 1_000 }) as RealtimeResponderConfig)
 
-    await expect(context.serial('realtime-agent/delegation', request)).resolves.toBeUndefined()
+    // S1 story 3. Returning undefined here — the old behaviour — leaves the user hearing the agent's
+    // flat notice and nothing else, which is the report this layer exists to replace.
+    await expect(context.serial('realtime-agent/delegation', request)).resolves.toEqual({
+      text: 'session/model-unavailable',
+      mode: 'spoken',
+    })
   })
 
   it("carries the controller's reason onto the bus — the answer to the open question", async () => {
@@ -154,6 +159,52 @@ describe('answering a delegation', () => {
     // The useful part survives: redaction must not cost the diagnosis.
     expect(reason).toContain('invalid api key')
     expect(reason).toContain('gpt-live-1')
+  })
+
+  it('redacts a credential out of the reason before it is spoken', async () => {
+    // The same sink, reached by the other path. Speech leaves the process entirely — it is the one
+    // surface with no second chance — so it is redacted where the reason is produced, not on the way out.
+    const { context, controller } = harness()
+    controller.refusal = `invalid api key ${SENTINEL_KEY} for model gpt-live-1`
+    apply(context, Config({ sessionId: 'sess-1', answerTimeoutMs: 1_000 }) as RealtimeResponderConfig)
+
+    const answer = await context.serial('realtime-agent/delegation', request) as { readonly text: string }
+
+    expect(answer.text).not.toContain(SENTINEL_TEXT)
+    expect(answer.text).toContain('[redacted]')
+    expect(answer.text).toContain('invalid api key')
+    expect(answer.text).toContain('gpt-live-1')
+  })
+
+  it('redacts a secret with no shape, when the profile names it', async () => {
+    // The route's capability token is 32 random bytes of base64url — no prefix, no padding, no
+    // structure — so the shape arm cannot find it and only naming it can. Derived at runtime, never
+    // written: gitleaks fails on the entropy of a realistic token even with no prefix at all.
+    const token = Buffer.from(Uint8Array.from({ length: 32 }, (_unused, index) => (index * 5 + 11) % 256)).toString('base64url')
+    const { context, controller } = harness()
+    controller.refusal = `upgrade refused for token ${token}`
+    apply(context, Config({
+      sessionId: 'sess-1',
+      answerTimeoutMs: 1_000,
+      redactSecrets: [token],
+    }) as RealtimeResponderConfig)
+
+    const answer = await context.serial('realtime-agent/delegation', request) as { readonly text: string }
+
+    expect(answer.text).not.toContain(token)
+    expect(answer.text).toContain('[redacted]')
+    expect(answer.text).toContain('upgrade refused for token')
+  })
+
+  it('bounds the reason, so a controller error cannot flood the bus or the ear', async () => {
+    const { context, controller, settled } = harness()
+    controller.refusal = 'x'.repeat(600)
+    apply(context, Config({ sessionId: 'sess-1', answerTimeoutMs: 1_000 }) as RealtimeResponderConfig)
+
+    const answer = await context.serial('realtime-agent/delegation', request) as { readonly text: string }
+
+    expect(answer.text).toHaveLength(500)
+    expect(settled[0]!.reason).toHaveLength(500)
   })
 
   it('releases its listener with the fiber that registered it', async () => {

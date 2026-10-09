@@ -21,6 +21,15 @@ export interface RealtimeResponderConfig {
    * actually hears.
    */
   readonly answerTimeoutMs: number
+  /**
+   * Values that must never be spoken, or carried onto the bus, however they are spelled.
+   *
+   * Shape redaction catches a key with a vendor prefix. It can *not* catch a value with no structure:
+   * the audio route's capability token is 32 random bytes of base64url, which no pattern can find, so
+   * a caller that holds such a secret has to name it here. Omitting it leaves the shape arm alone —
+   * honest, but not sufficient, and this is the difference between those two words.
+   */
+  readonly redactSecrets: readonly string[]
 }
 
 /**

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { DelegationRequest } from 'dsh-realtime-agent'
-import type { RealtimeDelegationSettlement } from 'dsh-realtime'
+import RealtimeRuntime, { type Journal, type RealtimeDelegationSettlement } from 'dsh-realtime'
 import * as responder from '../src/index.ts'
 import { Config, apply } from '../src/index.ts'
 import type { RealtimeResponderConfig } from '../src/types.ts'
@@ -30,15 +30,29 @@ afterEach(async () => {
   ctx = undefined
 })
 
-/** A context with a session controller mounted under the name this plugin injects. */
-function harness(): { context: Context; controller: FakeSessionController; settled: RealtimeDelegationSettlement[] } {
+/**
+ * A context with both services this plugin injects: a session controller under its own name, and the
+ * real seam. The seam is mounted rather than stubbed because the responder writes into the journal it
+ * *finds* there — a fake would prove the calls happen and say nothing about whether they land in the
+ * instance the diagnostics route serves.
+ */
+function harness(): {
+  context: Context
+  controller: FakeSessionController
+  settled: RealtimeDelegationSettlement[]
+  // The public surface the assertions use, not the class — see the note in `recordOutcome`: the repo
+  // has two `Journal` declarations (built `lib/` and `src/`) and a private member makes them nominally
+  // incompatible even though they are the same code.
+  journal: Pick<Journal, 'record' | 'snapshot'>
+} {
   const context = new Context()
   const controller = new FakeSessionController(context)
+  const service = new RealtimeRuntime(context)
   const settled: RealtimeDelegationSettlement[] = []
-  // The seam the diagnostics layer reads from. Registered the way S1's journal will read it.
+  // The bus event the diagnostics layer reads from.
   context.on('realtime-agent/delegation-settled', (settlement) => { settled.push(settlement) })
   ctx = context
-  return { context, controller, settled }
+  return { context, controller, settled, journal: service.journal }
 }
 
 /** Planted in the controller's rejection. Assembled, not written — see `redact.spec.ts`. */
@@ -57,7 +71,10 @@ describe('plugin shape', () => {
     // A default export makes the Loader discard a function plugin's namespace: it loads and
     // contributes nothing, which is the quietest possible failure.
     expect(responder.name).toBe('realtime-responder')
-    expect(responder.inject).toEqual(['sessionController'])
+    // `realtime` is injected because the responder writes into the seam's journal: a turn that
+    // produced nothing is exactly what a reader needs to find afterwards, and waiting for the seam is
+    // better than loading without it and journaling into nothing.
+    expect(responder.inject).toEqual(['sessionController', 'realtime'])
     expect('default' in responder).toBe(false)
     expect(typeof apply).toBe('function')
   })
@@ -205,6 +222,47 @@ describe('answering a delegation', () => {
 
     expect(answer.text).toHaveLength(500)
     expect(settled[0]!.reason).toHaveLength(500)
+  })
+
+  it('journals the turn, so a reader has the sequence and not just the last state', async () => {
+    const { context, journal } = harness()
+    apply(context, Config({ sessionId: 'sess-1', answerTimeoutMs: 5 }) as RealtimeResponderConfig)
+
+    await context.serial('realtime-agent/delegation', request)
+
+    // A timeout is two facts, recorded as two: the prompt got in, and the window closed without an
+    // answer. Collapsing them is how "admitted and nothing came back" became indistinguishable from
+    // "the controller refused", which is the silence S0 was spent on.
+    expect(journal.snapshot().map(entry => entry.kind)).toEqual([
+      'delegation.seen',
+      'prompt.admitted',
+      'window.elapsed',
+    ])
+  })
+
+  it('journals a decline without recording a prompt that was never admitted', async () => {
+    const { context, journal } = harness()
+    apply(context, Config({ sessionId: 'sess-1' }) as RealtimeResponderConfig)
+    // A transcript carrying no text is declined before the admission, so nothing was admitted and
+    // nothing may be recorded as though it had been.
+    const silent = { ...request, transcript: [{ kind: 'input', text: '' }] } as unknown as DelegationRequest
+
+    await context.serial('realtime-agent/delegation', silent)
+
+    expect(journal.snapshot().map(entry => entry.kind)).toEqual(['delegation.seen', 'prompt.declined'])
+  })
+
+  it('redacts what reaches the journal through the same door as the bus and the speech', async () => {
+    const { context, controller, journal } = harness()
+    controller.refusal = `invalid api key ${SENTINEL_KEY} for model gpt-live-1`
+    apply(context, Config({ sessionId: 'sess-1', answerTimeoutMs: 1_000 }) as RealtimeResponderConfig)
+
+    await context.serial('realtime-agent/delegation', request)
+
+    const refused = journal.snapshot().find(entry => entry.kind === 'prompt.refused')
+    expect(refused?.detail.reason).not.toContain(SENTINEL_TEXT)
+    expect(refused?.detail.reason).toContain('[redacted]')
+    expect(refused?.detail.reason).toContain('invalid api key')
   })
 
   it('releases its listener with the fiber that registered it', async () => {

@@ -19,6 +19,25 @@ function mount(): { ctx: Context; service: RealtimeRuntime } {
   return { ctx, service: new RealtimeRuntime(ctx) }
 }
 
+describe('the journal the seam owns', () => {
+  it('records and serves through the same instance a plugin holds', () => {
+    const { service } = mount()
+    const recorded = service.journal.record('session.opened', { provider: 'openai-live' })
+
+    expect(recorded.kind).toBe('session.opened')
+    expect(service.journal.snapshot()).toEqual([recorded])
+  })
+
+  it('gives each service its own journal, so two bundles cannot interleave one record', () => {
+    const first = mount().service
+    const second = mount().service
+    first.journal.record('session.opened', {})
+
+    expect(first.journal.size).toBe(1)
+    expect(second.journal.size).toBe(0)
+  })
+})
+
 /** Minimal adapter whose only job is to exist; the registry never calls `session` in these specs. */
 class StubAdapter extends RealtimeAdapter {
   override async session(_options: RealtimeSessionOptions): Promise<RealtimeSession> {

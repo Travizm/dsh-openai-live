@@ -38,7 +38,7 @@
 import Schema from '@deepseek-ai/schemastery'
 import type { Context } from '@deepseek-ai/cordis'
 import type { RealtimeDelegationSettlement } from 'dsh-realtime'
-import { redact } from 'dsh-realtime'
+import { redact, type Journal } from 'dsh-realtime'
 import type { DelegationAnswer, DelegationRequest } from 'dsh-realtime-agent'
 import { createTurnRunner, type TurnOutcome } from './turn.ts'
 import type { RealtimeResponderConfig, SessionEventLike } from './types.ts'
@@ -74,7 +74,7 @@ export const name = 'realtime-responder'
  * probed: a responder with no door is a plugin that loads and silently never answers, which is worse
  * than one that visibly waits for the service it named.
  */
-export const inject = ['sessionController']
+export const inject = ['sessionController', 'realtime']
 
 /** Validated configuration. */
 export const Config = Schema.object({
@@ -121,12 +121,53 @@ function boundedReason(reason: string, secrets: readonly string[]): string {
 }
 
 /**
+ * Journal one turn's outcome, in the seam's own vocabulary.
+ *
+ * Deliberately more than one entry per turn where the turn did more than one thing. A `timeout` is
+ * recorded as *admitted* and then *window elapsed*, because those are two facts and the difference
+ * between them is the one a reader needs: an admission that produced nothing used to be
+ * indistinguishable from a controller refusing outright, which is the silence this layer removes.
+ * @param journal - the seam's journal, shared with every other plugin in the bundle. Typed as the
+ *   public surface this plugin uses rather than as the class: `Journal` exists as two declarations in
+ *   this repo (built `lib/` and `src/`), and a class with private members is nominally typed, so the
+ *   two are not assignable to each other even though they are the same code.
+ * @param request - the delegation the turn was for.
+ * @param outcome - how the turn ended.
+ */
+function recordOutcome(
+  journal: Pick<Journal, 'record'>,
+  request: DelegationRequest,
+  outcome: TurnOutcome,
+): void {
+  const id = { id: request.id }
+  switch (outcome.kind) {
+    case 'answered':
+      journal.record('prompt.admitted', id)
+      journal.record('answer.received', { ...id, chars: String(outcome.text.length) })
+      return
+    case 'refused':
+      journal.record('prompt.refused', { ...id, reason: outcome.reason })
+      return
+    case 'declined':
+      journal.record('prompt.declined', id)
+      return
+    case 'timeout':
+      journal.record('prompt.admitted', id)
+      journal.record('window.elapsed', id)
+  }
+}
+
+/**
  * Register the responder on the delegation bus.
  * @param ctx - the Cordis context, which must provide `sessionController`.
  * @param config - validated configuration.
  */
 export function apply(ctx: Context, config: RealtimeResponderConfig): void {
   const controller = (ctx as unknown as { sessionController: SessionControllerLike }).sessionController
+  const journal = ctx.realtime.journal
+  // The responder is the plugin that holds the provider key, so it is the one that can name it. The
+  // journal applies the shape arm on write regardless; this is the arm no pattern can perform.
+  journal.addSecrets(config.redactSecrets)
 
   const run = createTurnRunner({
     sessionId: config.sessionId,
@@ -153,7 +194,9 @@ export function apply(ctx: Context, config: RealtimeResponderConfig): void {
     const dispose = ctx.on(
       'realtime-agent/delegation',
       async (request: DelegationRequest): Promise<DelegationAnswer | undefined> => {
+        journal.record('delegation.seen', { id: request.id, sessionId: request.sessionId })
         const outcome = await run(request)
+        recordOutcome(journal, request, outcome)
         if (outcome.kind === 'answered') return { text: outcome.text, mode: 'spoken' }
         // Not answered. The reason is reported rather than dropped, and — the whole of S1 story 3 —
         // it is now also spoken. A failure the user cannot hear is one they describe as "it did not

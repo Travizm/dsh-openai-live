@@ -11,6 +11,7 @@
 
 import { Service, type Context } from '@deepseek-ai/cordis'
 import { REALTIME_ERROR_CODES, RealtimeError } from './error.ts'
+import { Journal } from './journal.ts'
 import type {
   RealtimeDelegation,
   RealtimeModelInfo,
@@ -109,6 +110,15 @@ interface AdapterRegistration {
  */
 export class RealtimeRuntime extends Service {
   private readonly adapters = new Map<string, AdapterRegistration>()
+
+  /**
+   * The journal every plugin in this bundle writes to, and the diagnostics route serves.
+   *
+   * Owned here because this is the only object all of them already hold: the responder knows the
+   * delegation, the audio route knows the socket, and the seam is where those two meet. One journal
+   * per process — a reader should not be left correlating three partial ones.
+   */
+  readonly journal = new Journal()
 
   /**
    * @param ctx - the Cordis context this service is mounted on.

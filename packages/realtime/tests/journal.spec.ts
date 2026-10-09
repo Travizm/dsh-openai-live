@@ -105,4 +105,24 @@ describe('Journal', () => {
     expect(journal.oldestSeq).toBeUndefined()
     expect(journal.snapshot()).toEqual([])
   })
+
+  it('learns a secret after construction, for a plugin that has only just minted one', () => {
+    // The route's token does not exist until the plugin that mints it applies, and plugins load in no
+    // guaranteed order — so a journal seeded only at construction would have to be replaced to learn
+    // it, and two instances is how a reader ends up with half a story. Seed nothing, then add.
+    const journal = new Journal()
+    journal.record('session.opened', { provider: 'openai-live' })
+
+    // A non-string cannot arrive through validated config; the guard is what makes that true rather
+    // than assumed, so it is exercised here instead of being left to the type system.
+    journal.addSecrets(['', ROUTE_TOKEN, ROUTE_TOKEN, 42 as unknown as string])
+
+    journal.record('socket.rejected', { verdict: '401', url: `/dsh-realtime/audio?token=${ROUTE_TOKEN}` })
+
+    // Entries recorded before the secret was known keep their shape-redacted form; the late secret
+    // applies from the moment it is learned, which is all a socket verdict needs.
+    expect(journal.snapshot()[0]?.detail.provider).toBe('openai-live')
+    expect(journal.snapshot()[1]?.detail.url).toBe(`/dsh-realtime/audio?token=${REDACTED}`)
+    expect(JSON.stringify(journal.snapshot())).not.toContain(ROUTE_TOKEN)
+  })
 })

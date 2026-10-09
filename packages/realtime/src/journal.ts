@@ -95,7 +95,7 @@ export interface JournalOptions {
  */
 export class Journal {
   private readonly capacity: number
-  private readonly secrets: readonly string[]
+  private readonly secrets: string[]
   private readonly entries: JournalEntry[] = []
   private nextSeq = 1
 
@@ -111,6 +111,23 @@ export class Journal {
     }
     this.capacity = capacity
     this.secrets = [...options.secrets ?? []]
+  }
+
+  /**
+   * Add values that must never be retained, from a plugin that has only just learned them.
+   *
+   * Additive rather than a constructor argument because secrets arrive with the plugins that hold
+   * them, and plugins load in no guaranteed order: the route's capability token does not exist until
+   * the plugin that mints it applies, and a provider key arrives with whichever plugin reads the
+   * environment. A journal that could only be seeded at construction would have to be replaced to
+   * learn either — which is how a sink ends up with two instances and a reader with half a story.
+   * @param values - secrets to add; empty and duplicate values are ignored.
+   */
+  addSecrets(values: readonly string[]): void {
+    for (const value of values) {
+      if (typeof value !== 'string' || value.length === 0) continue
+      if (!this.secrets.includes(value)) this.secrets.push(value)
+    }
   }
 
   /**

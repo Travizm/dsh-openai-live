@@ -6,14 +6,15 @@
  * closed — and a real `ws` client connects to it.
  */
 
-import { createServer, type IncomingMessage, type Server } from 'node:http'
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context, Service } from '@deepseek-ai/cordis'
+import RealtimeRuntime from 'dsh-realtime'
 import WebSocket from 'ws'
 import { Config, apply } from '../src/index.ts'
 import { INJECTED_KEY } from '../src/injection.ts'
-import { DEFAULT_PATH, type RealtimeAudioWsConfig } from '../src/types.ts'
+import { DEFAULT_DIAGNOSTICS_PATH, DEFAULT_PATH, type RealtimeAudioWsConfig } from '../src/types.ts'
 
 let cleanups: Array<() => Promise<void> | void> = []
 afterEach(async () => {
@@ -21,9 +22,10 @@ afterEach(async () => {
   cleanups = []
 })
 
-/** The route registry slice this package claims. */
+/** The route registry slice this package claims: an upgrade table and an HTTP table. */
 class FakeWebServer extends Service {
   readonly upgrades = new Map<string, (req: IncomingMessage, socket: Duplex, head: Buffer) => unknown>()
+  readonly routes = new Map<string, (req: IncomingMessage, res: ServerResponse) => unknown>()
   /** The web server's own view of where it is listening: the injection row is built from these. */
   listenedPort = 19387
   readonly config = { port: 19387, host: '127.0.0.1' }
@@ -32,9 +34,13 @@ class FakeWebServer extends Service {
     this.upgrades.set(route.path, route.handler)
     return () => { this.upgrades.delete(route.path) }
   }
+  register(route: { kind: string; path: string; handler: (req: IncomingMessage, res: ServerResponse) => unknown }): () => void {
+    this.routes.set(route.path, route.handler)
+    return () => { this.routes.delete(route.path) }
+  }
 }
 
-/** The slice of the connection service that answers for an upgrade. */
+/** The slice of the connection service that answers for a route. */
 class FakeConnection extends Service {
   rejection: 401 | 403 | undefined
   constructor(ctx: Context) { super(ctx, 'connection') }
@@ -45,19 +51,33 @@ async function mount(over: Partial<RealtimeAudioWsConfig> = {}) {
   const context = new Context()
   const web = new FakeWebServer(context)
   const connection = new FakeConnection(context)
+  // The real seam, because the plugin writes into the journal it *finds* there and serves that same
+  // instance: a fake would prove the calls happen and say nothing about what the route reports.
+  const realtime = new RealtimeRuntime(context)
   const mic: Uint8Array[] = []
   context.on('realtime-agent/mic', (pcm16: Uint8Array) => { mic.push(pcm16) })
 
   apply(context, Config(over) as RealtimeAudioWsConfig)
-  // The `ctx.inject` callback lands on a microtask once both services are visible.
+  // The `ctx.inject` callback lands on a microtask once every service it named is visible.
   await Promise.resolve()
   await Promise.resolve()
+
+  // The page's settings row, emitted exactly as the host emits it. The token exists nowhere else, so
+  // reading it out of the row is the same thing the client half does.
+  const table: { name: string; value: { token: string } }[] = []
+  ;(context.emit as unknown as (name: string, emitted: unknown[]) => void)('webserver/index-inject', table)
+  const token = table[0]!.value.token
 
   const server: Server = createServer()
   server.on('upgrade', (req, socket, head) => {
     const handler = web.upgrades.get(new URL(req.url ?? '/', 'http://x').pathname)
     if (handler === undefined) { socket.destroy(); return }
     void handler(req, socket, head)
+  })
+  server.on('request', (req, res) => {
+    const handler = web.routes.get(new URL(req.url ?? '/', 'http://x').pathname)
+    if (handler === undefined) { res.writeHead(404); res.end(); return }
+    void handler(req, res)
   })
   await new Promise<void>((resolve) => { server.listen(0, '127.0.0.1', resolve) })
   const { port } = server.address() as { port: number }
@@ -66,8 +86,89 @@ async function mount(over: Partial<RealtimeAudioWsConfig> = {}) {
     await new Promise<void>((resolve) => { server.close(() => { resolve() }) })
     await context.fiber.dispose()
   })
-  return { context, web, connection, mic, url: (path = DEFAULT_PATH): string => `ws://127.0.0.1:${String(port)}${path}` }
+  return {
+    context,
+    web,
+    connection,
+    mic,
+    token,
+    journal: realtime.journal,
+    url: (path = DEFAULT_PATH): string => `ws://127.0.0.1:${String(port)}${path}`,
+    http: (path = DEFAULT_DIAGNOSTICS_PATH, query = ''): string => `http://127.0.0.1:${String(port)}${path}${query}`,
+  }
 }
+
+describe('the journal the audio route writes', () => {
+  it('records an accepted socket with its target, redacting the token the page presented', async () => {
+    const { journal, token, url } = await mount()
+    const client = new WebSocket(`${url()}?t=${token}`)
+    await new Promise((resolve) => { client.on('open', resolve) })
+    cleanups.push(() => { client.terminate() })
+
+    const accepted = journal.snapshot().find(entry => entry.kind === 'socket.accepted')
+    // The target is the one place this process's own token travels, and the token is the secret no
+    // pattern can find — so this is the value arm, at the sink that was going to leak it.
+    expect(accepted?.detail.url).toContain('[redacted]')
+    expect(accepted?.detail.url).not.toContain(token)
+    expect(accepted?.detail.clients).toBe('1')
+  })
+
+  it('records a refused socket with its verdict and no target at all', async () => {
+    const { connection, journal, url } = await mount()
+    connection.rejection = 401
+
+    await new Promise((resolve) => {
+      const client = new WebSocket(url())
+      client.on('error', resolve)
+      client.on('close', resolve)
+      cleanups.push(() => { client.terminate() })
+    })
+
+    const rejected = journal.snapshot().find(entry => entry.kind === 'socket.rejected')
+    expect(rejected?.detail).toEqual({ verdict: '401' })
+  })
+
+  it('records a second microphone as busy rather than dropping it silently', async () => {
+    const { journal, url } = await mount({ maxConnections: 1 })
+    const first = new WebSocket(url())
+    await new Promise((resolve) => { first.on('open', resolve) })
+    cleanups.push(() => { first.terminate() })
+
+    const second = new WebSocket(url())
+    const code = await new Promise<number>((resolve) => { second.on('close', (value: number) => { resolve(value) }) })
+    cleanups.push(() => { second.terminate() })
+
+    expect(code).toBe(1013)
+    expect(journal.snapshot().some(entry => entry.detail.verdict === '1013')).toBe(true)
+  })
+
+  it('records a verdict even when a request carries no target', async () => {
+    // `node:http` always reports a target on a server request, so this is unreachable in practice — but
+    // it is the branch that decides whether a malformed request is journalled or throws while recording.
+    const { web, connection, journal } = await mount()
+    connection.rejection = 403
+    const socket = { write: () => true, end: () => {}, destroy: () => {} } as unknown as Duplex
+
+    web.upgrades.get(DEFAULT_PATH)?.({ url: undefined, headers: {} } as unknown as IncomingMessage, socket, Buffer.alloc(0))
+
+    expect(journal.snapshot().some(entry => entry.detail.verdict === '403')).toBe(true)
+  })
+
+  it('serves the journal over HTTP and refuses a caller the connection service rejected', async () => {
+    const { connection, journal, http } = await mount()
+    journal.record('delegation.seen', { id: 'item_1' })
+
+    const allowed = await fetch(http())
+    expect(allowed.status).toBe(200)
+    expect(((await allowed.json()) as { entries: unknown[] }).entries).toHaveLength(1)
+
+    // The regression this route exists to prevent: the host's registry gates nothing, so the plugin
+    // must, and the same verdict answers both doors.
+    connection.rejection = 401
+    const refused = await fetch(http())
+    expect(refused.status).toBe(401)
+  })
+})
 
 /** Resolve with the first matching event, or reject so a failure names itself instead of timing out. */
 function once(client: WebSocket, event: 'open' | 'message' | 'close'): Promise<unknown[]> {

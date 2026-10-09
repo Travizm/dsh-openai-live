@@ -17,6 +17,11 @@
  * rather than re-deriving why a turn went quiet. The reason is redacted **as it is emitted**, because
  * this is the first string the plugin relays that it did not author.
  *
+ * **A refusal is also spoken.** It is the one failure the controller gives words for, so its reason is
+ * returned as the answer and the voice model says it; *declined* and *timeout* carry nothing to say and
+ * keep the agent's own notice. Redaction applies to what is spoken exactly as it does to the bus: the
+ * shape arm always, and the value arm for every secret the profile names in `redactSecrets`.
+ *
  * ## The bound, stated plainly
  *
  * A DSH agent turn can run for minutes. The delegation asking for the answer is bounded (the agent's
@@ -76,6 +81,7 @@ export const Config = Schema.object({
   sessionId: Schema.string().description('DSH session the voice conversation is attached to'),
   maxPromptChars: Schema.number().default(4_000).description('Character budget for the prompt handed to the agent'),
   answerTimeoutMs: Schema.number().default(45_000).description('How long to wait for the agent before declining'),
+  redactSecrets: Schema.array(Schema.string()).default([]).description('Values that must never be spoken or carried on the bus'),
 })
 
 /**
@@ -86,12 +92,32 @@ export const Config = Schema.object({
  * it exists. A turn that was answered is not settled — the answer is its own report.
  * @param request - the delegation that was asked about.
  * @param outcome - how the turn ended; never `answered`, which the caller handles.
+ * @param secrets - values that must not travel, whatever their spelling.
  * @returns the settlement to emit.
  */
-function settlementFor(request: DelegationRequest, outcome: TurnOutcome): RealtimeDelegationSettlement {
+function settlementFor(
+  request: DelegationRequest,
+  outcome: TurnOutcome,
+  secrets: readonly string[],
+): RealtimeDelegationSettlement {
   const settled = { id: request.id, sessionId: request.sessionId, outcome: outcome.kind }
   if (outcome.kind !== 'refused') return settled
-  return { ...settled, reason: redact(outcome.reason).slice(0, MAX_REASON_CHARS) }
+  return { ...settled, reason: boundedReason(outcome.reason, secrets) }
+}
+
+/**
+ * The controller's reason, redacted and bounded, exactly as it will be spoken.
+ *
+ * **No framing is added, on purpose.** The requirement is that the user hears *the reason* rather than
+ * the model's flat refusal — putting a sentence of our own in front of it would be a second voice's
+ * prose standing where the controller's words belong, and would make the useful part the second thing
+ * heard. The agent's `boundAppend` applies the provider's own token cap on top of this character bound.
+ * @param reason - the controller's own words.
+ * @param secrets - values that must not be spoken, whatever their spelling.
+ * @returns the text to speak: redacted first, then bounded, so a secret cannot survive truncation.
+ */
+function boundedReason(reason: string, secrets: readonly string[]): string {
+  return redact(reason, secrets).slice(0, MAX_REASON_CHARS)
 }
 
 /**
@@ -129,11 +155,15 @@ export function apply(ctx: Context, config: RealtimeResponderConfig): void {
       async (request: DelegationRequest): Promise<DelegationAnswer | undefined> => {
         const outcome = await run(request)
         if (outcome.kind === 'answered') return { text: outcome.text, mode: 'spoken' }
-        // Not answered. The reason is reported rather than dropped — this is the whole of the fix —
-        // and it is reported on the bus rather than spoken, so the diagnostic exists before the
-        // feature that narrates it.
-        ctx.emit('realtime-agent/delegation-settled', settlementFor(request, outcome))
-        return undefined
+        // Not answered. The reason is reported rather than dropped, and — the whole of S1 story 3 —
+        // it is now also spoken. A failure the user cannot hear is one they describe as "it did not
+        // work", which is the report this layer exists to replace.
+        ctx.emit('realtime-agent/delegation-settled', settlementFor(request, outcome, config.redactSecrets))
+        // Only a refusal has words to say. A declined or timed-out turn carries nothing, so it returns
+        // undefined and the agent speaks its own notice — inventing a reason for those would be worse
+        // than the honest silence they already had.
+        if (outcome.kind !== 'refused') return undefined
+        return { text: boundedReason(outcome.reason, config.redactSecrets), mode: 'spoken' }
       },
     )
     yield () => { dispose() }

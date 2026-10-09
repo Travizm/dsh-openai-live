@@ -1,6 +1,6 @@
 {
   "name": "dsh-realtime-audio-ws",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "The host end of the client half's transport: a WebSocket upgrade route that bridges microphone audio in and agent speech out.",
   "type": "module",
   "main": "lib/index.js",

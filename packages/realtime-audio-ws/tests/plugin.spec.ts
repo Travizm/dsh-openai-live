@@ -8,7 +8,7 @@
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context, Service } from '@deepseek-ai/cordis'
 import RealtimeRuntime from 'dsh-realtime'
 import WebSocket from 'ws'
@@ -140,6 +140,25 @@ describe('the journal the audio route writes', () => {
 
     expect(code).toBe(1013)
     expect(journal.snapshot().some(entry => entry.detail.verdict === '1013')).toBe(true)
+  })
+
+  it('records a socket leaving, so a journal that stops is not read as a process that died', async () => {
+    const { journal, url } = await mount()
+    const client = new WebSocket(url())
+    await new Promise((resolve) => { client.on('open', resolve) })
+    cleanups.push(() => { client.terminate() })
+
+    const closed = new Promise((resolve) => { client.on('close', resolve) })
+    client.close()
+    await closed
+    // The host detaches on its own turn, after the socket is gone — so wait for the entry instead of
+    // assuming it landed with the client's own close event.
+    await vi.waitFor(() => {
+      expect(journal.snapshot().some(entry => entry.kind === 'socket.closed')).toBe(true)
+    })
+
+    // Whichever way it left, the journal says so rather than trailing off after the accept.
+    expect(journal.snapshot().map(entry => entry.kind)).toEqual(['socket.accepted', 'socket.closed'])
   })
 
   it('records a verdict even when a request carries no target', async () => {

@@ -24,6 +24,15 @@ export const DEFAULT_MAX_CONNECTIONS = 1
 /** Whether an authenticated connection asks the agent to open the voice session. See the config field. */
 export const DEFAULT_OPEN_SESSION_ON_CONNECT = true
 
+/**
+ * Default pathname the diagnostics route claims.
+ *
+ * A fixed API path in spirit, but a validated config field like the audio route's — so a composition
+ * that already owns this path can move it deliberately rather than discovering the collision when the
+ * registry throws at registration.
+ */
+export const DEFAULT_DIAGNOSTICS_PATH = '/dsh-realtime/diagnostics'
+
 export interface RealtimeAudioWsConfig {
   /**
    * Absolute pathname to claim. Registered exactly, so it must be distinct from every other route in the
@@ -50,6 +59,14 @@ export interface RealtimeAudioWsConfig {
    * that looks like a fault anywhere but in this file.
    */
   readonly openSessionOnConnect: boolean
+  /**
+   * Absolute pathname the diagnostics route claims, served as JSON.
+   *
+   * Authenticated by the same policy as the audio route, and for the same reason: it is an HTTP route on
+   * loopback that the host's registry does not gate for us, and it reports the journal — which is worth
+   * more to a stranger than an empty socket.
+   */
+  readonly diagnosticsPath: string
 }
 
 /**

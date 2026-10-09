@@ -4,6 +4,73 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] — 2026-10-09
+
+### Added
+
+- **A control channel on the audio socket.** `dsh-realtime-audio-ws` 0.2.3. `status`, `start`, `stop`,
+  `steer <sessionId>` and `set <key>=<value>` as **text frames** on the socket that already carries audio.
+  A deliberate widening of a documented contract — the bridge said "a text frame is not part of this
+  contract" and ignored one, and the comment and the contract were changed together rather than left
+  disagreeing. Every frame produces exactly one reply, including an unknown verb, a stray argument, a
+  frozen field or a rejected value: a channel that can answer a question with silence is not a control
+  plane. One frame in flight at a time, so a reply can never be paired with the wrong request.
+
+- **A field registry, and the classes it enforces.** `dsh-realtime` 0.2.3. A setting is **live** (its read
+  site calls `get()` at the moment of use, so a change lands on the next use), **session-bound** (it
+  travelled in the provider's `session.start` and only a reconnect can change it), or **restart-bound**
+  (claimed once at load). A `live` field declares a setter and a frozen field declares none; a declaration
+  that says otherwise **fails at load** rather than shipping an affordance the protocol cannot honour.
+  Changes are journalled by **key only** — a secret-bearing setting's value is exactly what must not be
+  retained — and a refusal carries a machine code and a reason written to be relayed verbatim.
+
+- **A strip in the app's own page.** `dsh-realtime-audio-ws` 0.2.3. Two `webserver/index-inject` rows mount
+  a panel: live fields get controls, session-bound fields get the value they will take and the words
+  "reconnect to apply", restart-bound fields get no row at all. Every `set` reports its outcome beside the
+  field it belongs to and a refusal is relayed with the host's own code. The panel's logic lives in the
+  client bundle, where CI executes it; the injected script is a doorbell, and it is executed by a test too.
+
+- **A session picker, and candidates as a property of the field.** `dsh-realtime-responder` 0.2.3. A
+  setting may declare `choices()` — called per ask, like `get`, and refused at registration on any kind but
+  `string`. The responder reads the harness's session store **optionally**: a profile without it degrades
+  the picker to a text field rather than stopping the plugin, because an unsatisfied `inject` is silence
+  and a missing enhancement must never be able to stop the plugin answering.
+
+- **`status` for the agent, and outcomes for start/stop.** `dsh-realtime-agent` 0.2.7. Asking a running
+  plugin what it is doing now has an answer: whether the voice is open, which provider and model it booked,
+  which session it accepted — and, when it is closed, what a start would use. `start`, `stop` and the
+  session request return their outcome rather than emitting into the dark, so a transport that can wait can
+  report what happened.
+
+### Changed
+
+- **`autoStart` is restart-bound, and the gate says so.** It was documented as a field a change could
+  reach, and no read site could honour one. Reclassified rather than wired: a control that silently does
+  nothing is worse than no control, and the load-time refusal is what keeps the two from drifting again.
+
+- **A live field is re-read at the moment of use, never captured at apply.** `dsh-realtime-responder`
+  0.2.3 and `dsh-realtime-agent` 0.2.7 read `sessionId`, `maxPromptChars`, `answerTimeoutMs`,
+  `redactSecrets` and the delegation timeout through accessors. This is what makes those five fields
+  changeable without a restart, and a mid-turn change lands on the next turn rather than the running one.
+
+### Fixed
+
+- **`dsh-realtime-audio-ws` declares the seam it imports.** 0.2.3. `src/control.ts` imports the value
+  `redact` from `dsh-realtime` while the manifest declared only `dsh-realtime-agent` and `ws`; the type
+  imports beside it hid the omission, and the built `lib/` reached for a package the tarball never asked
+  for. It resolved only because the installer's layout happened to hoist a copy — a boot error waiting for
+  a layout change.
+
+- **A reply that cannot be written no longer escapes.** The bridge's `reply` is total: a socket can die
+  between the liveness check and the write, and a throw there would escape into a promise nobody awaits —
+  and, on the host, break the reply queue for every frame behind it.
+
+- **The session the voice steers becomes the strip's headline control, so the seeded refusal can go.**
+  S1's last exit criterion left `cordis.patch.yml` pointing `sessionId` at a session that does not exist, so
+  every admission is refused *with its reason* rather than the flat notice. The reason it existed — proof
+  that a refusal speaks — is now permanent, and the field it was teaching about is a picker. The install
+  below reverts the seed; expect a refusal, and hear why, until it does.
+
 ## [0.5.3] — 2026-10-09
 
 ### Fixed

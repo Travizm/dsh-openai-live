@@ -30,7 +30,7 @@ All four are **live** fields (`docs/control-plane-fields.md`), which is to say t
 moment they are used and the seam's settings surface can change them while a conversation is running:
 
 ```
-set realtime-responder.sessionId=session-ea70184a-…
+set realtime-responder.sessionId=session-4f2c9a1e-0d7b-4c58-9a30-2c6e5b81d7a4
 set realtime-responder.answerTimeoutMs=90000
 ```
 

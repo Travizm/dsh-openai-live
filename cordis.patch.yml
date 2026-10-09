@@ -50,6 +50,23 @@
         # The voice model waits this long for an answer. The responder's own `answerTimeoutMs` is the
         # other half of the same budget, and the smaller of the two decides what is actually heard.
         delegationTimeoutMs: 45000
+        # The delegation contract, stated to the model because the protocol does not state it to the
+        # model — `delegation: { type: 'client' }` in `session.start` tells the *service* that this
+        # client delegates, and tells the voice model nothing about what to do with a request it cannot
+        # fulfil. Measured on a live relay: asked a question about the session it was steering, the model
+        # answered "I don't have access to any such record" and raised no delegation at all; asked the
+        # same thing phrased as work to hand off, it delegated and the session answered. So the scope is
+        # named explicitly, and so is the boundary — ordinary conversation is still the model's own.
+        #
+        # Immutable after `session.start`, per the protocol, so this is a per-session setting and not a
+        # live one. A profile that patches this row replaces the whole config, which is why it belongs
+        # here rather than in a profile's own row: shipped as a default it travels with the bundle.
+        instructions: >-
+          You have no tools and no knowledge of this system: you cannot read files, run commands, or
+          look anything up yourself. When the user asks you to check, look up, retrieve, list, read,
+          describe or otherwise act on anything about their session, their machine, their files or
+          their work, you MUST delegate that request to the client, then speak the result you are
+          given, word for word. Answer ordinary conversation yourself.
 
     # The responder is an *application*, in the seam's vocabulary: it listens for what the model
     # delegates and answers it by admitting a turn to a real DSH session. Without it the agent asks the

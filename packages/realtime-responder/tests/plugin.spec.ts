@@ -86,11 +86,15 @@ describe('plugin shape', () => {
     expect(typeof apply).toBe('function')
   })
 
-  it('defaults both budgets rather than leaving them undefined', () => {
+  it('defaults both budgets, and the frame, rather than leaving them undefined', () => {
     const resolved = Config({ sessionId: 'sess-1' }) as RealtimeResponderConfig
     expect(resolved.sessionId).toBe('sess-1')
     expect(resolved.maxPromptChars).toBe(4_000)
     expect(resolved.answerTimeoutMs).toBe(45_000)
+    // A frame that is absent is a session answering bare speech — the defect this default removes — so it
+    // has to be a **default** and not an empty string the plugin reads as "no frame".
+    expect(resolved.promptFrame).toBe(responder.DEFAULT_PROMPT_FRAME)
+    expect(resolved.promptFrame.length).toBeGreaterThan(0)
   })
 })
 
@@ -106,7 +110,9 @@ describe('answering a delegation', () => {
     expect(controller.prompted[0]).toMatchObject({
       sessionId: 'sess-1',
       mode: 'queue',
-      content: [{ type: 'text', text: 'is staging ok?' }],
+      // The frame travels with the question. This is the assertion that the plugin wires the configured
+      // preamble into what it admits, rather than holding it in config and never reading it.
+      content: [{ type: 'text', text: `${responder.DEFAULT_PROMPT_FRAME}\nis staging ok?` }],
     })
 
     // `session/event` listeners take (session, event): the owning session is the FIRST argument, and the

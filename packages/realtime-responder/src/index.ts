@@ -103,12 +103,28 @@ export const name = 'realtime-responder'
  */
 export const inject = ['sessionController', 'realtime']
 
+/**
+ * The preamble this plugin puts in front of a relayed request.
+ *
+ * The relayed text is a spoken conversation with both sides flattened into it and nothing that says where
+ * it came from. Live evidence for why that is not enough: the session's own reasoning had to infer the
+ * provenance ("apparently from a voice session"), and it answered in chat prose — markdown, a file link,
+ * a fenced json block — which was then appended for speech and read out verbatim, link and all.
+ *
+ * So the frame does two jobs and both are deliberate: it says what the text is, and it names the shape of
+ * answer that suits an ear. It is config (`promptFrame`) rather than a constant because it is this
+ * plugin's own prose, and prose is something a deployment may want to word differently — the same
+ * judgement that makes `milestonePhrases` configuration instead of a table in the source.
+ */
+export const DEFAULT_PROMPT_FRAME = 'Relayed from the voice conversation: the lines below are a spoken exchange, what the user said and what was said back. Treat the last line as the live request and answer it in plain prose that can be read aloud — one or two short sentences, no markdown, no links, no code blocks.'
+
 /** Validated configuration. */
 export const Config = Schema.object({
   sessionId: Schema.string().description('DSH session the voice conversation is attached to'),
   maxPromptChars: Schema.number().default(4_000).description('Character budget for the prompt handed to the agent'),
   answerTimeoutMs: Schema.number().default(45_000).description('How long to wait for the agent before declining'),
   redactSecrets: Schema.array(Schema.string()).default([]).description('Values that must never be spoken or carried on the bus'),
+  promptFrame: Schema.string().default(DEFAULT_PROMPT_FRAME).description('Preamble put in front of a relayed request, so the session knows what it is answering'),
   // Narration. The words are content — this plugin's own prose, keyed by the tool's name — and the three
   // fields under them are operational and live. `milestonePhrases` is deliberately **not** a live setting:
   // a phrase table is prose a user edits in `cordis.yml` beside `instructions`, and a text box in a call
@@ -222,6 +238,8 @@ interface LiveValues {
   maxPromptChars: number
   answerTimeoutMs: number
   redactSecrets: readonly string[]
+  /** The preamble put in front of a relayed request, as configured. */
+  promptFrame: string
   /** The narration phrase table as written in config, and the three operational fields beside it. */
   milestonePhrases: readonly string[]
   milestoneFallback: string
@@ -265,6 +283,7 @@ export function apply(ctx: Context, config: RealtimeResponderConfig): void {
     maxPromptChars: config.maxPromptChars,
     answerTimeoutMs: config.answerTimeoutMs,
     redactSecrets: config.redactSecrets,
+    promptFrame: config.promptFrame,
     milestonePhrases: [...config.milestonePhrases],
     milestoneFallback: config.milestoneFallback,
     milestoneIntervalMs: config.milestoneIntervalMs,
@@ -388,6 +407,7 @@ export function apply(ctx: Context, config: RealtimeResponderConfig): void {
     // initial state rather than the state.
     sessionId: () => live.sessionId,
     maxPromptChars: () => live.maxPromptChars,
+    frame: () => live.promptFrame,
     answerTimeoutMs: () => live.answerTimeoutMs,
     admit: async (text: string): Promise<void> => {
       // A signal per admission. The controller **requires** one — it reads `signal.throwIfAborted()` before it

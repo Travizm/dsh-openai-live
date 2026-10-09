@@ -31,21 +31,51 @@ const SESSION = 'sess-1'
 
 const text = (value: string): { type: 'text'; text: string } => ({ type: 'text', text: value })
 
+/** A frame short enough to leave room for the questions these tests ask. */
+const FRAME = 'Relayed from the voice conversation.'
+
 describe('promptFrom', () => {
-  it('joins the conversation in order and drops empty lines', () => {
+  it('puts the frame in front of the conversation, joined in order with empty lines dropped', () => {
     expect(promptFrom(request([
       { kind: 'input', text: 'is staging ok?' },
       { kind: 'input', text: '' },
       { kind: 'output', text: 'checking' },
-    ]), 1_000)).toBe('is staging ok?\nchecking')
+    ]), 1_000, FRAME)).toBe(`${FRAME}\nis staging ok?\nchecking`)
+  })
+
+  it('gives the question the room the frame leaves, so the whole prompt is inside the budget', () => {
+    // The frame is part of what is admitted. A budget that counted the question alone would be a budget
+    // the controller sees exceeded, by exactly the length of the frame.
+    const prompt = promptFrom(request([{ kind: 'input', text: 'abcdefghijklmnop' }]), FRAME.length + 5, FRAME)
+    expect(prompt).toBe(`${FRAME}\nabcd`)
+    expect(prompt.length).toBeLessThanOrEqual(FRAME.length + 5)
   })
 
   it('truncates on the budget, because a rejected prompt is worse than a short one', () => {
-    expect(promptFrom(request([{ kind: 'input', text: 'abcdefghij' }]), 4)).toBe('abcd')
+    expect(promptFrom(request([{ kind: 'input', text: 'abcdefghij' }]), 4, FRAME)).toBe('abcd')
   })
 
-  it('yields nothing for a transcript that carried no text', () => {
-    expect(promptFrom(request([{ kind: 'input', text: '' }]), 100)).toBe('')
+  it('sends the bare question when the budget cannot carry the frame at all', () => {
+    // Degradation rather than half-application: the frame is dropped whole, and it can never eat the
+    // question it exists to introduce — the question is the part nothing downstream can reconstruct.
+    expect(promptFrom(request([{ kind: 'input', text: 'abcdefghij' }]), FRAME.length, FRAME)).toBe('abcdefghij')
+  })
+
+  it('sends the bare question when no frame is configured', () => {
+    expect(promptFrom(request([{ kind: 'input', text: 'is staging ok?' }]), 1_000, '')).toBe('is staging ok?')
+  })
+
+  it('yields nothing for a transcript that carried no text, frame or not', () => {
+    // Framing must not manufacture a prompt out of silence. A turn with nothing to ask is **declined**
+    // before the admission, and a prompt that was only the frame would have the controller admit one.
+    expect(promptFrom(request([{ kind: 'input', text: '' }]), 100, FRAME)).toBe('')
+  })
+
+  it('counts a multibyte body against the same code-unit budget', () => {
+    // Every CJK character here is one code unit, so the cut is three of them: the budget is a count of
+    // code units, not of graphemes, and that is the bound the seam has always applied.
+    expect(promptFrom(request([{ kind: 'input', text: '日本語のテキスト' }]), FRAME.length + 4, FRAME))
+      .toBe(`${FRAME}\n日本語`)
   })
 })
 
@@ -158,6 +188,7 @@ describe('narration', () => {
     const run = createTurnRunner({
       sessionId: () => SESSION,
       maxPromptChars: () => 1_000,
+      frame: () => FRAME,
       answerTimeoutMs: () => 50,
       admit: () => Promise.resolve(),
       subscribe: (listener) => { listeners.push(listener); return () => undefined },
@@ -245,6 +276,7 @@ describe('narration', () => {
     const sinkless = createTurnRunner({
       sessionId: () => SESSION,
       maxPromptChars: () => 1_000,
+      frame: () => FRAME,
       answerTimeoutMs: () => 50,
       admit: () => Promise.resolve(),
       subscribe: (listener) => { sinklessListeners.push(listener); return () => undefined },
@@ -274,6 +306,7 @@ describe('createTurnRunner', () => {
     const run = createTurnRunner({
       sessionId: () => SESSION,
       maxPromptChars: () => 1_000,
+      frame: () => FRAME,
       answerTimeoutMs: () => 50,
       admit: (prompt) => { admitted.push(prompt); return Promise.resolve() },
       subscribe: (listener) => { listeners.push(listener); return () => { unsubscribed += 1 } },
@@ -282,11 +315,13 @@ describe('createTurnRunner', () => {
     return { admitted, listeners, unsubscribed: () => unsubscribed, run }
   }
 
-  it('admits the turn, then returns the answer when it lands', async () => {
+  it('admits the turn framed, then returns the answer when it lands', async () => {
     const { admitted, listeners, unsubscribed, run } = deps()
     const pending = run(request([{ kind: 'input', text: 'is staging ok?' }]))
     await Promise.resolve()
-    expect(admitted).toEqual(['is staging ok?'])
+    // Through the runner, not only through `promptFrom`: this is the assertion that the framing the
+    // plugin configures is the framing that reaches the controller.
+    expect(admitted).toEqual([`${FRAME}\nis staging ok?`])
     listeners[0]!(message([text('green')]), SESSION)
     await expect(pending).resolves.toEqual({ kind: 'answered', text: 'green' })
     expect(unsubscribed()).toBe(1)
@@ -366,29 +401,34 @@ describe('createTurnRunner', () => {
     // under a turn that is already running.
     let session = 'sess-1'
     let budget = 1_000
+    let frame = FRAME
     const admitted: string[] = []
     const listeners: ((event: SessionEventLike, sessionId: string) => void)[] = []
     const run = createTurnRunner({
       sessionId: () => session,
       maxPromptChars: () => budget,
+      frame: () => frame,
       answerTimeoutMs: () => 50,
       admit: (prompt) => { admitted.push(prompt); return Promise.resolve() },
       subscribe: (listener) => { listeners.push(listener); return () => undefined },
     })
 
     const inFlight = run(request([{ kind: 'input', text: 'abcdefghij' }]))
-    // Re-steered and re-budgeted while that turn is still open.
+    // Re-steered, re-budgeted and re-framed while that turn is still open.
     session = 'sess-2'
     budget = 4
+    frame = 'Q'
 
-    // The turn that started on sess-1 is still answered by sess-1, with the budget it started with.
-    expect(admitted).toEqual(['abcdefghij'])
+    // The turn that started on sess-1 is still answered by sess-1, with the budget and the frame it
+    // started with — a frame read per event would have let a change re-word a prompt already admitted.
+    expect(admitted).toEqual([`${FRAME}\nabcdefghij`])
     listeners[0]!(message([text('from one')]), 'sess-1')
     await expect(inFlight).resolves.toEqual({ kind: 'answered', text: 'from one' })
 
-    // The next turn uses the new session and the new budget.
+    // The next turn uses the new session, the new budget, and the new frame — two characters of question,
+    // because the frame it now carries leaves room for exactly that.
     const next = run(request([{ kind: 'input', text: 'abcdefghij' }]))
-    expect(admitted[1]).toBe('abcd')
+    expect(admitted[1]).toBe('Q\nab')
     listeners[1]!(message([text('from two')]), 'sess-1')
     listeners[1]!(message([text('from two')]), 'sess-2')
     await expect(next).resolves.toEqual({ kind: 'answered', text: 'from two' })

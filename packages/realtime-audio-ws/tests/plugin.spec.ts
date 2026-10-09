@@ -15,6 +15,7 @@ import WebSocket from 'ws'
 import { Config, apply } from '../src/index.ts'
 import { INJECTED_KEY } from '../src/injection.ts'
 import { DEFAULT_DIAGNOSTICS_PATH, DEFAULT_PATH, type RealtimeAudioWsConfig } from '../src/types.ts'
+import { STRIP_ELEMENT_ID } from '../src/strip.ts'
 
 let cleanups: Array<() => Promise<void> | void> = []
 afterEach(async () => {
@@ -348,16 +349,33 @@ describe('the audio route', () => {
     return table as Array<{ name: string; value: { path?: string; authority?: string; token?: string } }>
   }
 
+  /** Every row the plugin contributes, whatever kind, in the order the host would render them. */
+  function injectionRows(context: Context): Array<{ kind: string; html?: string; text?: string }> {
+    const table: unknown[] = []
+    void (context.emit as unknown as (name: string, payload: unknown) => void)('webserver/index-inject', table)
+    return table as Array<{ kind: string; html?: string; text?: string }>
+  }
+
   it('publishes the route settings the page needs, built at emit time', async () => {
     const { context } = await mount()
     const table = injectionTable(context)
-    expect(table).toHaveLength(1)
     expect(table[0]?.name).toBe(INJECTED_KEY)
     expect(table[0]?.value.path).toBe(DEFAULT_PATH)
     // The port is read at emit time, not at boot: an index render follows the listen, which is the only
     // moment the OS-assigned port is known.
     expect(table[0]?.value.authority).toBe('127.0.0.1:19387')
     expect(table[0]?.value.token).toMatch(/^[A-Za-z0-9_-]{43}$/)
+  })
+
+  it('publishes the strip after the settings it reads', async () => {
+    const { context } = await mount()
+    const rows = injectionRows(context)
+    // Markup, then the bootstrap that mounts the panel on it: the table's ordering guarantee is what makes
+    // a two-row panel safe, and the settings row has to come first because the bundle reads it while
+    // rendering.
+    expect(rows.map(row => row.kind)).toEqual(['global', 'html', 'script'])
+    expect(rows[1]?.html).toContain(`id="${STRIP_ELEMENT_ID}"`)
+    expect(rows[2]?.text).toContain('__dshRealtimeAudio')
   })
 
   it('accepts the injected token from a caller that cannot carry the cookie', async () => {

@@ -97,20 +97,41 @@ visibly waits rather than one that loads and silently claims nothing. The bundle
 ## The client half
 
 `dsh-realtime-audio-ws/client` is the browser face: it opens this socket, captures the microphone into it at
-24 kHz PCM16, and plays what comes back. No client services, one file, and it injects nothing — a client
-face that needs nothing cannot be broken by another plugin's absence.
+24 kHz PCM16, plays what comes back, and drives the strip. No client services, one file.
 
-**How it runs.** There is no UI surface yet, so it publishes itself on a global:
+**How it runs.** The strip in the app's own page is the way in — it is mounted by the injected row and by
+the bundle itself, whichever lands second finding the panel already there:
+
+```
+[ microphone: idle ] [ Connect microphone ] [ Refresh ]
+voice: open · fake/gpt-live-1
+realtime-responder.sessionId   [ sess-1 ▾ ] [ Steer ]      applied
+realtime-responder.answerTimeoutMs  [ 45000 ] [ Set ]
+realtime-agent.model           fixed when the session opens — reconnect to apply
+```
+
+A live field gets a control, a session-bound field gets the value it will take plus the words "reconnect to
+apply", and a restart-bound field gets no row at all — a control the protocol cannot honour is worse than no
+control. Every `set` reports its outcome beside the field it belongs to, and a refusal is relayed verbatim
+with the host's own code: `FROZEN_SETTING: "…" is claimed when the plugin loads — restart to change it`.
+
+The same handle stays published on `globalThis[GLOBAL_KEY]` for the injected bootstrap and for anything else
+that holds it — `start`, `stop`, `state`, `request`, `mount` — but it is no longer the on-switch:
 
 ```js
-await __dshRealtimeAudio.start()   // asks for the microphone, then connects
-__dshRealtimeAudio.state()         // { kind: 'idle' | 'live' | 'failed' }
-__dshRealtimeAudio.stop()
+__dshRealtimeAudio.start()            // asks for the microphone, then connects
+__dshRealtimeAudio.state()            // { kind: 'idle' | 'live' | 'failed' }
+__dshRealtimeAudio.request('status')  // one text frame in, exactly one reply out
 ```
 
 `start()` **reports rather than throws**, so a refused permission or a missing API arrives as
 `{ kind: 'failed', reason }` — the reason is what tells someone whether to grant something or to look
-somewhere else. A settings card is its own increment.
+somewhere else.
+
+**Requests are serialised.** One frame is in flight at a time: the host answers in arrival order, and two
+frames out at once would make pairing a reply with its request a guess the moment anything on the host
+slowed down. A request with no socket is a rejection — reporting `{ok: false}` there would be
+indistinguishable from the host refusing.
 
 **Two decisions inside it worth knowing.**
 
@@ -130,6 +151,6 @@ will not open at 24 kHz the client fails and says which rate it got.
 obvious next control *frame* — the control channel is now there to carry one — and a dropped socket still
 ends the conversation rather than being rejoined. Both are deliberately absent rather than half-built.
 
-**The browser half does not speak the control channel yet.** It ignores a text frame, which is exactly what
-a reply is; the panel that sends `status` and `set` and renders what comes back is its own increment, and
-until it lands the channel is driven from a socket rather than from the app.
+**The panel has no keyboard path and no permissions row.** The strip is clickable controls and text, so a
+screen reader gets it, but nothing focuses it and the microphone's permission state is reported rather than
+requested ahead of time. Both are increments, not gaps in the channel.

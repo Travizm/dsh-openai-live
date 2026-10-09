@@ -78,6 +78,19 @@ export interface RealtimeSettingSpec<T> {
    * `undefined` for the value and a change still applies. See the module note.
    */
   readonly secret?: boolean
+  /**
+   * The values this setting will accept right now, when it has a set worth picking from.
+   *
+   * Declared here rather than discovered by a surface, because the plugin that owns the field is the only
+   * party that knows where the candidates are: the responder's `sessionId` is every session the harness
+   * currently has live, read from a service it may or may not be mounted beside. Called at the moment the
+   * surface is asked, like {@link get} and for the same reason.
+   *
+   * An empty list is a legitimate answer and is not the same as omitting this: a picker with nothing to
+   * pick should render as a text field, and a surface cannot tell that from a field that never had a list.
+   * @returns the candidate values, in the order a picker should show them.
+   */
+  readonly choices?: () => readonly string[]
   /** The value **now**. Called at the moment of use, never captured. */
   readonly get: () => T
   /**
@@ -112,6 +125,13 @@ export interface RealtimeSettingInfo {
   readonly scope: RealtimeSettingScope
   /** The owner's one-line description, when it supplied one. */
   readonly describe?: string
+  /**
+   * The values the setting will accept right now, when it declared a set worth picking from.
+   *
+   * Omitted when the owner declared none; `[]` when it declared one and it is currently empty — which a
+   * surface renders as a text field rather than as a picker with nothing in it.
+   */
+  readonly choices?: readonly string[]
   /**
    * The value now, or `undefined` when the setting is `secret`.
    *
@@ -173,6 +193,7 @@ interface RegisteredSetting {
   readonly scope: RealtimeSettingScope
   readonly describe?: string
   readonly secret: boolean
+  readonly choices?: () => readonly string[]
   readonly get: () => unknown
   readonly set?: (value: unknown) => void
 }
@@ -242,6 +263,14 @@ export class RealtimeSettings {
           REALTIME_ERROR_CODES.INVALID_SETTING,
         )
       }
+      // A list of candidates is a claim about the values a *picker* offers, and a picker only exists for a
+      // string: numbers, booleans and lists each have one representation a control does not need help with.
+      if (spec.choices !== undefined && spec.kind !== 'string') {
+        throw new RealtimeError(
+          `"${key}" declares choices and the kind "${spec.kind}" — candidates are for a string setting`,
+          REALTIME_ERROR_CODES.INVALID_SETTING,
+        )
+      }
       // A change can only reach a `live` field, and only a `live` field has anything to apply it. Two
       // one-sided declarations, and both are refusals rather than warnings for the same reason: the
       // first would offer a control that silently does nothing, the second would answer a change by
@@ -276,6 +305,7 @@ export class RealtimeSettings {
         scope: spec.scope,
         ...spec.describe === undefined ? {} : { describe: spec.describe },
         secret: spec.secret === true,
+        ...spec.choices === undefined ? {} : { choices: spec.choices },
         get: spec.get,
         ...spec.set === undefined ? {} : { set: spec.set },
       })
@@ -362,6 +392,7 @@ export class RealtimeSettings {
       kind: registered.kind,
       scope: registered.scope,
       ...registered.describe === undefined ? {} : { describe: registered.describe },
+      ...registered.choices === undefined ? {} : { choices: registered.choices() },
       value: registered.secret ? undefined : registered.get(),
     }
   }

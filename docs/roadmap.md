@@ -72,6 +72,8 @@ Ordered, each step small enough to ship:
    generator a maintainer can have.
 2. **v0.6 — control and UX.** The in-app panel, live config, a session picker, start/stop that isn't
    a devtools global. **A plugin driven from a console global will not be installed by anyone.**
+   *Landed in the tree:* the field gate, the control channel on the audio socket, and the strip. Its
+   release and install into the profile are what make this bullet true rather than written down.
 3. **v0.7 — narration.** Progressive speech while the agent works: "running the command… 14 files…
    the README says…". This is the Codex-shaped feature and the demo that sells it — and it fixes the
    real ceiling, which is that an all-or-nothing answer must fit inside one delegation window.
@@ -116,9 +118,14 @@ provider be a choice.
 
 ## Where this is right now
 
-`dsh-openai-live 0.5.3`, six packages, 404 tests, 100% coverage on every file, published and verified
-by real install. It works, and since 0.5.2 it **explains itself**: a bounded journal the plugins write
-to, the controller's reason carried on the wire *and spoken*, a `GET /dsh-realtime/diagnostics` route,
-and `pnpm self-test <profile>` for one verdict worth pasting into a bug report. What it does not yet do
-is survive a long tool turn — an all-or-nothing answer still has to fit inside one delegation window —
-and it is still started from a devtools global. Those two are the next two releases.
+`dsh-openai-live 0.5.3`, six packages, 100% coverage on every file, published and verified by real
+install. It works, and since 0.5.2 it **explains itself**: a bounded journal the plugins write to, the
+controller's reason carried on the wire *and spoken*, a `GET /dsh-realtime/diagnostics` route, and
+`pnpm self-test <profile>` for one verdict worth pasting into a bug report. What it does not yet do is
+survive a long tool turn — an all-or-nothing answer still has to fit inside one delegation window — and
+a dropped socket still ends the conversation rather than being rejoined. Those two are the next
+releases.
+
+Since the v0.6 work landed in the tree, it is no longer started from a devtools global: the strip in the
+app's own page carries start, stop, a session picker and a control for every field whose read site can
+honour a change, and the same channel refuses the ones it cannot with a reason rather than a shrug.

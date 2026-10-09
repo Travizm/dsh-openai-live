@@ -95,13 +95,21 @@ export function attachAudioSocket(client: AudioSocket, deps: AudioSocketBridgeDe
    * Answer one control frame, if the socket is still there.
    *
    * The guard is here rather than at the call site because this is the only place that knows whether the
-   * bridge is still live, and because a control handler settles asynchronously: a reply that arrives
-   * after the socket went away must be dropped, not thrown.
+   * bridge is still live, and because a control handler settles asynchronously: a reply that arrives after
+   * the socket went away must be dropped, not thrown.
+   *
+   * **Total**, including the write: a socket can die between the check above and the send, and a throw here
+   * would escape into a promise nobody awaits — and, in the plugin, would break the reply queue for every
+   * frame behind it.
    * @param text - the reply frame.
    */
   const reply = (text: string): void => {
     if (stopped) return
-    client.send(text)
+    try {
+      client.send(text)
+    } catch {
+      stop()
+    }
   }
 
   client.on('message', (data, isBinary) => {

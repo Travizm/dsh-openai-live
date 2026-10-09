@@ -345,6 +345,50 @@ describe('apply', () => {
   })
 })
 
+describe('a setting that offers candidates', () => {
+  it('reports them at the moment it is asked, beside the value', () => {
+    let ids = ['session-a']
+    const { settings } = registry()
+    settings.register('realtime-responder', [{
+      field: 'sessionId',
+      kind: 'string',
+      scope: 'live',
+      get: () => 'sess-1',
+      set: () => undefined,
+      choices: () => ids,
+    }])
+
+    expect(settings.get('realtime-responder.sessionId')).toMatchObject({ value: 'sess-1', choices: ['session-a'] })
+    // Read per ask, like the value: a session created a second ago is a candidate now, and the surface must
+    // not be serving a list from when the plugin applied.
+    ids = ['session-b', 'session-c']
+    expect(settings.get('realtime-responder.sessionId')?.choices).toEqual(['session-b', 'session-c'])
+  })
+
+  it('omits the field entirely for a setting that declared none', () => {
+    // Absence and emptiness are different statements, and a surface has to be able to tell them apart: no
+    // field means "a text control", an empty list means "a picker with nothing to pick from yet".
+    const { settings } = registry()
+    const { spec } = counter()
+    settings.register('owner', [spec])
+    expect('choices' in settings.list()[0]!).toBe(false)
+  })
+
+  it('refuses candidates for anything that is not a string', () => {
+    // A picker exists for a string. A number, a boolean and a list each have one representation, and offering
+    // candidates for one would be a control that cannot render what it was given.
+    const { settings } = registry()
+    expect(() => settings.register('owner', [{
+      field: 'budget',
+      kind: 'number',
+      scope: 'live',
+      get: () => 1,
+      set: () => undefined,
+      choices: () => ['1'],
+    }])).toThrow(/declares choices and the kind "number"/)
+  })
+})
+
 describe('a secret setting', () => {
   /** Every value a profile has named as a redaction secret must never be reported back. */
   const planted = ['sk', 'secret', 'sentinelmustneverappear'].join('-')

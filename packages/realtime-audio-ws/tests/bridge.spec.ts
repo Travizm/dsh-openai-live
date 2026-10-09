@@ -138,6 +138,29 @@ describe('attachAudioSocket', () => {
     expect(sent).toEqual([])
   })
 
+  it('survives a write that fails on a socket that died a moment ago', () => {
+    // `reply` is total: the socket can die between the check and the write, and a throw here would escape
+    // into a promise nobody awaits — and, on the host, break the reply queue behind it.
+    const socket = { send: () => { throw new Error('not open') } } as unknown as AudioSocket
+    const listeners = new Map<string, ((...args: unknown[]) => void)[]>()
+    const wired = {
+      ...socket,
+      close: () => undefined,
+      terminate: () => undefined,
+      on: (event: string, listener: (...args: unknown[]) => void) => {
+        listeners.set(event, [...(listeners.get(event) ?? []), listener])
+        return wired
+      },
+    } as unknown as AudioSocket
+    const harness = deps({ onControl: (_frame, reply) => { reply('{"ok":true}') } })
+    attachAudioSocket(wired, harness.value)
+
+    expect(() => { for (const listener of listeners.get('message') ?? []) listener(Buffer.from('status'), false) }).not.toThrow()
+    // The bridge stands down, once, and the detach hook runs exactly as it would for a close.
+    expect(harness.detached).toHaveLength(1)
+    expect(harness.unsubscribed).toHaveLength(1)
+  })
+
   it('sends host output audio to the client', () => {
     const { socket, sent } = fakeSocket()
     const harness = deps()

@@ -83,8 +83,9 @@ VAD* — and vindicates it.
    explicitly. This *is* the "provider owns the turn boundary" rule, now observed rather than assumed.
 6. **`session.delegation.created` carries no task text** — only `id`, `type`, `target`, `offset_ms`.
    The consumer must reconstruct intent from the input transcript plus application state.
-7. **`session.usage.updated` reports audio-seconds**, emitted roughly once a minute;
-   `session.closed` carries final cumulative usage and a `reason`.
+7. **`session.usage.updated` reports audio-seconds**, emitted every **~15 s** (measured over a 90-second
+   session — see `docs/usable-window.md`), and `session.closed` carries a `reason` plus the *same* usage
+   value as the last update rather than a larger cumulative one.
 
 ## Consequence for the runtime contract (v8 → v9)
 

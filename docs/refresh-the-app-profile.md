@@ -79,8 +79,17 @@ Install → restart → then test.
    there is a second copy of a harness package, which breaks the host's own tools silently.
 3. **The symbol is present, not just the version.** For S0 that means `delegation-settled` in the
    installed `dsh-realtime-responder/lib/`. A version number is a claim; the code is the evidence.
-4. **It is loaded and working.** Speak a request and hear a failure *reason* rather than the model's
-   flat refusal. That is the S0 behaviour and it is the only check that exercises the whole chain.
+4. **It is loaded and working.** `pnpm probe:delegation <profile>` from the repo is the check: green,
+   with `refused` carrying the controller's reason and the key redacted. Run it against the *app*
+   profile, not the workspace — it resolves the bundle from the profile's own `node_modules`, which is
+   the only thing that makes it an installed-profile check.
+5. **The spoken reason is NOT a refresh check.** S0 preserves the reason on the bus as
+   `realtime-agent/delegation-settled`; **narrating it through `appendCommentary` is S1's story
+   *Spoken failures*, and has not landed.** Until it does, a failure still speaks
+   `UNANSWERED_NOTICE` — *"Sorry — I can't take care of that right now."* — exactly as before S0.
+   So a refresh cannot be verified by listening for the reason, and looking for it there sends you
+   hunting a defect that is really an unbuilt story. That is the worst kind of check: one whose
+   failure mode cannot tell "not implemented" from "broken".
 
 ## The drift this procedure exists to catch
 

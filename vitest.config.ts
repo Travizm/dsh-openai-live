@@ -29,7 +29,10 @@ export default defineConfig({
     },
   },
   test: {
-    include: ['packages/*/tests/**/*.spec.ts'],
+    // Package tests, plus the bundle's own composition tests. A failure that only exists *between*
+    // packages — one key escaping through three sinks — has no package to live in, and the bundle is
+    // the project that depends on all of them.
+    include: ['packages/*/tests/**/*.spec.ts', 'tests/**/*.spec.ts'],
     environment: 'node',
     coverage: {
       provider: 'v8',

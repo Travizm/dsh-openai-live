@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { DelegationRequest } from 'dsh-realtime-agent'
-import { answerText, createTurnRunner, promptFrom, type TurnDeps } from '../src/turn.ts'
+import { answerText, createTurnRunner, phraseTable, promptFrom, stepTool, type MilestonePolicy, type TurnDeps, type TurnStep } from '../src/turn.ts'
 import type { SessionEventLike } from '../src/types.ts'
 
 const request = (transcript: readonly { kind: 'input' | 'output'; text: string }[]): DelegationRequest => ({
@@ -90,6 +90,179 @@ describe('answerText', () => {
 
   it('treats whitespace-only content as no answer at all', () => {
     expect(answerText(message([text('   ')]))).toBeUndefined()
+  })
+})
+
+describe('stepTool', () => {
+  it('names the tool a `tool/call` reports', () => {
+    expect(stepTool({ type: 'tool/call', data: { name: 'read_file' } })).toBe('read_file')
+  })
+
+  it('needs no surface op, because a tool call is not a surface event', () => {
+    // The trap this test exists for. `answerText` filters on `surfaceOp === 'append'`, and a filter copied
+    // from it drops every step — silently and for ever — because `SurfaceEventType` is
+    // `system/message · user/message · assistant/message · tool/result` and a `tool/call` is not among
+    // them, so it carries no `surfaceOp` at all. The event type is the whole filter.
+    expect(stepTool({ type: 'tool/call', data: { name: 'terminal' } })).toBe('terminal')
+  })
+
+  it('ignores every other kind of event', () => {
+    expect(stepTool({ type: 'assistant/message', surfaceOp: 'append', data: { name: 'read_file' } })).toBeUndefined()
+    expect(stepTool({ type: 'tool/result', data: { name: 'read_file' } })).toBeUndefined()
+    expect(stepTool({})).toBeUndefined()
+  })
+
+  it('ignores a call that names no tool, rather than narrating a blank', () => {
+    expect(stepTool({ type: 'tool/call', data: {} })).toBeUndefined()
+    expect(stepTool({ type: 'tool/call', data: { name: '' } })).toBeUndefined()
+    expect(stepTool({ type: 'tool/call', data: { name: 7 } })).toBeUndefined()
+    expect(stepTool({ type: 'tool/call' })).toBeUndefined()
+  })
+})
+
+describe('phraseTable', () => {
+  it('reads `tool=phrase` entries', () => {
+    expect([...phraseTable(['read_file=Reading a file.', 'terminal=Running a command.'])])
+      .toEqual([['read_file', 'Reading a file.'], ['terminal', 'Running a command.']])
+  })
+
+  it('splits on the first `=`, so a phrase may contain one', () => {
+    expect(phraseTable(['x=A= B.']).get('x')).toBe('A= B.')
+  })
+
+  it('trims around the separator', () => {
+    expect(phraseTable(['  read_file  =  Reading a file.  ']).get('read_file')).toBe('Reading a file.')
+  })
+
+  it('attributes nothing for an entry that names no tool, or names no phrase', () => {
+    // Degrading to the fallback is the whole of it: a mistyped entry can never half-apply itself, and can
+    // never turn a tool's name into prose.
+    expect([...phraseTable(['no separator', '=No name.', 'read_file=', '   =   ', '']).values()]).toEqual([])
+  })
+})
+
+describe('narration', () => {
+  /** A policy thunk, because a turn reads its policy once, at the start — see `MilestonePolicy`. */
+  const policy = (over: Partial<MilestonePolicy> = {}) => (): MilestonePolicy => ({
+    phrase: (tool: string) => `Starting ${tool}.`,
+    intervalMs: 4_000,
+    maxSpoken: 3,
+    speak: true,
+    ...over,
+  })
+
+  /** A runner wired for narration, and the steps it reported. */
+  const narrating = (over: Partial<TurnDeps> = {}) => {
+    const steps: TurnStep[] = []
+    const listeners: ((event: SessionEventLike, sessionId: string) => void)[] = []
+    const run = createTurnRunner({
+      sessionId: () => SESSION,
+      maxPromptChars: () => 1_000,
+      answerTimeoutMs: () => 50,
+      admit: () => Promise.resolve(),
+      subscribe: (listener) => { listeners.push(listener); return () => undefined },
+      onStep: (step) => { steps.push(step) },
+      ...over,
+    })
+    return { listeners, steps, run }
+  }
+
+  const call = (name: string): SessionEventLike => ({ type: 'tool/call', data: { name } })
+
+  it('speaks a step for a tool call, addressed to the turn it belongs to', async () => {
+    const { listeners, steps, run } = narrating({ milestone: policy() })
+    const pending = run(request([{ kind: 'input', text: 'q' }]))
+
+    // A message event first: not every event is a step, and the runner must not narrate one that is not.
+    listeners[0]!(message([text('green')]), SESSION)
+    listeners[0]!(call('read_file'), SESSION)
+
+    expect(steps).toEqual([{ id: 'item_1', channel: 'commentary', text: 'Starting read_file.' }])
+    await expect(pending).resolves.toEqual({ kind: 'answered', text: 'green' })
+  })
+
+  it('holds a rapid step back to `thinking`, rather than speaking over itself', async () => {
+    // Pacing, and the reason it is measured against the clock rather than counted: an agent's steps arrive
+    // in bursts, and a burst read out loud is slower than the work it is describing.
+    const { listeners, steps, run } = narrating({ milestone: policy({ intervalMs: 60_000 }) })
+    void run(request([{ kind: 'input', text: 'q' }]))
+
+    listeners[0]!(call('read_file'), SESSION)
+    listeners[0]!(call('terminal'), SESSION)
+
+    // The first is immediate — a turn that has said nothing has nothing to be paced against.
+    expect(steps.map(step => step.channel)).toEqual(['commentary', 'thinking'])
+    expect(steps[1]!.text).toBe('Starting terminal.')
+  })
+
+  it('speaks again once the interval has passed', async () => {
+    vi.useFakeTimers()
+    try {
+      const { listeners, steps, run } = narrating({ milestone: policy({ intervalMs: 4_000 }) })
+      void run(request([{ kind: 'input', text: 'q' }]))
+
+      listeners[0]!(call('read_file'), SESSION)
+      vi.advanceTimersByTime(4_000)
+      listeners[0]!(call('terminal'), SESSION)
+
+      expect(steps.map(step => step.channel)).toEqual(['commentary', 'commentary'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('stops speaking at the cap, and keeps carrying the steps silently', async () => {
+    const { listeners, steps, run } = narrating({ milestone: policy({ intervalMs: 0, maxSpoken: 3 }) })
+    void run(request([{ kind: 'input', text: 'q' }]))
+
+    for (const name of ['read', 'write', 'edit', 'run']) listeners[0]!(call(name), SESSION)
+
+    // Four steps, three of them spoken: the fourth is still reported, so a reader can see it happened.
+    expect(steps.map(step => step.channel)).toEqual(['commentary', 'commentary', 'commentary', 'thinking'])
+    expect(steps).toHaveLength(4)
+  })
+
+  it('says nothing aloud when narration is switched off', async () => {
+    const { listeners, steps, run } = narrating({ milestone: policy({ speak: false }) })
+    void run(request([{ kind: 'input', text: 'q' }]))
+
+    listeners[0]!(call('read_file'), SESSION)
+
+    expect(steps).toEqual([{ id: 'item_1', channel: 'thinking', text: 'Starting read_file.' }])
+  })
+
+  it('narrates nothing when the caller supplied no policy, or no sink for it', async () => {
+    // Both halves are optional and each alone must be inert: a caller that has not thought about narration
+    // gets silence, not a plugin talking over their conversation.
+    const noPolicy = narrating()
+    void noPolicy.run(request([{ kind: 'input', text: 'q' }]))
+    noPolicy.listeners[0]!(call('read_file'), SESSION)
+    expect(noPolicy.steps).toEqual([])
+
+    // A sinkless runner is built here rather than through `narrating`, because `onStep` has to be *absent*
+    // and not present-and-undefined: `exactOptionalPropertyTypes` is on, as it is for the rest of the repo.
+    const sinklessListeners: ((event: SessionEventLike, sessionId: string) => void)[] = []
+    const sinkless = createTurnRunner({
+      sessionId: () => SESSION,
+      maxPromptChars: () => 1_000,
+      answerTimeoutMs: () => 50,
+      admit: () => Promise.resolve(),
+      subscribe: (listener) => { sinklessListeners.push(listener); return () => undefined },
+      milestone: policy(),
+    })
+    void sinkless(request([{ kind: 'input', text: 'q' }]))
+    sinklessListeners[0]!(call('read_file'), SESSION)
+    // Nothing to assert on but the absence itself: the turn simply does not report a step.
+    expect(sinklessListeners).toHaveLength(1)
+  })
+
+  it('ignores a step from another session, as it ignores an answer from one', async () => {
+    const { listeners, steps, run } = narrating({ milestone: policy() })
+    void run(request([{ kind: 'input', text: 'q' }]))
+
+    listeners[0]!(call('read_file'), 'sess-2')
+
+    expect(steps).toEqual([])
   })
 })
 

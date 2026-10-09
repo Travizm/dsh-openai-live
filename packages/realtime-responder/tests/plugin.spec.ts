@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { DelegationRequest } from 'dsh-realtime-agent'
-import RealtimeRuntime, { type Journal, type RealtimeDelegationSettlement } from 'dsh-realtime'
+import RealtimeRuntime, { type Journal, type RealtimeDelegationProgress, type RealtimeDelegationSettlement } from 'dsh-realtime'
 import * as responder from '../src/index.ts'
 import { Config, apply } from '../src/index.ts'
 import type { RealtimeResponderConfig } from '../src/types.ts'
@@ -40,6 +40,8 @@ function harness(): {
   context: Context
   controller: FakeSessionController
   settled: RealtimeDelegationSettlement[]
+  /** The narrated steps the responder put on the bus, in order. */
+  progress: RealtimeDelegationProgress[]
   // The public surface the assertions use, not the class — see the note in `recordOutcome`: the repo
   // has two `Journal` declarations (built `lib/` and `src/`) and a private member makes them nominally
   // incompatible even though they are the same code.
@@ -49,10 +51,12 @@ function harness(): {
   const controller = new FakeSessionController(context)
   const service = new RealtimeRuntime(context)
   const settled: RealtimeDelegationSettlement[] = []
-  // The bus event the diagnostics layer reads from.
+  const progress: RealtimeDelegationProgress[] = []
+  // The bus events the diagnostics layer reads from.
   context.on('realtime-agent/delegation-settled', (settlement) => { settled.push(settlement) })
+  context.on('realtime-agent/delegation-progress', (step) => { progress.push(step) })
   ctx = context
-  return { context, controller, settled, journal: service.journal }
+  return { context, controller, settled, progress, journal: service.journal }
 }
 
 /** Planted in the controller's rejection. Assembled, not written — see `redact.spec.ts`. */
@@ -300,8 +304,63 @@ describe('answering a delegation', () => {
   })
 })
 
+describe('narrating a turn', () => {
+  it('speaks a step from a tool call, addressed to the turn it belongs to', async () => {
+    const { context, progress } = harness()
+    apply(context, Config({ sessionId: 'sess-1', answerTimeoutMs: 1_000 }) as RealtimeResponderConfig)
+
+    const answer = context.serial('realtime-agent/delegation', request)
+    await Promise.resolve()
+
+    // A `tool/call` is **not** a surface event and carries no `surfaceOp`, so a filter copied from
+    // `answerText` (`surfaceOp === 'append'`) would drop this silently and the narration would simply never
+    // happen. It is emitted here the way the harness emits one, with the session as the first argument.
+    context.emit('session/event', { id: 'sess-1' } as never, {
+      type: 'tool/call',
+      data: { name: 'read_file', arguments: '{"path":"/Users/asd/notes-that-must-not-be-spoken.md"}' },
+    } as unknown as never)
+
+    expect(progress).toEqual([{ id: 'item_1', channel: 'commentary', text: 'Reading a file.' }])
+    // A tool's arguments are the model's own words: no phrase is ever derived from them, however tempting
+    // the detail in them looks. The words come from the phrase table, keyed by the tool's name.
+    expect(JSON.stringify(progress)).not.toContain('notes-that-must-not-be-spoken')
+
+    context.emit('session/event', { id: 'sess-1' } as never, {
+      type: 'assistant/message',
+      surfaceOp: 'append',
+      data: { message: { content: [{ type: 'text', text: 'Staging is green.' }] } },
+    } as unknown as never)
+    await expect(answer).resolves.toEqual({ text: 'Staging is green.', mode: 'spoken' })
+  })
+
+  it('names an unknown tool by the fallback, and carries it silently when the setting is off', async () => {
+    const { context, progress } = harness()
+    apply(context, Config({
+      sessionId: 'sess-1',
+      answerTimeoutMs: 1_000,
+      speakMilestones: false,
+    }) as RealtimeResponderConfig)
+
+    const answer = context.serial('realtime-agent/delegation', request)
+    await Promise.resolve()
+    context.emit('session/event', { id: 'sess-1' } as never, {
+      type: 'tool/call',
+      data: { name: 'a_tool_this_plugin_has_never_heard_of' },
+    } as unknown as never)
+
+    expect(progress).toEqual([{ id: 'item_1', channel: 'thinking', text: 'Working on it.' }])
+
+    context.emit('session/event', { id: 'sess-1' } as never, {
+      type: 'assistant/message',
+      surfaceOp: 'append',
+      data: { message: { content: [{ type: 'text', text: 'Staging is green.' }] } },
+    } as unknown as never)
+    await expect(answer).resolves.toEqual({ text: 'Staging is green.', mode: 'spoken' })
+  })
+})
+
 describe('the settings it declares', () => {
-  it('declares the four fields the gate calls live, and nothing else', () => {
+  it('declares the seven fields the gate calls live, and nothing else', () => {
     const { context } = harness()
     apply(context, Config({ sessionId: 'sess-1' }) as RealtimeResponderConfig)
 
@@ -346,6 +405,33 @@ describe('the settings it declares', () => {
         scope: 'live',
         describe: 'Values that must never be spoken or carried on the bus',
         value: undefined,
+      },
+      {
+        key: 'realtime-responder.speakMilestones',
+        owner: 'realtime-responder',
+        field: 'speakMilestones',
+        kind: 'boolean',
+        scope: 'live',
+        describe: 'Speak a step aloud as the agent works, rather than only carrying it silently',
+        value: true,
+      },
+      {
+        key: 'realtime-responder.maxSpokenMilestones',
+        owner: 'realtime-responder',
+        field: 'maxSpokenMilestones',
+        kind: 'number',
+        scope: 'live',
+        describe: 'Most steps spoken aloud in one turn',
+        value: 3,
+      },
+      {
+        key: 'realtime-responder.milestoneIntervalMs',
+        owner: 'realtime-responder',
+        field: 'milestoneIntervalMs',
+        kind: 'number',
+        scope: 'live',
+        describe: 'Shortest gap between two spoken steps',
+        value: 4_000,
       },
     ])
   })
@@ -407,6 +493,43 @@ describe('the settings it declares', () => {
     await Promise.resolve()
 
     expect(controller.prompted.at(-1)).toMatchObject({ content: [{ type: 'text', text: 'is s' }] })
+  })
+
+  it('applies the narration settings, and refuses a value its own rules reject', async () => {
+    const { context, progress } = harness()
+    apply(context, Config({ sessionId: 'sess-1', answerTimeoutMs: 1_000 }) as RealtimeResponderConfig)
+
+    // Live, like the budgets beside them: a change lands on the next turn rather than at the next boot.
+    expect(context.realtime.settings.apply('realtime-responder.speakMilestones', 'false')).toMatchObject({ ok: true })
+    expect(context.realtime.settings.apply('realtime-responder.maxSpokenMilestones', '1')).toMatchObject({ ok: true })
+    expect(context.realtime.settings.apply('realtime-responder.milestoneIntervalMs', '500')).toMatchObject({ ok: true })
+    expect(context.realtime.settings.list()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: 'speakMilestones', value: false }),
+      expect.objectContaining({ field: 'maxSpokenMilestones', value: 1 }),
+      expect.objectContaining({ field: 'milestoneIntervalMs', value: 500 }),
+    ]))
+
+    // And the next turn honours them: switched off, a step is carried rather than spoken.
+    const answer = context.serial('realtime-agent/delegation', request)
+    await Promise.resolve()
+    context.emit('session/event', { id: 'sess-1' } as never, {
+      type: 'tool/call',
+      data: { name: 'read_file' },
+    } as unknown as never)
+    expect(progress).toEqual([{ id: 'item_1', channel: 'thinking', text: 'Reading a file.' }])
+
+    context.emit('session/event', { id: 'sess-1' } as never, {
+      type: 'assistant/message',
+      surfaceOp: 'append',
+      data: { message: { content: [{ type: 'text', text: 'Staging is green.' }] } },
+    } as unknown as never)
+    await expect(answer).resolves.toEqual({ text: 'Staging is green.', mode: 'spoken' })
+
+    // A count is a positive whole number, and a refusal names the rule rather than being ignored.
+    expect(context.realtime.settings.apply('realtime-responder.maxSpokenMilestones', '0'))
+      .toMatchObject({ code: 'INVALID_SETTING', reason: /positive whole number/ })
+    expect(context.realtime.settings.apply('realtime-responder.milestoneIntervalMs', 'soon'))
+      .toMatchObject({ code: 'INVALID_SETTING' })
   })
 
   it('refuses a value its own rules reject, naming the rule', async () => {

@@ -23,7 +23,7 @@
 
 import Schema from '@deepseek-ai/schemastery'
 import type { Context } from '@deepseek-ai/cordis'
-import type { RealtimeDelegation, RealtimeDelegationSettlement, RealtimeSession, RealtimeSessionHandlers, RealtimeTranscript } from 'dsh-realtime'
+import type { RealtimeDelegation, RealtimeDelegationProgress, RealtimeDelegationSettlement, RealtimeSession, RealtimeSessionHandlers, RealtimeTranscript } from 'dsh-realtime'
 import { REALTIME_ERROR_CODES, RealtimeError } from 'dsh-realtime'
 import { answerDelegation, type DelegationAppend, type DelegationAsker } from './bridge.ts'
 import { voiceToolDefinitions } from './tools.ts'
@@ -56,6 +56,18 @@ declare module '@deepseek-ai/cordis' {
      * user's ear without any of them re-deriving why the turn produced nothing.
      */
     'realtime-agent/delegation-settled'(settlement: RealtimeDelegationSettlement): void
+    /**
+     * One step of a delegated turn, on its way to an ear or to the model's own context.
+     *
+     * Emitted by whichever application is running the turn, as the steps happen — it is the only thing that
+     * knows what the turn is doing. This plugin appends it, because it holds the session: `commentary` is
+     * spoken aloud, `thinking` is carried silently, and the choice is the emitter's.
+     *
+     * A step for a delegation this plugin is **not** waiting on is dropped rather than appended: the
+     * provider only accepts an append for a delegation it knows, and a finished turn's words must not be
+     * spoken into a conversation that has moved on.
+     */
+    'realtime-agent/delegation-progress'(progress: RealtimeDelegationProgress): void
     /**
      * Output audio: PCM16 in the session's declared output format.
      *
@@ -159,6 +171,13 @@ export interface HandlerDeps {
    * whether a speaker ever rendered it. See the seam's session contract and invariant 6.
    */
   readonly onAcknowledged: (append: DelegationAppend, delegationId: string) => void
+  /**
+   * Called once a delegation arrives, before it is answered, with the session it is being answered on — so
+   * a caller can tell which turns are still waiting, and *where* each one is waiting.
+   */
+  readonly onDelegationStarted?: (delegationId: string, session: RealtimeSession) => void
+  /** Called once a delegation has finished, however it ended. */
+  readonly onDelegationSettled?: (delegationId: string) => void
 }
 
 /**
@@ -176,6 +195,9 @@ export function createHandlers(deps: HandlerDeps): RealtimeSessionHandlers {
       // A delegation cannot be answered into a session that is gone. Speaking into a closed transport
       // would be a failure raised from inside a handler, which is the worst place to raise one.
       if (session === undefined) return
+      // Marked waiting before the answer is dispatched, so a step that arrives while the turn is running is
+      // appended rather than dropped for having beaten this line.
+      deps.onDelegationStarted?.(delegation.id, session)
       // Handlers are synchronous, so the answer is dispatched rather than awaited. A rejection is
       // reported rather than thrown: an unanswered delegation is already the failure path.
       void answerDelegation(
@@ -185,7 +207,7 @@ export function createHandlers(deps: HandlerDeps): RealtimeSessionHandlers {
         deps.ask,
         deps.timeoutMs(),
         deps.onAcknowledged,
-      ).catch(deps.onSessionError)
+      ).catch(deps.onSessionError).finally(() => { deps.onDelegationSettled?.(delegation.id) })
     },
     onAudio: (pcm16: Uint8Array): void => { deps.onAudio(pcm16) },
     onClosed: (): void => { deps.onClosed() },
@@ -263,6 +285,26 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
     yield () => { release() }
   }, 'realtime-agent.settings')
 
+  /**
+   * The one place an acknowledgement can honestly be recorded: the seam's appends resolve on the provider's
+   * confirmation, not on the send. Note what is deliberately absent beside it — no entry anywhere claims the
+   * audio was heard, which is the pair invariant 6 exists to keep apart. Shared with the narration path, so
+   * a spoken step and an answer are accounted for by the same rule.
+   */
+  const onAcknowledged = (append: DelegationAppend, delegationId: string): void => {
+    journal.record('append.acknowledged', { append, delegationId })
+  }
+
+  /**
+   * The delegations still waiting for an answer, with the session each one is being answered on.
+   *
+   * The session is stored *with* the id rather than read back from the plugin when a step arrives, and that
+   * is not a micro-optimisation: it collapses two conditions into one. "Nothing is waiting on this" and
+   * "there is no session to speak into" cannot drift apart into two guards, one of which — the session
+   * dropped while its id is still waiting — no sequence of events can actually produce.
+   */
+  const waiting = new Map<string, RealtimeSession>()
+
   const handlers = createHandlers({
     transcript,
     session: () => session,
@@ -270,6 +312,7 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
     timeoutMs: () => live.delegationTimeoutMs,
     onClosed: () => {
       session = undefined
+      waiting.clear()
       journal.record('session.closed', {})
     },
     onSessionError: (error) => {
@@ -284,13 +327,37 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
       // Handed to the transport: all the host can observe, and no more (invariant 6).
       journal.record('speech.sent', { bytes: String(pcm16.byteLength) })
     },
-    onAcknowledged: (append, delegationId) => {
-      // The one place an acknowledgement can honestly be recorded: the seam's appends resolve on the
-      // provider's confirmation, not on the send. Note what is deliberately absent beside it — no entry
-      // anywhere claims the audio was heard, which is the pair invariant 6 exists to keep apart.
-      journal.record('append.acknowledged', { append, delegationId })
-    },
+    onDelegationStarted: (delegationId, current) => { waiting.set(delegationId, current) },
+    onDelegationSettled: (delegationId) => { waiting.delete(delegationId) },
+    onAcknowledged,
   })
+
+  /**
+   * Narrate a delegated turn's steps, on the session that is running it.
+   *
+   * A contribution like any other, so the fiber that registered it releases it. The emitter decides whether
+   * a step is spoken or silent — this half only carries it, because the session belongs here and nowhere
+   * else does.
+   *
+   * A failed append is a **dropped step**, not a broken turn: it is recorded so it is not silent, and it
+   * must not be confused with an answer that never arrived.
+   */
+  ctx.effect(function* () {
+    const dispose = ctx.on('realtime-agent/delegation-progress', (progress: RealtimeDelegationProgress) => {
+      // One condition, not two: the session a turn is waiting on *is* the authorisation to speak into it, and
+      // it travels with the delegation. A step for anything else has nowhere to go — the provider refuses an
+      // append for an id it does not know, and a finished turn's words must not be spoken into the next one.
+      const current = waiting.get(progress.id)
+      if (current === undefined) return
+      const append = progress.channel === 'commentary'
+        ? current.appendCommentary(progress.text, progress.id)
+        : current.appendThinking(progress.text, progress.id)
+      void append
+        .then(() => { onAcknowledged(progress.channel, progress.id) })
+        .catch(() => { journal.record('progress.dropped', { id: progress.id, channel: progress.channel }) })
+    })
+    yield () => { dispose() }
+  }, 'realtime-agent.progress')
 
   /**
    * Open a session, or return the one already open.

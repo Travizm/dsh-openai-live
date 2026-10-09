@@ -55,6 +55,8 @@ export type JournalKind =
   | 'answer.received'
   /** A context append was acknowledged on the wire. Not delivery — see invariant 6. */
   | 'append.acknowledged'
+  /** A narrated step the provider did not take. Not an answer failure — a step nobody will hear. */
+  | 'progress.dropped'
   /** Audio was handed to the transport. **Not** a claim that anyone heard it. */
   | 'speech.sent'
   /** The configuration as resolved, so a journal can be read without the profile beside it. */

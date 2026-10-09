@@ -60,6 +60,14 @@ A frame larger than `maxFrameBytes` closes the connection with 1009 rather than 
 | `maxFrameBytes` | `480000` | Ten seconds of 24 kHz mono PCM16. Above this the connection is closed with 1009. |
 | `maxConnections` | `1` | A second connection is closed with 1013 rather than queued. One microphone is the honest default. |
 
+`openSessionOnConnect` (default `true`) is **live**: read at the moment an authenticated client connects
+and at the moment the last one leaves, so the seam's settings surface turns it off and on without a
+restart — `set realtime-audio-ws.openSessionOnConnect=false`. Freezing it was the failure this plugin's
+own docs describe: with it off and no way to change it, a working microphone produces silence that looks
+like a fault anywhere but in the config. The rest of this row's fields (`path`, `maxFrameBytes`,
+`maxConnections`, `diagnosticsPath`) are claimed against the web server's registry or enforced by the
+socket at load, so they are restart-bound and get no control.
+
 ## Where it waits
 
 This row appears **unloaded** in a composition without the web server and connection services, and that is

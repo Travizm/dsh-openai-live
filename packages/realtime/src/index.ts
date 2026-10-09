@@ -12,6 +12,7 @@
 import { Service, type Context } from '@deepseek-ai/cordis'
 import { REALTIME_ERROR_CODES, RealtimeError } from './error.ts'
 import { Journal } from './journal.ts'
+import { RealtimeSettings } from './settings.ts'
 import type {
   RealtimeDelegation,
   RealtimeModelInfo,
@@ -25,6 +26,7 @@ export * from './types.ts'
 export * from './error.ts'
 export * from './redact.ts'
 export * from './journal.ts'
+export * from './settings.ts'
 export { RealtimeError, REALTIME_ERROR_CODES } from './error.ts'
 
 declare module '@deepseek-ai/cordis' {
@@ -119,6 +121,18 @@ export class RealtimeRuntime extends Service {
    * per process — a reader should not be left correlating three partial ones.
    */
   readonly journal = new Journal()
+
+  /**
+   * The settings every plugin in this bundle declares, and the surface a control plane changes them
+   * through.
+   *
+   * Owned here beside the journal, for the same reason: it is the one object all of them already hold,
+   * and a surface split across three of them would leave a reader correlating three partial answers to
+   * one question. A setting's class comes from `docs/control-plane-fields.md`, and the registry is what
+   * makes that classification bite — a change to a field the protocol cannot honour is refused with the
+   * reason, on the same channel it arrived on.
+   */
+  readonly settings = new RealtimeSettings(this.journal)
 
   /**
    * @param ctx - the Cordis context this service is mounted on.

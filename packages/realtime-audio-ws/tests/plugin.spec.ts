@@ -383,3 +383,61 @@ describe('the audio route', () => {
     await expect(once(client, 'open')).rejects.toThrowError(/401/)
   })
 })
+
+describe('the settings the route declares', () => {
+  it('declares its one live field on the seam, so a control plane can find it', async () => {
+    const { context } = await mount()
+    expect(context.realtime.settings.list()).toEqual([{
+      key: 'realtime-audio-ws.openSessionOnConnect',
+      owner: 'realtime-audio-ws',
+      field: 'openSessionOnConnect',
+      kind: 'boolean',
+      scope: 'live',
+      describe: 'Ask the agent to open the session when an authenticated client connects',
+      value: true,
+    }])
+  })
+
+  it('applies a change to the next connection rather than the next boot', async () => {
+    const { context, journal, url } = await mount({ openSessionOnConnect: false })
+    const started: string[] = []
+    context.on('realtime-agent/start', () => { started.push('start') })
+
+    const first = new WebSocket(url())
+    cleanups.push(() => { first.terminate() })
+    await once(first, 'open')
+    // Mounted with it off, so an authenticated microphone produced silence — the state the gate says
+    // must be changeable without a restart, because otherwise it is the failure that looks like a fault
+    // anywhere but in this plugin.
+    expect(started).toEqual([])
+
+    expect(context.realtime.settings.apply('realtime-audio-ws.openSessionOnConnect', 'true'))
+      .toEqual({ ok: true, key: 'realtime-audio-ws.openSessionOnConnect', value: true })
+    // Recorded by key: a change to a running plugin is a thing that happened, and the journal is where
+    // a reader looks for it.
+    expect(journal.snapshot().at(-1)).toMatchObject({ kind: 'config.changed', detail: { key: 'realtime-audio-ws.openSessionOnConnect' } })
+
+    const closed = once(first, 'close')
+    first.close()
+    await closed
+    await new Promise((resolve) => { setTimeout(resolve, 20) })
+
+    const second = new WebSocket(url())
+    cleanups.push(() => { second.terminate() })
+    await once(second, 'open')
+    expect(started).toEqual(['start'])
+  })
+
+  it('refuses a key it does not have, rather than silently doing nothing', async () => {
+    const { context } = await mount()
+    expect(context.realtime.settings.apply('realtime-audio-ws.maxFrameBytes', '10'))
+      .toMatchObject({ ok: false, code: 'UNKNOWN_SETTING' })
+  })
+
+  it('withdraws its setting with the fiber that registered it', async () => {
+    const { context } = await mount()
+    const settings = context.realtime.settings
+    await context.fiber.dispose()
+    expect(settings.list()).toEqual([])
+  })
+})

@@ -19,11 +19,16 @@ export class TranscriptBuffer {
   private chars = 0
 
   /**
-   * @param maxChars - character budget. Every value is accepted: a budget smaller than one line
-   *   degrades to keeping exactly the most recent line rather than to keeping nothing, because a
-   *   buffer that can hold nothing cannot answer any delegation at all.
+   * @param maxChars - character budget, read at every eviction.
+   *
+   * An accessor rather than a number because `maxTranscriptChars` is a **live** field
+   * (`docs/control-plane-fields.md`): the budget can change while the conversation runs, and a copy
+   * taken at construction would make the change look applied while the buffer kept the old one.
+   * Every value is accepted: a budget smaller than one line degrades to keeping exactly the most recent
+   * line rather than to keeping nothing, because a buffer that can hold nothing cannot answer any
+   * delegation at all.
    */
-  constructor(private readonly maxChars: number) {}
+  constructor(private readonly maxChars: () => number) {}
 
   /**
    * Record one fragment.
@@ -56,7 +61,8 @@ export class TranscriptBuffer {
 
   /** Drop the oldest lines until the budget is met, never dropping the most recent one. */
   private evict(): void {
-    while (this.chars > this.maxChars && this.buffered.length > 1) {
+    const budget = this.maxChars()
+    while (this.chars > budget && this.buffered.length > 1) {
       // The loop condition proves a first element exists, so this assertion is an invariant rather
       // than a hope — and it leaves no unreachable branch for the coverage gate to flag.
       this.chars -= this.buffered.shift()!.text.length

@@ -111,6 +111,10 @@ export function apply(ctx: Context, config: RealtimeAudioWsConfig): void {
     const clients = new Set<AudioSocket>()
     const token = createRouteToken()
     const journal = injected.realtime.journal
+    // The one field the gate classifies as live for this route. Read at the moment each decision is
+    // made — at a connect, and at the last client leaving — rather than captured here, so turning it
+    // off does not need a restart and turning it on applies to the next connection.
+    const live = { openSessionOnConnect: config.openSessionOnConnect }
     // The token travels in a URL query, and this route records request targets, so the journal has to be
     // able to redact it before it records one. This is exactly why `addSecrets` is additive instead of a
     // constructor argument: the plugin that mints the token is the only one that can name it, and it
@@ -123,6 +127,20 @@ export function apply(ctx: Context, config: RealtimeAudioWsConfig): void {
       name: string,
       listener: (table: InjectedGlobalRow[]) => void,
     ) => unknown
+
+    ctx.effect(function* () {
+      const release = injected.realtime.settings.register(name, [
+        {
+          field: 'openSessionOnConnect',
+          kind: 'boolean',
+          scope: 'live',
+          describe: 'Ask the agent to open the session when an authenticated client connects',
+          get: () => live.openSessionOnConnect,
+          set: (value: boolean) => { live.openSessionOnConnect = value },
+        },
+      ])
+      yield () => { release() }
+    }, 'realtime-audio-ws.settings')
 
     ctx.effect(() => {
       // The page is told where the route is and what to present. The web server gathers this table on every
@@ -188,7 +206,7 @@ export function apply(ctx: Context, config: RealtimeAudioWsConfig): void {
             journal.record('socket.accepted', { clients: String(clients.size), url: target })
             // Ask for the session before the bridge goes in, so the first frames are written into a session
             // that is being opened rather than dropped by the mic seam's no-session rule.
-            if (config.openSessionOnConnect) ctx.emit('realtime-agent/start')
+            if (live.openSessionOnConnect) ctx.emit('realtime-agent/start')
             attachAudioSocket(client, {
               emitMic: (pcm16) => { ctx.emit('realtime-agent/mic', pcm16) },
               subscribeAudio: (listener) => ctx.on('realtime-agent/audio', listener),
@@ -198,7 +216,7 @@ export function apply(ctx: Context, config: RealtimeAudioWsConfig): void {
                 journal.record('socket.closed', { clients: String(clients.size) })
                 // The last client leaving ends the session. This also covers the transport's own disposal,
                 // which terminates its clients — so a profile reload does not leave a session nobody holds.
-                if (config.openSessionOnConnect && clients.size === 0) ctx.emit('realtime-agent/stop')
+                if (live.openSessionOnConnect && clients.size === 0) ctx.emit('realtime-agent/stop')
               },
             })
           })

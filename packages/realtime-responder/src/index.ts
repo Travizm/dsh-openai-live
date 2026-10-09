@@ -66,6 +66,18 @@ interface SessionControllerLike {
   }): Promise<{ readonly accepted: true }>
 }
 
+/**
+ * The slice of the session store this plugin reads: every session the harness currently has live.
+ *
+ * Structural, and reached for with `ctx.get` rather than declared in `inject`. That is deliberate: a
+ * profile without this service is one where the session picker offers a text field instead of a list, not
+ * one where the responder should wait — and an unsatisfied `inject` is silence, so a missing *enhancement*
+ * must never be able to stop the plugin answering.
+ */
+interface SessionStoreLike {
+  list(): readonly { readonly id: string }[]
+}
+
 /** Plugin name, as it appears in Loader diagnostics. */
 export const name = 'realtime-responder'
 
@@ -209,6 +221,18 @@ export function apply(ctx: Context, config: RealtimeResponderConfig): void {
     redactSecrets: config.redactSecrets,
   }
 
+  /**
+   * The sessions a picker can offer, read at the moment it is asked.
+   *
+   * Empty when the session store is not mounted, and empty is a legitimate answer: the strip renders a
+   * text field for an empty list rather than a picker with nothing in it, so an absent service degrades
+   * the control instead of breaking it.
+   */
+  const sessionChoices = (): readonly string[] => {
+    const store = ctx.get('sessions') as SessionStoreLike | undefined
+    return store === undefined ? [] : store.list().map(session => session.id)
+  }
+
   // The four fields `docs/control-plane-fields.md` classifies as live for this plugin, declared on the
   // seam's surface so a running conversation can be re-steered without a restart — which is the field
   // whose boot-time constant cost two restarts and a false lead.
@@ -219,6 +243,7 @@ export function apply(ctx: Context, config: RealtimeResponderConfig): void {
         kind: 'string',
         scope: 'live',
         describe: 'The DSH session the voice conversation steers',
+        choices: sessionChoices,
         get: () => live.sessionId,
         set: (value: string) => {
           // No default and no empty: a responder pointed at the wrong session speaks another

@@ -37,6 +37,20 @@ export interface InjectedGlobalRow {
 }
 
 /**
+ * Any row this package contributes.
+ *
+ * The host's table takes six kinds; this package uses three, and describes only those — `html` for the
+ * panel's markup and `script` for the bootstrap that mounts it, beside the `global` row carrying the
+ * route's own settings. The payload contract is the host's and is stated where it is enforced: a `script`
+ * row's text or a `style` row's text must not contain the closing tag of its own element, because the row
+ * is spliced into the document's text.
+ */
+export type InjectedRow =
+  | InjectedGlobalRow
+  | { readonly kind: 'html'; readonly placement: 'head' | 'body'; readonly html: string }
+  | { readonly kind: 'script'; readonly placement: 'head' | 'body'; readonly text: string }
+
+/**
  * Where the client should open its socket, or undefined when the host is not listening yet.
  *
  * A wildcard bind is normalised to loopback because the page is on this machine: handing a client

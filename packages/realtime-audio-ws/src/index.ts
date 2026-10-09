@@ -30,8 +30,9 @@ import {
   routeInjectionRow,
   tokenFromUrl,
   verdictFor,
-  type InjectedGlobalRow,
+  type InjectedRow,
 } from './injection.ts'
+import { stripRows } from './strip.ts'
 import { createUpgradeAcceptor, rejectUpgrade } from './upgrade.ts'
 import {
   DEFAULT_DIAGNOSTICS_PATH,
@@ -68,6 +69,8 @@ export {
 } from './control.ts'
 export { createUpgradeAcceptor, rejectUpgrade, type UpgradeAcceptor } from './upgrade.ts'
 export { diagnosticsRoute, type DiagnosticsDeps, type DiagnosticsJournal, type DiagnosticsRoute } from './diagnostics.ts'
+export { STRIP_ELEMENT_ID, stripBootstrap, stripMarkup, stripRows } from './strip.ts'
+export type { InjectedGlobalRow, InjectedRow } from './injection.ts'
 
 /** Plugin name. */
 export const name = 'realtime-audio-ws'
@@ -139,7 +142,7 @@ export function apply(ctx: Context, config: RealtimeAudioWsConfig): void {
     // turn the structural dependency above into a compile error. The name is cast at this one boundary.
     const onInjection = ctx.on as unknown as (
       name: string,
-      listener: (table: InjectedGlobalRow[]) => void,
+      listener: (table: InjectedRow[]) => void,
     ) => unknown
 
     /**
@@ -160,6 +163,16 @@ export function apply(ctx: Context, config: RealtimeAudioWsConfig): void {
         ? ctx.serial('realtime-agent/start')
         : ctx.serial('realtime-agent/stop'),
     })
+
+    /**
+     * The tail of the control-reply queue.
+     *
+     * The channel answers in **arrival order**, which is a property of this queue rather than of the socket:
+     * a handler is asynchronous, so without it a slow `status` could be overtaken by the `set` behind it and
+     * a client pairing replies with frames would be guessing. One handler at a time costs a control frame
+     * the latency of the one before it, which is the right trade for a channel a person drives by hand.
+     */
+    let replies: Promise<unknown> = Promise.resolve()
 
     ctx.effect(function* () {
       const release = injected.realtime.settings.register(name, [
@@ -185,6 +198,9 @@ export function apply(ctx: Context, config: RealtimeAudioWsConfig): void {
           routeAuthority(services.webServer.config?.host, services.webServer.listenedPort),
           token,
         ))
+        // The panel's own two rows, after the settings it reads. Markup first, then the bootstrap that
+        // mounts the panel on it — the table's own ordering guarantee is what makes that safe.
+        table.push(...stripRows())
       })
       const unregisterDiagnostics = services.webServer.register(diagnosticsRoute({
         path: config.diagnosticsPath,
@@ -246,8 +262,10 @@ export function apply(ctx: Context, config: RealtimeAudioWsConfig): void {
               maxFrameBytes: config.maxFrameBytes,
               // The handler is total — every frame produces exactly one reply, and it refuses rather than
               // rejecting — so there is nothing here to catch and nothing here may invent a second reply.
-              // `reply` drops the frame if the socket has gone in the meantime.
-              onControl: (frame, reply) => { void control(frame).then(reply) },
+              // `reply` drops the frame if the socket has gone in the meantime, and is total itself.
+              onControl: (frame, reply) => {
+                replies = replies.then(() => control(frame)).then(reply)
+              },
               onDetach: () => {
                 clients.delete(client)
                 journal.record('socket.closed', { clients: String(clients.size) })

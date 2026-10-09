@@ -289,6 +289,10 @@ describe('the settings it declares', () => {
         kind: 'string',
         scope: 'live',
         describe: 'The DSH session the voice conversation steers',
+        // Present and empty: the surface reports candidates whenever the owner declared a source, and an
+        // empty list is what a page with no session store mounted looks like — the panel renders a text
+        // field for it rather than a picker with nothing in it.
+        choices: [],
         value: 'sess-1',
       },
       {
@@ -433,5 +437,25 @@ describe('the settings it declares', () => {
     await context.fiber.dispose()
     ctx = undefined
     expect(settings.list()).toEqual([])
+  })
+
+  it('offers the live sessions as a picker’s candidates, read when the surface is asked', () => {
+    // The headline control. The candidates come from the harness's own session store, which this plugin
+    // reaches for *optionally*: a missing enhancement must never stop the responder answering, which is
+    // why it is `ctx.get` rather than an `inject`.
+    const { context } = harness()
+    let ids = ['session-a', 'session-b']
+    class FakeSessions extends Service {
+      constructor(context: Context) { super(context, 'sessions') }
+      list(): readonly { readonly id: string }[] { return ids.map(id => ({ id })) }
+    }
+    new FakeSessions(context)
+    apply(context, Config({ sessionId: 'sess-1' }) as RealtimeResponderConfig)
+
+    expect(context.realtime.settings.get('realtime-responder.sessionId')?.choices).toEqual(['session-a', 'session-b'])
+    // Read at the moment it is asked, like every other live value here: a session created a second ago is
+    // in the list, and no copy of it was taken when the plugin applied.
+    ids = ['session-c']
+    expect(context.realtime.settings.get('realtime-responder.sessionId')?.choices).toEqual(['session-c'])
   })
 })

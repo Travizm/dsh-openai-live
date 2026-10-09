@@ -2,16 +2,24 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import {
   GLOBAL_KEY,
+  STRIP_ELEMENT_ID,
   apply,
   createAudioClient,
   defaultDeps,
   float32FromPcm16,
+  mountStrip,
   pcm16FromFloat32,
+  renderStrip,
   socketUrl,
+  stripRoot,
   type ClientAudioDeps,
   type ContextLike,
+  type ControlReplyLike,
   type ScopeLike,
+  type SettingLike,
   type SocketLike,
+  type StripElement,
+  type StripEvent,
 } from '../src/client/index.ts'
 
 // ---- doubles -------------------------------------------------------------------------------------------
@@ -26,7 +34,7 @@ import {
 type HandlerName = 'onopen' | 'onmessage' | 'onerror' | 'onclose'
 
 function fakeSocket() {
-  const sent: Uint8Array[] = []
+  const sent: (Uint8Array | string)[] = []
   let closes = 0
   let markReady: () => void = () => {}
   const ready = new Promise<void>((resolve) => { markReady = resolve })
@@ -35,7 +43,7 @@ function fakeSocket() {
   }
   const socket = {
     binaryType: '',
-    send: (data: Uint8Array) => { sent.push(data) },
+    send: (data: Uint8Array | string) => { sent.push(data) },
     close: () => { closes += 1 },
     get onopen(): typeof handlers.onopen { return handlers.onopen },
     set onopen(handler: typeof handlers.onopen) { handlers.onopen = handler },
@@ -183,7 +191,7 @@ describe('createAudioClient', () => {
     expect(h.urls).toEqual(['ws://127.0.0.1:19387/dsh-realtime/audio'])
     h.capture([0, 0.5, -0.5])
     expect(h.sent).toHaveLength(1)
-    expect(Array.from(new Int16Array(h.sent[0]!.buffer))).toEqual([0, 16384, -16384])
+    expect(Array.from(new Int16Array((h.sent[0] as Uint8Array).buffer))).toEqual([0, 16384, -16384])
   })
 
   it('plays what comes back, advancing the playhead so frames queue in order', async () => {
@@ -384,5 +392,513 @@ describe('defaultDeps and apply', () => {
     expect(handle.state()).toEqual({ kind: 'idle' })
     handle.stop()
     expect(graph.trackStops).toHaveLength(1)
+  })
+})
+
+// ---- the control channel, from the page's side ---------------------------------------------------------
+
+/** Let the request chain start its next link. Frames go out in order, so a test waits for one to leave. */
+const sentTick = (): Promise<void> => new Promise((resolve) => { setTimeout(resolve, 0) })
+
+describe('request', () => {
+  it('sends one frame and resolves with the reply', async () => {
+    const h = await live()
+    const pending = h.client.request('status')
+    await sentTick()
+    expect(h.sent).toEqual(['status'])
+    h.fire('onmessage', '{"ok":true,"verb":"status","settings":[]}')
+    await expect(pending).resolves.toMatchObject({ ok: true, verb: 'status' })
+  })
+
+  it('refuses to invent a reply when there is no socket', async () => {
+    // Nothing was sent, so there is nothing the channel could have said. Reporting a failure is the only
+    // honest answer — a fabricated `{ok:false}` would be indistinguishable from the host refusing.
+    const h = harness()
+    await expect(h.client.request('status')).rejects.toThrow('not connected: connect the microphone first')
+  })
+
+  it('serialises frames, so a reply cannot be paired with the wrong request', async () => {
+    const h = await live()
+    const first = h.client.request('status')
+    const second = h.client.request('set realtime-responder.sessionId=sess-2')
+    await sentTick()
+    // The second waits: the host answers in arrival order, and two frames in flight would make pairing a
+    // guess the moment anything on the host slowed down.
+    expect(h.sent).toEqual(['status'])
+
+    h.fire('onmessage', '{"ok":true,"verb":"status"}')
+    await expect(first).resolves.toMatchObject({ verb: 'status' })
+    await sentTick()
+    expect(h.sent).toEqual(['status', 'set realtime-responder.sessionId=sess-2'])
+
+    h.fire('onmessage', '{"ok":true,"verb":"set"}')
+    await expect(second).resolves.toMatchObject({ verb: 'set' })
+  })
+
+  it('keeps the chain alive after a failure, so one bad frame does not stop the next', async () => {
+    const h = harness()
+    await expect(h.client.request('status')).rejects.toThrow(/not connected/)
+    const pending = h.client.start()
+    await h.ready
+    h.fire('onopen')
+    await expect(pending).resolves.toEqual({ kind: 'live' })
+
+    const next = h.client.request('status')
+    await sentTick()
+    expect(h.sent).toEqual(['status'])
+    h.fire('onmessage', '{"ok":true}')
+    await expect(next).resolves.toMatchObject({ ok: true })
+  })
+
+  it('fails a request whose answer never comes, rather than leaving the panel waiting for ever', async () => {
+    const h = await live()
+    const pending = h.client.request('status')
+    await sentTick()
+    h.fire('onclose')
+    await expect(pending).rejects.toThrow('the audio socket closed before the host answered')
+  })
+
+  it('fails a reply that is not a reply', async () => {
+    const h = await live()
+    const pending = h.client.request('status')
+    await sentTick()
+    h.fire('onmessage', 'this is not JSON')
+    await expect(pending).rejects.toThrow('the host answered a control frame with something that is not a reply')
+  })
+
+  it('ignores a text frame nobody asked for, and a message that is neither text nor audio', async () => {
+    const h = await live()
+    expect(() => {
+      h.fire('onmessage', '{"ok":true}')
+      h.fire('onmessage', 42)
+    }).not.toThrow()
+    // Neither reached the speaker: only binary frames are audio.
+    expect(h.started).toEqual([])
+  })
+})
+
+// ---- the strip -----------------------------------------------------------------------------------------
+
+/** A setting as `status` reports it. */
+const setting = (over: Partial<SettingLike> & { key: string }): SettingLike => ({
+  field: over.key.split('.')[1] ?? over.key,
+  kind: 'string',
+  scope: 'live',
+  ...over,
+})
+
+/** A reply from the host, minimal but shaped like the real one. */
+const statusReply = (over: Partial<ControlReplyLike> = {}): ControlReplyLike => ({
+  ok: true,
+  verb: 'status',
+  audio: { path: '/dsh-realtime/audio', clients: 1 },
+  voice: { open: true, provider: 'fake', model: 'gpt-live-1', sessionId: 'sess-voice' },
+  settings: [setting({ key: 'realtime-responder.sessionId', value: 'sess-1', choices: ['sess-1', 'sess-2'] })],
+  journal: { size: 3, last: { kind: 'socket.accepted' } },
+  ...over,
+})
+
+/**
+ * A fake panel element.
+ *
+ * Two methods and a string: the panel's logic never touches a real DOM, which is what keeps it out of the
+ * injected script and inside the coverage gate.
+ */
+function fakePanel(inputs: Record<string, string> = {}) {
+  const listeners: ((event: StripEvent) => void)[] = []
+  let rendered = ''
+  let writes = 0
+  const element = {
+    get innerHTML(): string { return rendered },
+    set innerHTML(markup: string) { rendered = markup; writes += 1 },
+    addEventListener: (_type: string, listener: (event: StripEvent) => void) => { listeners.push(listener) },
+    querySelector: (selector: string) => {
+      const key = /\[data-input="(.*)"\]/u.exec(selector)?.[1]
+      if (key === undefined || inputs[key] === undefined) return null
+      return { innerHTML: '', value: inputs[key], addEventListener: () => {}, querySelector: () => null }
+    },
+  }
+  return {
+    element: element as unknown as StripElement,
+    /** How many times the panel has rendered. How a test tells "mounted once" from "mounted twice". */
+    writes: (): number => writes,
+    /** Click one of the panel's buttons, as the page would. */
+    click: (dataset: Record<string, string | undefined>): void => {
+      for (const listener of listeners) listener({ target: { dataset } })
+    },
+  }
+}
+
+describe('renderStrip', () => {
+  it('says there is no answer yet, and what the microphone is doing', () => {
+    const markup = renderStrip({ reply: null, notes: {}, notice: '', audio: { kind: 'idle' } })
+    expect(markup).toContain('no answer yet')
+    expect(markup).toContain('microphone: idle')
+    expect(markup).toContain('Connect microphone')
+  })
+
+  it('distinguishes a profile with no agent from a session that is closed', () => {
+    // `null` is nobody answering the query; a closed session is a session. Collapsing them would put "no
+    // agent is mounted" behind a control that looks like a session that happens to be off.
+    const withoutAgent = renderStrip({ reply: statusReply({ voice: null }), notes: {}, notice: '', audio: { kind: 'idle' } })
+    expect(withoutAgent).toContain('voice: no agent is mounted in this profile')
+    const closed = renderStrip({
+      reply: statusReply({ voice: { open: false, provider: 'fake', model: 'gpt-live-1' } }),
+      notes: {},
+      notice: '',
+      audio: { kind: 'live' },
+    })
+    expect(closed).toContain('voice: closed · fake/gpt-live-1')
+    expect(closed).toContain('Disconnect microphone')
+  })
+
+  it('reports a failed microphone with its reason', () => {
+    const markup = renderStrip({
+      reply: null,
+      notes: {},
+      notice: '',
+      audio: { kind: 'failed', reason: 'Permission denied' },
+    })
+    expect(markup).toContain('microphone: failed — Permission denied')
+  })
+
+  it('gives a live field a control, a session-bound field a note, and a restart-bound field nothing', () => {
+    const markup = renderStrip({
+      reply: statusReply({
+        settings: [
+          setting({ key: 'realtime-responder.sessionId', value: 'sess-1', choices: ['sess-1'] }),
+          setting({ key: 'realtime-responder.answerTimeoutMs', kind: 'number', field: 'answerTimeoutMs', value: 45_000 }),
+          setting({ key: 'realtime-agent.model', scope: 'session', field: 'model', value: 'gpt-live-1' }),
+          setting({ key: 'realtime-agent.autoStart', scope: 'restart', kind: 'boolean', field: 'autoStart', value: false }),
+        ],
+      }),
+      notes: {},
+      notice: '',
+      audio: { kind: 'idle' },
+    })
+
+    expect(markup).toContain('data-scope="live"')
+    expect(markup).toContain('data-action="steer"')
+    expect(markup).toContain('data-action="set"')
+    expect(markup).toContain('fixed when the session opens — reconnect to apply')
+    // The gate's third class gets no row at all: no control, and nothing that reads as one.
+    expect(markup).not.toContain('realtime-agent.autoStart')
+    expect(markup).not.toContain('autoStart')
+  })
+
+  it('offers the value in force among the candidates even when it is not one of them', () => {
+    // A select that silently showed the first candidate instead of the session actually in force would be
+    // lying about the state, which is the one thing a control plane must not do.
+    const markup = renderStrip({
+      reply: statusReply({ settings: [setting({ key: 'realtime-responder.sessionId', value: 'sess-9', choices: ['sess-1'] })] }),
+      notes: {},
+      notice: '',
+      audio: { kind: 'idle' },
+    })
+    expect(markup).toContain('<option value="sess-9" selected>sess-9</option>')
+    expect(markup).toContain('<option value="sess-1">sess-1</option>')
+  })
+
+  it('renders a text field for a setting whose candidate list is empty', () => {
+    const markup = renderStrip({
+      reply: statusReply({ settings: [setting({ key: 'realtime-responder.sessionId', value: 'sess-1', choices: [] })] }),
+      notes: {},
+      notice: '',
+      audio: { kind: 'idle' },
+    })
+    expect(markup).toContain('<input data-input="realtime-responder.sessionId" value="sess-1">')
+  })
+
+  it('escapes what a plugin wrote, in both a body and an attribute', () => {
+    const markup = renderStrip({
+      reply: statusReply({
+        settings: [setting({
+          key: 'realtime-agent.instructions',
+          value: '"><script>alert(1)</script>',
+          describe: 'Be <brief>',
+        })],
+      }),
+      notes: { 'realtime-agent.instructions': 'refused: <no>' },
+      notice: 'the socket closed & went away',
+      audio: { kind: 'idle' },
+    })
+    expect(markup).not.toContain('<script>alert(1)')
+    expect(markup).toContain('&lt;script&gt;alert(1)&lt;/script&gt;')
+    expect(markup).toContain('Be &lt;brief&gt;')
+    expect(markup).toContain('the socket closed &amp; went away')
+  })
+
+  it('shows a note against the field it belongs to, and a notice with no field', () => {
+    const markup = renderStrip({
+      reply: statusReply(),
+      notes: { 'realtime-responder.sessionId': 'applied' },
+      notice: 'voice started',
+      audio: { kind: 'idle' },
+    })
+    expect(markup).toContain('data-note="realtime-responder.sessionId">applied')
+    expect(markup).toContain('data-dsh-strip-notice>voice started')
+  })
+
+  it('says so when there is nothing to show rather than rendering an empty list', () => {
+    const markup = renderStrip({ reply: statusReply({ settings: [] }), notes: {}, notice: '', audio: { kind: 'idle' } })
+    expect(markup).toContain('no settings to show')
+  })
+
+  it('shows a dash for a write-only setting, which reports no value at all', () => {
+    // `redactSecrets` never reports its value; rendering nothing there would read as a broken row.
+    const markup = renderStrip({
+      reply: statusReply({ settings: [setting({ key: 'realtime-responder.redactSecrets', kind: 'string-list', value: undefined, describe: 'Values that must never be spoken' })] }),
+      notes: {},
+      notice: '',
+      audio: { kind: 'idle' },
+    })
+    expect(markup).toContain('<input data-input="realtime-responder.redactSecrets" value="—">')
+  })
+
+  it('renders a bare voice state without inventing a provider for it', () => {
+    // What an agent that answered with nothing booked looks like: three optional fields, none of them set.
+    const bare = renderStrip({ reply: statusReply({ voice: { open: true } }), notes: {}, notice: '', audio: { kind: 'idle' } })
+    expect(bare).toContain('voice: open · microphone: idle')
+    const partial = renderStrip({
+      reply: statusReply({ voice: { open: false, provider: 'openai-live' } }),
+      notes: {},
+      notice: '',
+      audio: { kind: 'idle' },
+    })
+    // A provider with no accepted model reads as `openai-live/?` rather than as a blank.
+    expect(partial).toContain('voice: closed · openai-live/?')
+  })
+
+  it('renders the route line without a journal entry, when there is nothing to report', () => {
+    const markup = renderStrip({
+      reply: { ok: true, verb: 'status', settings: [] },
+      notes: {},
+      notice: '',
+      audio: { kind: 'idle' },
+    })
+    expect(markup).toContain('the audio route · 0 socket(s) · journal 0')
+    expect(markup).not.toContain('last ')
+  })
+})
+
+describe('mountStrip', () => {
+  /** A panel wired to a scripted transport. */
+  function panel(options: { replies?: ControlReplyLike[]; fail?: unknown; inputs?: Record<string, string> } = {}) {
+    const page = fakePanel(options.inputs ?? { 'realtime-responder.sessionId': 'sess-2' })
+    const frames: string[] = []
+    const replies = [...options.replies ?? []]
+    const strip = mountStrip({
+      root: page.element,
+      request: (frame) => {
+        frames.push(frame)
+        // Rejected with whatever the test gave: an `Error` and a bare string are both things a transport
+        // can fail with, and the panel has to name both.
+        if (options.fail !== undefined) return Promise.reject(options.fail)
+        return Promise.resolve(replies.shift() ?? { ok: true, verb: 'ok' })
+      },
+      connect: () => Promise.resolve({ kind: 'live' }),
+      disconnect: () => undefined,
+      audio: () => ({ kind: 'idle' }),
+    })
+    return { ...page, frames, strip }
+  }
+
+  it('renders a status on refresh, and asks for one first', async () => {
+    const { element, frames, strip } = panel({ replies: [statusReply()] })
+    await strip.refresh()
+    expect(frames).toEqual(['status'])
+    expect(element.innerHTML).toContain('voice: open')
+    expect(strip.state().reply).toMatchObject({ verb: 'status' })
+  })
+
+  it('steers with the picker’s value and reports the outcome against that field', async () => {
+    const { frames, strip, click } = panel({ replies: [statusReply(), { ok: true, verb: 'steer', key: 'realtime-responder.sessionId', value: 'sess-2' }, statusReply()] })
+    await strip.refresh()
+    click({ action: 'steer', key: 'realtime-responder.sessionId' })
+    await new Promise((resolve) => { setTimeout(resolve, 0) })
+
+    expect(frames).toEqual(['status', 'steer sess-2', 'status'])
+    expect(strip.state().notes['realtime-responder.sessionId']).toBe('steered')
+  })
+
+  it('relays a refusal verbatim, beside the field it belongs to', async () => {
+    const { strip, click } = panel({
+      replies: [
+        statusReply(),
+        { ok: false, verb: 'set', key: 'realtime-agent.autoStart', code: 'FROZEN_SETTING', reason: '"x" is claimed when the plugin loads — restart to change it' },
+        statusReply(),
+      ],
+      inputs: { 'realtime-agent.autoStart': 'true' },
+    })
+    await strip.refresh()
+    click({ action: 'set', key: 'realtime-agent.autoStart' })
+    await new Promise((resolve) => { setTimeout(resolve, 0) })
+
+    expect(strip.state().notes['realtime-agent.autoStart'])
+      .toBe('FROZEN_SETTING: "x" is claimed when the plugin loads — restart to change it')
+  })
+
+  it('sends a set for everything that is not the session picker', async () => {
+    const { frames, strip, click } = panel({ inputs: { 'realtime-responder.answerTimeoutMs': '90000' } })
+    await strip.refresh()
+    click({ action: 'set', key: 'realtime-responder.answerTimeoutMs' })
+    await new Promise((resolve) => { setTimeout(resolve, 0) })
+    expect(frames).toEqual(['status', 'set realtime-responder.answerTimeoutMs=90000', 'status'])
+  })
+
+  it('starts and stops the voice from the panel, and reports which happened', async () => {
+    const { frames, strip, click } = panel({ replies: [statusReply(), { ok: true, verb: 'start' }, statusReply()] })
+    await strip.refresh()
+    click({ action: 'voice-start' })
+    await new Promise((resolve) => { setTimeout(resolve, 0) })
+    expect(frames).toEqual(['status', 'start', 'status'])
+    expect(strip.state().notice).toBe('voice started')
+  })
+
+  it('connects and disconnects the microphone — the on-switch that used to be a console global', async () => {
+    const page = fakePanel()
+    let live = false
+    const strip = mountStrip({
+      root: page.element,
+      request: () => Promise.resolve(statusReply({ voice: { open: false, provider: 'fake', model: 'gpt-live-1' } })),
+      connect: () => { live = true; return Promise.resolve({ kind: 'live' }) },
+      disconnect: () => { live = false },
+      audio: () => live ? { kind: 'live' } : { kind: 'idle' },
+    })
+
+    page.click({ action: 'connect' })
+    await sentTick()
+    expect(live).toBe(true)
+    expect(page.element.innerHTML).toContain('Disconnect microphone')
+
+    page.click({ action: 'disconnect' })
+    await sentTick()
+    expect(live).toBe(false)
+    expect(page.element.innerHTML).toContain('Connect microphone')
+    expect(strip.state().audio).toEqual({ kind: 'idle' })
+  })
+
+  it('says why the microphone did not come up, rather than looking like it did', async () => {
+    const page = fakePanel()
+    const strip = mountStrip({
+      root: page.element,
+      request: () => Promise.resolve(statusReply()),
+      connect: () => Promise.resolve({ kind: 'failed', reason: 'Permission denied' }),
+      disconnect: () => undefined,
+      audio: () => ({ kind: 'failed', reason: 'Permission denied' }),
+    })
+
+    page.click({ action: 'connect' })
+    await new Promise((resolve) => { setTimeout(resolve, 0) })
+    expect(strip.state().notice).toBe('Permission denied')
+    expect(page.element.innerHTML).toContain('Permission denied')
+  })
+
+  it('reports a transport that is not there at all, and one that refuses a frame', async () => {
+    const { element, strip, click } = panel({ fail: new Error('not connected: connect the microphone first') })
+    await strip.refresh()
+    expect(strip.state().notice).toBe('not connected: connect the microphone first')
+    expect(element.innerHTML).toContain('not connected')
+
+    click({ action: 'voice-stop' })
+    await sentTick()
+    expect(strip.state().notice).toBe('not connected: connect the microphone first')
+  })
+
+  it('names a failure that is not an Error, rather than reporting nothing at all', async () => {
+    const { strip, click } = panel({ fail: 'the tunnel went away' })
+    await strip.refresh()
+    expect(strip.state().notice).toBe('the tunnel went away')
+    // The same on the way out: a frame that could not even be sent is named the same way.
+    click({ action: 'voice-stop' })
+    await sentTick()
+    expect(strip.state().notice).toBe('the tunnel went away')
+  })
+
+  it('sends a steer with whatever the picker is holding, including nothing', async () => {
+    const { frames, strip, click } = panel({ replies: [statusReply(), { ok: true, verb: 'steer' }, statusReply()], inputs: {} })
+    await strip.refresh()
+    click({ action: 'steer' })
+    await sentTick()
+    // The frame is well-formed and the channel answers with its own refusal: a panel that declined to send
+    // would be inventing a rule the channel does not have.
+    expect(frames).toEqual(['status', 'steer ', 'status'])
+  })
+
+  it('relays a refusal that explained itself badly without inventing a reason', async () => {
+    const { strip, click } = panel({ replies: [statusReply(), { ok: false, verb: 'set' }, statusReply()], inputs: {} })
+    await strip.refresh()
+    click({ action: 'set' })
+    await sentTick()
+    // No key on the button and no input to read: the panel asks anyway, with what it has, and reports what
+    // came back — "refused: no reason given" is honest where an invented sentence would not be.
+    expect(strip.state().notice).toBe('refused: no reason given')
+  })
+
+  it('ignores a click that is not one of its controls', () => {
+    const { strip, click } = panel()
+    expect(() => { click({}) }).not.toThrow()
+    expect(strip.state().reply).toBeNull()
+  })
+
+  it('re-reads the status on demand', async () => {
+    const { frames, strip, click } = panel({ replies: [statusReply(), statusReply({ audio: { path: '/x', clients: 2 } })] })
+    await strip.refresh()
+    click({ action: 'refresh' })
+    await sentTick()
+    expect(frames).toEqual(['status', 'status'])
+    expect(strip.state().reply?.audio?.clients).toBe(2)
+  })
+})
+
+describe('the panel the bundle mounts by itself', () => {
+  it('finds the element the injected row provides, and nothing when there is none', () => {
+    const page = fakePanel()
+    const scope = { document: { getElementById: (id: string) => id === STRIP_ELEMENT_ID ? page.element : null } }
+    expect(stripRoot(scope)).toBe(page.element)
+    expect(stripRoot({})).toBeNull()
+    expect(stripRoot({ document: { getElementById: () => null } })).toBeNull()
+  })
+
+  it('mounts from apply when the markup is already there, and mounting again changes nothing', async () => {
+    // The bundle reads its element off the page scope, so the test installs one — the same thing the
+    // host's own page provides.
+    const page = fakePanel()
+    const saved = Object.getOwnPropertyDescriptor(globalThis, 'document')
+    Object.defineProperty(globalThis, 'document', { value: { getElementById: () => page.element }, configurable: true })
+    try {
+      apply({ effect: (run: () => void) => { void run } })
+      await new Promise((resolve) => { setTimeout(resolve, 0) })
+
+      // Mounted by the bundle itself, not only by the injected script: the two orderings are both possible,
+      // and whichever lands second finds the panel already there.
+      expect(page.element.innerHTML).toContain('no answer yet')
+      const exposed = (globalThis as unknown as Record<string, { mount: () => void; state: () => unknown; stop: () => void; request: (frame: string) => Promise<unknown> }>)[GLOBAL_KEY]!
+      expect(exposed.mount).toBeTypeOf('function')
+      const rendered = page.writes()
+      exposed.mount()
+      await sentTick()
+      expect(page.writes()).toBe(rendered)
+
+      // Driven through the panel's own controls, which is what makes the bundle's mount more than a
+      // decoration: this page cannot reach a socket at all, and the panel says so — in the microphone line
+      // for the reason, and in the notice for why the status could not be read.
+      page.click({ action: 'connect' })
+      await sentTick()
+      expect(page.element.innerHTML).toContain('microphone: failed — no authority for the audio socket')
+      expect(page.element.innerHTML).toContain('not connected: connect the microphone first')
+      page.click({ action: 'disconnect' })
+      await sentTick()
+      expect(exposed.state()).toEqual({ kind: 'idle' })
+      // The global is now the seam between the injected markup and this bundle, not the on-switch — but it
+      // still answers the calls the bootstrap and a console might make.
+      exposed.stop()
+      expect(exposed.state()).toEqual({ kind: 'idle' })
+      // And the same transport call the panel makes, for anything else that holds this handle.
+      await expect(exposed.request('status')).rejects.toThrow('not connected')
+    } finally {
+      if (saved === undefined) delete (globalThis as Record<string, unknown>).document
+      else Object.defineProperty(globalThis, 'document', saved)
+    }
   })
 })

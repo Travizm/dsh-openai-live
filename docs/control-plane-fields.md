@@ -34,7 +34,8 @@ steers* was a boot-time constant.
 | `maxPromptChars` | responder | every turn |
 | `maxTranscriptChars` | agent | every eviction, and so every delegation |
 | `journalEntries` | agent | every `voice_journal` call — the size of one answer, not of the record |
-| `redactSecrets` | responder | every emission |
+| `transcriptQuietMs` | agent | every delegation, before the request is built from the transcript |
+| `transcriptSettleCapMs` | agent | every delegation, as the ceiling on that wait || `redactSecrets` | responder | every emission |
 | `speakMilestones` | responder | every turn — whether a step is spoken or only carried |
 | `maxSpokenMilestones` | responder | every turn |
 | `milestoneIntervalMs` | responder | every turn |

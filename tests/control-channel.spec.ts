@@ -184,7 +184,9 @@ async function mount(): Promise<Mounted> {
   const provider = new FakeProvider()
   context.realtime.registerAdapter(['fake'], provider)
 
-  applyAgent(context, AgentConfig({ provider: 'fake' }) as RealtimeAgentConfig)
+  // The settle policy this suite runs under: the shortest window that still exercises the wait, so what these
+  // assertions bound is the turn rather than half a second of a diagnostic pause.
+  applyAgent(context, AgentConfig({ provider: 'fake', transcriptQuietMs: 25, transcriptSettleCapMs: 250 }) as RealtimeAgentConfig)
   applyResponder(context, ResponderConfig({ sessionId: 'sess-1', answerTimeoutMs: 45_000 }) as RealtimeResponderConfig)
   applyAudio(context, AudioConfig({}) as RealtimeAudioWsConfig)
   // The audio route's `ctx.inject` lands on a microtask once the services it named are visible.
@@ -278,7 +280,9 @@ describe('a change over the channel', () => {
     // The point of the channel: the change reaches the next *use*, not the next boot.
     provider.handlers?.onTranscript?.({ kind: 'input', text: 'is staging ok?', final: true })
     provider.handlers?.onDelegation?.({ id: 'item_1', target: 'client', offsetMs: 0 })
-    await new Promise((resolve) => { setTimeout(resolve, 20) })
+    // Long enough for the transcript to settle before the request is built from it: that wait is now part of
+    // the path between the delegation and the admission, which is what this asserts.
+    await new Promise((resolve) => { setTimeout(resolve, 60) })
 
     expect(controller.admitted).toEqual(['session-ea70184a'])
   })

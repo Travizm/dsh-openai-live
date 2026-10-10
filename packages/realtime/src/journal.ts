@@ -84,6 +84,20 @@ export type JournalKind =
    * final flag rather than the text.
    */
   | 'transcript.input'
+  /**
+   * The transcript was waited for before a request was built from it, and what that wait produced.
+   *
+   * The provider raises a delegation while the transcription of the utterance it is acting on is still
+   * being emitted — measured on a running app, where the next fragment of the same utterance landed 162 ms
+   * *after* the delegation and the relayed request was clipped mid-sentence. Nothing on the wire marks that
+   * boundary: the vocabulary carries deltas only, in twenty recorded live sessions, and `translate.ts` sets
+   * `final: false` on every fragment because the provider signals the end of an utterance by stopping.
+   *
+   * Without this entry the record cannot separate a request built from a settled transcript from one built
+   * from a prefix of it, which is the same collapse in a new place: a clipped question and a badly-worded
+   * one read identically, and the reader blames the person who asked.
+   */
+  | 'transcript.settled'
   /** The configuration as resolved, so a journal can be read without the profile beside it. */
   | 'config.resolved'
   /**

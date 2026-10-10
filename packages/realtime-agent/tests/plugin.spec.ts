@@ -7,6 +7,7 @@ import type { SkillRegistration } from '@deepseek-ai/dsh-skill'
 import type { ConfigureAnswer, DiagnoseAnswer, JournalToolAnswer, ProbeAnswer } from '../src/tools.ts'
 import { VOICE_SKILL_NAME } from '../src/skill.ts'
 import { Config, createHandlers, apply } from '../src/index.ts'
+import type { SettleOutcome } from '../src/settle.ts'
 import { TranscriptBuffer } from '../src/transcript.ts'
 import type { DelegationRequest, RealtimeAgentConfig } from '../src/types.ts'
 
@@ -84,6 +85,17 @@ class RecordingAdapter extends RealtimeAdapter {
 }
 
 const tick = (): Promise<void> => new Promise(resolve => { setTimeout(resolve, 5) })
+
+/**
+ * The same, for a test that has to let a settle window elapse rather than one turn of the loop.
+ *
+ * The settle is real time by design — that is what it is for — so the suite states the policy it runs under
+ * rather than inheriting the production 500 ms and spending half a second per delegation.
+ */
+const tickFor = (ms: number): Promise<void> => new Promise(resolve => { setTimeout(resolve, ms) })
+
+/** The shortest policy that still exercises the wait, for tests that delegate after a fragment arrived. */
+const FAST_SETTLE = { transcriptQuietMs: 25, transcriptSettleCapMs: 100 }
 
 let ctx: Context | undefined
 
@@ -222,6 +234,19 @@ describe('the journal the agent writes', () => {
     expect((closed?.detail as { reason?: string }).reason).toHaveLength(200)
   })
 
+  it('records whether a request was built from a settled transcript', async () => {
+    // Nothing had ever been heard, so nothing had to be waited for. The entry says that rather than leaving a
+    // reader to assume a wait happened — and an entry that is present in every session is what makes its
+    // absence meaningful.
+    const { adapter, journal } = await started()
+
+    adapter.handlers?.onDelegation?.({ id: 'item_1', target: 'client', offsetMs: 0 })
+    await tick()
+
+    const settled = journal.snapshot().find(entry => entry.kind === 'transcript.settled')
+    expect(settled?.detail).toEqual({ waitedMs: '0', fragments: '0', capped: 'false' })
+  })
+
   it('records that the model heard something, and never what it heard', async () => {
     // The entry whose absence made "the voice is broken" unanswerable: an output track that runs whatever
     // happens, and no record at all of whether anything reached the model. It is a count, so that a journal
@@ -350,8 +375,9 @@ describe('the journal the agent writes', () => {
       autoStart: 'true',
       delegationTimeoutMs: '10000',
       maxTranscriptChars: '6000',
-      journalEntries: '25',
-    })
+      transcriptQuietMs: '500',
+      transcriptSettleCapMs: '1500',
+      journalEntries: '25',    })
     // `instructions` is authored text of unbounded length: the journal records what happened, rather than
     // copying the configuration into itself. The sentinel is the same one the leak test uses.
     expect(JSON.stringify(journal.snapshot())).not.toContain(SENTINEL_TEXT)
@@ -385,7 +411,8 @@ describe('plugin shape', () => {
 
 describe('createHandlers', () => {
   const deps = (overrides: Partial<Parameters<typeof createHandlers>[0]> = {}) => {
-    const calls: { closed: number; errors: Error[]; audio: Uint8Array[] } = { closed: 0, errors: [], audio: [] }
+    const calls: { closed: number; errors: Error[]; audio: Uint8Array[]; settleCalls: number; settled: SettleOutcome[] } =
+      { closed: 0, errors: [], audio: [], settleCalls: 0, settled: [] }
     const transcript = new TranscriptBuffer(() => 100)
     return {
       calls,
@@ -395,6 +422,11 @@ describe('createHandlers', () => {
         session: () => undefined,
         ask: () => undefined,
         timeoutMs: () => 50,
+        settle: () => {
+          calls.settleCalls += 1
+          return Promise.resolve({ waitedMs: 0, fragments: 0, capped: false })
+        },
+        onSettled: (outcome) => { calls.settled.push(outcome) },
         onClosed: () => { calls.closed += 1 },
         onSessionError: (error) => { calls.errors.push(error) },
         onAudio: (pcm16) => { calls.audio.push(pcm16) },
@@ -425,6 +457,16 @@ describe('createHandlers', () => {
     // worst place to raise one — so the handler declines to act instead.
     const { handlers } = deps({ session: () => undefined, ask: () => { throw new Error('should not be asked') } })
     expect(() => { handlers.onDelegation?.({ id: 'd', target: 'client', offsetMs: 0 }) }).not.toThrow()
+  })
+
+  it('waits for a transcript only when there is a session to answer into', () => {
+    // The wait sits between the guard and the answer, so a delegation with no session still declines
+    // synchronously: it has nothing to answer into, and no reason to hold a timer open deciding otherwise.
+    const { handlers, calls } = deps({ session: () => undefined })
+    handlers.onDelegation?.({ id: 'd', target: 'client', offsetMs: 0 })
+
+    expect(calls.settleCalls).toBe(0)
+    expect(calls.settled).toEqual([])
   })
 
   it('reports a session-scoped failure rather than throwing it', () => {
@@ -515,12 +557,14 @@ describe('apply', () => {
       return { text: 'Staging is green.', mode: 'spoken' }
     })
 
-    apply(context, Config({ provider: 'fake', autoStart: true }) as RealtimeAgentConfig)
+    apply(context, Config({ provider: 'fake', autoStart: true, ...FAST_SETTLE }) as RealtimeAgentConfig)
     await tick()
 
     adapter.handlers?.onTranscript?.({ kind: 'input', text: 'is staging ok?', final: true })
     adapter.handlers?.onDelegation?.({ id: 'item_1', target: 'client', offsetMs: 4800 })
-    await tick()
+    // A transcript was heard, so the request waits for it to settle before it is built: the wait is real time
+    // even under the fast policy this suite states.
+    await tickFor(60)
 
     // The responder saw the delegation correlated with the conversation, not a bare id.
     expect(asked).toHaveLength(1)
@@ -531,6 +575,61 @@ describe('apply', () => {
       sessionId: 'sess-1',
     })
     expect(adapter.appends).toEqual([{ kind: 'commentary', text: 'Staging is green.', delegationId: 'item_1' }])
+  })
+
+  it('carries the tail of the utterance, not the prefix that had arrived when the delegation landed', async () => {
+    // Measured on a running app at 07:16:55.301: the delegation arrived 162 ms before the last fragment of the
+    // utterance it was acting on, so the request read `Delegate this task to a client: "In a recent session,
+    // which animal comes up` — cut mid-sentence, no closing quote, and the session answered that prefix. The
+    // fragment below arrives after the delegation, as that one did, and it has to be in what the responder sees.
+    const { ctx: context, adapter, journal } = harness()
+    const asked: DelegationRequest[] = []
+    context.on('realtime-agent/delegation', (request) => {
+      asked.push(request)
+      return { text: 'A giraffe.', mode: 'spoken' }
+    })
+    apply(context, Config({ provider: 'fake', autoStart: true, ...FAST_SETTLE }) as RealtimeAgentConfig)
+    await tick()
+
+    adapter.handlers?.onTranscript?.({ kind: 'input', text: 'which animal comes up', final: false })
+    adapter.handlers?.onDelegation?.({ id: 'item_1', target: 'client', offsetMs: 10_600 })
+    setTimeout(() => { adapter.handlers?.onTranscript?.({ kind: 'input', text: ' with a long neck?', final: false }) }, 10)
+    await tickFor(120)
+
+    expect(asked[0]?.transcript).toEqual([{ kind: 'input', text: 'which animal comes up with a long neck?' }])
+
+    // And the record says the wait is why. Three facts, because a clipped request and a badly-worded one are
+    // otherwise the same journal: the wait caught something, the ceiling did not end it, and it took time.
+    const settled = journal.snapshot().find(entry => entry.kind === 'transcript.settled')
+    expect(settled?.detail).toMatchObject({ fragments: '1', capped: 'false' })
+    expect(Number((settled?.detail as { waitedMs?: string }).waitedMs)).toBeGreaterThan(0)
+  })
+
+  it('seals the utterance a request came from, so the next request does not join it', async () => {
+    // Two questions in one session with an answer between them. Without the seal the second request's last
+    // line is the first question plus a prefix of the second — which is the shape the relay hands the session
+    // as "the live request", and the reason a request can arrive as a sentence fragment.
+    const { ctx: context, adapter } = harness()
+    const asked: DelegationRequest[] = []
+    context.on('realtime-agent/delegation', (request) => {
+      asked.push(request)
+      return { text: 'Answer.', mode: 'spoken' }
+    })
+    apply(context, Config({ provider: 'fake', autoStart: true, ...FAST_SETTLE }) as RealtimeAgentConfig)
+    await tick()
+
+    adapter.handlers?.onTranscript?.({ kind: 'input', text: 'first question', final: false })
+    adapter.handlers?.onDelegation?.({ id: 'item_1', target: 'client', offsetMs: 0 })
+    await tickFor(120)
+
+    adapter.handlers?.onTranscript?.({ kind: 'input', text: 'second question', final: false })
+    adapter.handlers?.onDelegation?.({ id: 'item_2', target: 'client', offsetMs: 0 })
+    await tickFor(120)
+
+    expect(asked[1]?.transcript).toEqual([
+      { kind: 'input', text: 'first question' },
+      { kind: 'input', text: 'second question' },
+    ])
   })
 
   it('says so out loud when nothing answers, and stops after the session closes', async () => {
@@ -868,8 +967,7 @@ describe('the voice tools a session exposes', () => {
 })
 
 describe('the settings it declares', () => {
-  it('declares its three live fields, and the field the gate reclassified', async () => {
-    const { ctx: context } = harness()
+      it('declares its five live fields, and the field the gate reclassified', async () => {    const { ctx: context } = harness()
     apply(context, Config({ provider: 'fake', maxTranscriptChars: 6_000 }) as RealtimeAgentConfig)
 
     expect(context.realtime.settings.list()).toEqual([
@@ -892,6 +990,25 @@ describe('the settings it declares', () => {
         value: 6_000,
       },
       {
+        // The pair that decides whether a delegation is answered from a settled transcript or from a prefix
+        // of one. Live, because a delegation reads them at the moment it is answered: a change must reach the
+        // next delegation rather than the next boot.
+        key: 'realtime-agent.transcriptQuietMs',
+        owner: 'realtime-agent',
+        field: 'transcriptQuietMs',
+        kind: 'number',
+        scope: 'live',
+        describe: 'How long the transcript must be quiet before a delegation is answered from it',
+        value: 500,
+      },
+      {
+        key: 'realtime-agent.transcriptSettleCapMs',
+        owner: 'realtime-agent',
+        field: 'transcriptSettleCapMs',
+        kind: 'number',
+        scope: 'live',
+        describe: 'Longest a delegation waits for the transcript to settle',
+        value: 1_500,
         // Read at each call of the journal tool, so a change reaches the next question rather than the
         // next boot: this is the size of one answer, not of the record.
         key: 'realtime-agent.journalEntries',
@@ -900,8 +1017,7 @@ describe('the settings it declares', () => {
         kind: 'number',
         scope: 'live',
         describe: 'Most journal entries voice_journal returns in one call',
-        value: 25,
-      },
+        value: 25,      },
       {
         // Restart-bound, and declared so that the classification bites: see the refusal below. Its one
         // read site is the boot, so nothing a running process could do would honour a change.
@@ -977,7 +1093,7 @@ describe('the settings it declares', () => {
       asked.push(request)
       return { text: 'ok', mode: 'spoken' as const }
     })
-    apply(context, Config({ provider: 'fake', autoStart: true }) as RealtimeAgentConfig)
+    apply(context, Config({ provider: 'fake', autoStart: true, ...FAST_SETTLE }) as RealtimeAgentConfig)
     await tick()
 
     adapter.handlers?.onTranscript?.({ kind: 'input', text: 'first line', final: true })
@@ -985,11 +1101,37 @@ describe('the settings it declares', () => {
     adapter.handlers?.onTranscript?.({ kind: 'input', text: 'second line', final: true })
 
     adapter.handlers?.onDelegation?.({ id: 'item_1', target: 'client', offsetMs: 0 })
-    await tick()
+    // The fragments arrived before the delegation, so the request waits for the quiet this suite's policy
+    // asks for before it is built from them.
+    await tickFor(60)
 
     // The budget is read at eviction, so the change reached the very next fragment rather than the next
     // conversation — which is the difference between a live field and a field that looks live.
     expect(asked[0]?.transcript).toEqual([{ kind: 'input', text: 'second line' }])
+  })
+
+  it('applies a changed settle window to the next delegation, rather than to the next boot', async () => {
+    // Both fields that decide whether a request is built from a settled transcript. They are read at the moment
+    // a delegation is answered, so a change has to reach the *next* delegation: a copy taken when the plugin
+    // mounted would make the change look applied while the request still waited the old number.
+    const { ctx: context, adapter, journal } = harness()
+    context.on('realtime-agent/delegation', () => ({ text: 'ok', mode: 'spoken' as const }))
+    apply(context, Config({ provider: 'fake', autoStart: true, ...FAST_SETTLE }) as RealtimeAgentConfig)
+    await tick()
+
+    adapter.handlers?.onTranscript?.({ kind: 'input', text: 'is staging ok?', final: true })
+    expect(context.realtime.settings.apply('realtime-agent.transcriptQuietMs', '80')).toMatchObject({ ok: true })
+    expect(context.realtime.settings.apply('realtime-agent.transcriptSettleCapMs', '900')).toMatchObject({ ok: true })
+
+    adapter.handlers?.onDelegation?.({ id: 'item_1', target: 'client', offsetMs: 0 })
+    await tickFor(160)
+
+    // 80 ms of quiet was asked for with the fragment already in the buffer, so the wait cannot have been the
+    // 25 this suite mounted with: the registry's change reached the delegation, not the next boot.
+    const settled = journal.snapshot().find(entry => entry.kind === 'transcript.settled')
+    expect(Number((settled?.detail as { waitedMs?: string }).waitedMs)).toBeGreaterThanOrEqual(80)
+    expect(context.realtime.settings.apply('realtime-agent.transcriptQuietMs', '0'))
+      .toMatchObject({ code: 'INVALID_SETTING', reason: /transcriptQuietMs must be a positive whole number/ })
   })
 
   it('refuses a budget that is not a positive whole number, naming the field', async () => {

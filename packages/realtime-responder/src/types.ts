@@ -79,5 +79,13 @@ export interface SessionEventLike {
     readonly message?: { readonly content?: unknown }
     /** `tool/call` carries the tool's own name and its raw, unparsed arguments. */
     readonly name?: unknown
+    /**
+     * The turn the event belongs to, as the session reports it.
+     *
+     * Present on `turn/start`, `step/*`, `tool/call`, `assistant/message` and `turn/end` — every event
+     * this plugin reads except a surface replay. It is what lets a runner tell its own turn from one
+     * already in flight, so an answer typed into the chat while the voice waits is not spoken back.
+     */
+    readonly turn?: unknown
   }
 }

@@ -20,11 +20,21 @@ const request = (transcript: readonly { kind: 'input' | 'output'; text: string }
  * match an answer and every delegated turn timed out. Doubles are wired as production wires them, or they
  * are a second bug wearing the first one's coat.
  */
-const message = (content: unknown): SessionEventLike => ({
+const message = (content: unknown, turn = 1): SessionEventLike => ({
   type: 'assistant/message',
   surfaceOp: 'append',
-  data: { message: { content } },
+  data: { turn, message: { content } },
 })
+
+/**
+ * The session's own turn boundary.
+ *
+ * The runner answers only the turn its own admission started, so a test that expects an answer must open
+ * that turn first — and must open it **after** the admission has settled, because a latch armed before
+ * then would belong to whatever was already running. Production emits one of these on every turn; a
+ * fixture that omits it is a fixture for a sequence that cannot happen.
+ */
+const turnStart = (turn = 1): SessionEventLike => ({ type: 'turn/start', data: { turn } })
 
 /** The session these turns are admitted to. Supplied **beside** each event, never on it. */
 const SESSION = 'sess-1'
@@ -198,13 +208,15 @@ describe('narration', () => {
     return { listeners, steps, run }
   }
 
-  const call = (name: string): SessionEventLike => ({ type: 'tool/call', data: { name } })
+  const call = (name: string, turn = 1): SessionEventLike => ({ type: 'tool/call', data: { name, turn } })
 
   it('speaks a step for a tool call, addressed to the turn it belongs to', async () => {
     const { listeners, steps, run } = narrating({ milestone: policy() })
     const pending = run(request([{ kind: 'input', text: 'q' }]))
+    await Promise.resolve()
 
     // A message event first: not every event is a step, and the runner must not narrate one that is not.
+    listeners[0]!(turnStart(), SESSION)
     listeners[0]!(message([text('green')]), SESSION)
     listeners[0]!(call('read_file'), SESSION)
 
@@ -217,6 +229,8 @@ describe('narration', () => {
     // in bursts, and a burst read out loud is slower than the work it is describing.
     const { listeners, steps, run } = narrating({ milestone: policy({ intervalMs: 60_000 }) })
     void run(request([{ kind: 'input', text: 'q' }]))
+    await Promise.resolve()
+    listeners[0]!(turnStart(), SESSION)
 
     listeners[0]!(call('read_file'), SESSION)
     listeners[0]!(call('terminal'), SESSION)
@@ -231,6 +245,8 @@ describe('narration', () => {
     try {
       const { listeners, steps, run } = narrating({ milestone: policy({ intervalMs: 4_000 }) })
       void run(request([{ kind: 'input', text: 'q' }]))
+      await Promise.resolve()
+      listeners[0]!(turnStart(), SESSION)
 
       listeners[0]!(call('read_file'), SESSION)
       vi.advanceTimersByTime(4_000)
@@ -245,6 +261,8 @@ describe('narration', () => {
   it('stops speaking at the cap, and keeps carrying the steps silently', async () => {
     const { listeners, steps, run } = narrating({ milestone: policy({ intervalMs: 0, maxSpoken: 3 }) })
     void run(request([{ kind: 'input', text: 'q' }]))
+    await Promise.resolve()
+    listeners[0]!(turnStart(), SESSION)
 
     for (const name of ['read', 'write', 'edit', 'run']) listeners[0]!(call(name), SESSION)
 
@@ -256,6 +274,8 @@ describe('narration', () => {
   it('says nothing aloud when narration is switched off', async () => {
     const { listeners, steps, run } = narrating({ milestone: policy({ speak: false }) })
     void run(request([{ kind: 'input', text: 'q' }]))
+    await Promise.resolve()
+    listeners[0]!(turnStart(), SESSION)
 
     listeners[0]!(call('read_file'), SESSION)
 
@@ -267,6 +287,8 @@ describe('narration', () => {
     // gets silence, not a plugin talking over their conversation.
     const noPolicy = narrating()
     void noPolicy.run(request([{ kind: 'input', text: 'q' }]))
+    await Promise.resolve()
+    noPolicy.listeners[0]!(turnStart(), SESSION)
     noPolicy.listeners[0]!(call('read_file'), SESSION)
     expect(noPolicy.steps).toEqual([])
 
@@ -283,6 +305,8 @@ describe('narration', () => {
       milestone: policy(),
     })
     void sinkless(request([{ kind: 'input', text: 'q' }]))
+    await Promise.resolve()
+    sinklessListeners[0]!(turnStart(), SESSION)
     sinklessListeners[0]!(call('read_file'), SESSION)
     // Nothing to assert on but the absence itself: the turn simply does not report a step.
     expect(sinklessListeners).toHaveLength(1)
@@ -291,6 +315,8 @@ describe('narration', () => {
   it('ignores a step from another session, as it ignores an answer from one', async () => {
     const { listeners, steps, run } = narrating({ milestone: policy() })
     void run(request([{ kind: 'input', text: 'q' }]))
+    await Promise.resolve()
+    listeners[0]!(turnStart(), SESSION)
 
     listeners[0]!(call('read_file'), 'sess-2')
 
@@ -322,6 +348,7 @@ describe('createTurnRunner', () => {
     // Through the runner, not only through `promptFrom`: this is the assertion that the framing the
     // plugin configures is the framing that reaches the controller.
     expect(admitted).toEqual([`${FRAME}\nis staging ok?`])
+    listeners[0]!(turnStart(), SESSION)
     listeners[0]!(message([text('green')]), SESSION)
     await expect(pending).resolves.toEqual({ kind: 'answered', text: 'green' })
     expect(unsubscribed()).toBe(1)
@@ -338,6 +365,7 @@ describe('createTurnRunner', () => {
     const { listeners, run } = deps()
     const pending = run(request([{ kind: 'input', text: 'q' }]))
     await Promise.resolve()
+    listeners[0]!(turnStart(), SESSION)
     listeners[0]!({}, SESSION)
     listeners[0]!({ type: 'assistant/chunk' }, SESSION)
     listeners[0]!(message([text('green')]), SESSION)
@@ -350,9 +378,73 @@ describe('createTurnRunner', () => {
     const { listeners, run } = deps()
     const pending = run(request([{ kind: 'input', text: 'q' }]))
     await Promise.resolve()
+    listeners[0]!(turnStart(), SESSION)
     listeners[0]!(message([text('elsewhere')]), 'sess-2')
     listeners[0]!(message([text('green')]), SESSION)
     await expect(pending).resolves.toEqual({ kind: 'answered', text: 'green' })
+  })
+
+  it('does not speak a turn nobody delegated, when the session is already busy with one', async () => {
+    // The regression this correlation exists for. A message typed into the chat while the voice waits is a
+    // turn of its own, and its answer must not come out of the voice's mouth. Before the latch, the *first*
+    // assistant message in the session settled the turn — so this passed as "the session answered" while a
+    // person's typed question was being read aloud.
+    const { listeners, run } = deps()
+    const pending = run(request([{ kind: 'input', text: 'is staging ok?' }]))
+    await Promise.resolve()
+
+    // Somebody else's turn, already running: its start was emitted before this admission. Its answer
+    // arrives while the voice is still waiting, and settles nothing.
+    listeners[0]!(message([text('a reply to something somebody typed')], 3), SESSION)
+    await expect(Promise.race([pending, Promise.resolve('still open')])).resolves.toBe('still open')
+
+    // Now this admission's own turn, and only then does the run end.
+    listeners[0]!(turnStart(4), SESSION)
+    listeners[0]!(message([text('green')], 4), SESSION)
+    await expect(pending).resolves.toEqual({ kind: 'answered', text: 'green' })
+  })
+
+  it('keeps the turn it latched first, so a later one cannot answer for this admission', async () => {
+    // A session can begin another turn while the voice waits: ours was queued behind whatever was running,
+    // and something else can arrive behind ours. The latch is the *first* turn after the admission, and
+    // re-latching on a later one would hand this turn's answer to somebody else's work.
+    const { listeners, run } = deps()
+    const pending = run(request([{ kind: 'input', text: 'is staging ok?' }]))
+    await Promise.resolve()
+
+    listeners[0]!(turnStart(4), SESSION)
+    listeners[0]!(turnStart(5), SESSION)
+    listeners[0]!(message([text('from the later turn')], 5), SESSION)
+    await expect(Promise.race([pending, Promise.resolve('still open')])).resolves.toBe('still open')
+
+    listeners[0]!(message([text('green')], 4), SESSION)
+    await expect(pending).resolves.toEqual({ kind: 'answered', text: 'green' })
+  })
+
+  it('reports a step of somebody else turn as nothing, rather than narrating it', async () => {
+    // The same gate on the silent channel: a typed turn's tool calls are not this conversation's progress,
+    // and announcing them would be the plugin describing work nobody asked the voice to do.
+    const steps: TurnStep[] = []
+    const listeners: ((event: SessionEventLike, sessionId: string) => void)[] = []
+    const run = createTurnRunner({
+      sessionId: () => SESSION,
+      maxPromptChars: () => 1_000,
+      frame: () => FRAME,
+      answerTimeoutMs: () => 50,
+      admit: () => Promise.resolve(),
+      subscribe: (listener) => { listeners.push(listener); return () => undefined },
+      milestone: () => ({ phrase: () => 'Working on it.', intervalMs: 0, maxSpoken: 3, speak: true }),
+      onStep: (step) => { steps.push(step) },
+    })
+    void run(request([{ kind: 'input', text: 'q' }]))
+    await Promise.resolve()
+
+    listeners[0]!({ type: 'tool/call', data: { turn: 3, name: 'read_file' } }, SESSION)
+    expect(steps).toEqual([])
+
+    listeners[0]!(turnStart(4), SESSION)
+    listeners[0]!({ type: 'tool/call', data: { turn: 4, name: 'read_file' } }, SESSION)
+    expect(steps).toHaveLength(1)
   })
 
   it('declines without admitting when the transcript carried no text', async () => {
@@ -422,15 +514,20 @@ describe('createTurnRunner', () => {
     // The turn that started on sess-1 is still answered by sess-1, with the budget and the frame it
     // started with — a frame read per event would have let a change re-word a prompt already admitted.
     expect(admitted).toEqual([`${FRAME}\nabcdefghij`])
-    listeners[0]!(message([text('from one')]), 'sess-1')
+    await Promise.resolve()
+    listeners[0]!(turnStart(1), 'sess-1')
+    listeners[0]!(message([text('from one')], 1), 'sess-1')
     await expect(inFlight).resolves.toEqual({ kind: 'answered', text: 'from one' })
 
     // The next turn uses the new session, the new budget, and the new frame — two characters of question,
     // because the frame it now carries leaves room for exactly that.
     const next = run(request([{ kind: 'input', text: 'abcdefghij' }]))
     expect(admitted[1]).toBe('Q\nab')
-    listeners[1]!(message([text('from two')]), 'sess-1')
-    listeners[1]!(message([text('from two')]), 'sess-2')
+    await Promise.resolve()
+    listeners[1]!(turnStart(2), 'sess-1')
+    listeners[1]!(message([text('from two')], 2), 'sess-1')
+    listeners[1]!(turnStart(2), 'sess-2')
+    listeners[1]!(message([text('from two')], 2), 'sess-2')
     await expect(next).resolves.toEqual({ kind: 'answered', text: 'from two' })
   })
 })

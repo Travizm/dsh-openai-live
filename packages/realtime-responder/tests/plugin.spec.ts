@@ -98,13 +98,23 @@ describe('plugin shape', () => {
   })
 })
 
+/**
+ * Give a delegation time to reach the controller.
+ *
+ * The runner arms its turn latch only once its own admission has been **accepted**, so an event emitted
+ * before that is refused — with nothing to report. Reaching that point crosses the event bus and the
+ * controller, so it is more than one microtask deep, and a macrotask turn is what a fixture has to give it.
+ * Production has the same shape: nothing can arrive at the runner before the controller holds the prompt.
+ */
+const admitted = async (): Promise<void> => { await new Promise(resolve => { setTimeout(resolve, 0) }) }
+
 describe('answering a delegation', () => {
   it('admits a turn to the configured session and speaks the reply', async () => {
     const { context, controller, settled } = harness()
     apply(context, Config({ sessionId: 'sess-1', answerTimeoutMs: 1_000 }) as RealtimeResponderConfig)
 
     const answer = context.serial('realtime-agent/delegation', request)
-    await Promise.resolve()
+    await admitted()
 
     expect(controller.prompted).toHaveLength(1)
     expect(controller.prompted[0]).toMatchObject({
@@ -118,10 +128,18 @@ describe('answering a delegation', () => {
     // `session/event` listeners take (session, event): the owning session is the FIRST argument, and the
     // event carries no session id of its own. Emitting it the harness's way is the point of this suite — a
     // hand-built event carrying `sessionId` is what hid a defect that made every real turn time out.
+    //
+    // The turn boundary is part of that sequence and not decoration: the runner answers only the turn its
+    // own admission started, so a session busy with somebody else's turn cannot have its answer spoken
+    // back. A fixture that skips `turn/start` is a fixture that skips the thing under test.
+    context.emit('session/event', { id: 'sess-1' } as never, {
+      type: 'turn/start',
+      data: { turn: 1 },
+    } as unknown as never)
     context.emit('session/event', { id: 'sess-1' } as never, {
       type: 'assistant/message',
       surfaceOp: 'append',
-      data: { message: { content: [{ type: 'text', text: 'Staging is green.' }] } },
+      data: { turn: 1, message: { content: [{ type: 'text', text: 'Staging is green.' }] } },
     } as unknown as never)
 
     await expect(answer).resolves.toEqual({ text: 'Staging is green.', mode: 'spoken' })
@@ -137,17 +155,21 @@ describe('answering a delegation', () => {
     apply(context, Config({ sessionId: 'sess-1', answerTimeoutMs: 1_000 }) as RealtimeResponderConfig)
 
     const answer = context.serial('realtime-agent/delegation', request)
-    await Promise.resolve()
+    await admitted()
 
     const payload = {
       type: 'assistant/message',
       surfaceOp: 'append',
-      data: { message: { content: [{ type: 'text', text: 'from nowhere' }] } },
+      data: { turn: 1, message: { content: [{ type: 'text', text: 'from nowhere' }] } },
     } as unknown as never
     context.emit('session/event', undefined as never, payload)
     context.emit('session/event', { notAnId: 1 } as never, payload)
 
     // Neither was attributed, so the turn is still open — and the answer from the right session still lands.
+    context.emit('session/event', { id: 'sess-1' } as never, {
+      type: 'turn/start',
+      data: { turn: 1 },
+    } as unknown as never)
     context.emit('session/event', { id: 'sess-1' } as never, payload)
     await expect(answer).resolves.toEqual({ text: 'from nowhere', mode: 'spoken' })
   })
@@ -337,14 +359,15 @@ describe('narrating a turn', () => {
     apply(context, Config({ sessionId: 'sess-1', answerTimeoutMs: 1_000 }) as RealtimeResponderConfig)
 
     const answer = context.serial('realtime-agent/delegation', request)
-    await Promise.resolve()
+    await admitted()
+    context.emit('session/event', { id: 'sess-1' } as never, { type: 'turn/start', data: { turn: 1 } } as unknown as never)
 
     // A `tool/call` is **not** a surface event and carries no `surfaceOp`, so a filter copied from
     // `answerText` (`surfaceOp === 'append'`) would drop this silently and the narration would simply never
     // happen. It is emitted here the way the harness emits one, with the session as the first argument.
     context.emit('session/event', { id: 'sess-1' } as never, {
       type: 'tool/call',
-      data: { name: 'read_file', arguments: '{"path":"/Users/asd/notes-that-must-not-be-spoken.md"}' },
+      data: { turn: 1, name: 'read_file', arguments: '{"path":"/Users/asd/notes-that-must-not-be-spoken.md"}' },
     } as unknown as never)
 
     expect(progress).toEqual([{ id: 'item_1', channel: 'commentary', text: 'Reading a file.' }])
@@ -355,7 +378,7 @@ describe('narrating a turn', () => {
     context.emit('session/event', { id: 'sess-1' } as never, {
       type: 'assistant/message',
       surfaceOp: 'append',
-      data: { message: { content: [{ type: 'text', text: 'Staging is green.' }] } },
+      data: { turn: 1, message: { content: [{ type: 'text', text: 'Staging is green.' }] } },
     } as unknown as never)
     await expect(answer).resolves.toEqual({ text: 'Staging is green.', mode: 'spoken' })
   })
@@ -369,10 +392,11 @@ describe('narrating a turn', () => {
     }) as RealtimeResponderConfig)
 
     const answer = context.serial('realtime-agent/delegation', request)
-    await Promise.resolve()
+    await admitted()
+    context.emit('session/event', { id: 'sess-1' } as never, { type: 'turn/start', data: { turn: 1 } } as unknown as never)
     context.emit('session/event', { id: 'sess-1' } as never, {
       type: 'tool/call',
-      data: { name: 'a_tool_this_plugin_has_never_heard_of' },
+      data: { turn: 1, name: 'a_tool_this_plugin_has_never_heard_of' },
     } as unknown as never)
 
     expect(progress).toEqual([{ id: 'item_1', channel: 'thinking', text: 'Working on it.' }])
@@ -380,7 +404,7 @@ describe('narrating a turn', () => {
     context.emit('session/event', { id: 'sess-1' } as never, {
       type: 'assistant/message',
       surfaceOp: 'append',
-      data: { message: { content: [{ type: 'text', text: 'Staging is green.' }] } },
+      data: { turn: 1, message: { content: [{ type: 'text', text: 'Staging is green.' }] } },
     } as unknown as never)
     await expect(answer).resolves.toEqual({ text: 'Staging is green.', mode: 'spoken' })
   })
@@ -472,22 +496,25 @@ describe('the settings it declares', () => {
       .toEqual({ ok: true, key: 'realtime-responder.sessionId', value: 'sess-2' })
 
     const answer = context.serial('realtime-agent/delegation', request)
-    await Promise.resolve()
+    await admitted()
 
     // The next turn is admitted to the new session — and an answer only counts if it comes from there,
     // which is what makes steering real rather than merely recorded. The session is carried as the
     // listener's first argument, which is the only place it exists: this assertion is the one that would
     // have caught the answer path never matching anything.
     expect(controller.prompted.at(-1)).toMatchObject({ sessionId: 'sess-2' })
+    // The latch is per admission and follows the session it was admitted to: the steered session starts the
+    // turn, and only that session's answer can settle it.
+    context.emit('session/event', { id: 'sess-2' } as never, { type: 'turn/start', data: { turn: 4 } } as unknown as never)
     context.emit('session/event', { id: 'sess-1' } as never, {
       type: 'assistant/message',
       surfaceOp: 'append',
-      data: { message: { content: [{ type: 'text', text: 'from the old session' }] } },
+      data: { turn: 3, message: { content: [{ type: 'text', text: 'from the old session' }] } },
     } as unknown as never)
     context.emit('session/event', { id: 'sess-2' } as never, {
       type: 'assistant/message',
       surfaceOp: 'append',
-      data: { message: { content: [{ type: 'text', text: 'from the new session' }] } },
+      data: { turn: 4, message: { content: [{ type: 'text', text: 'from the new session' }] } },
     } as unknown as never)
 
     await expect(answer).resolves.toEqual({ text: 'from the new session', mode: 'spoken' })
@@ -538,17 +565,18 @@ describe('the settings it declares', () => {
 
     // And the next turn honours them: switched off, a step is carried rather than spoken.
     const answer = context.serial('realtime-agent/delegation', request)
-    await Promise.resolve()
+    await admitted()
+    context.emit('session/event', { id: 'sess-1' } as never, { type: 'turn/start', data: { turn: 1 } } as unknown as never)
     context.emit('session/event', { id: 'sess-1' } as never, {
       type: 'tool/call',
-      data: { name: 'read_file' },
+      data: { turn: 1, name: 'read_file' },
     } as unknown as never)
     expect(progress).toEqual([{ id: 'item_1', channel: 'thinking', text: 'Reading a file.' }])
 
     context.emit('session/event', { id: 'sess-1' } as never, {
       type: 'assistant/message',
       surfaceOp: 'append',
-      data: { message: { content: [{ type: 'text', text: 'Staging is green.' }] } },
+      data: { turn: 1, message: { content: [{ type: 'text', text: 'Staging is green.' }] } },
     } as unknown as never)
     await expect(answer).resolves.toEqual({ text: 'Staging is green.', mode: 'spoken' })
 

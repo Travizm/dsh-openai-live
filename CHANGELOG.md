@@ -4,6 +4,26 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.9] — 2026-10-10
+
+### Fixed
+
+- **A delegated turn's window bounded the queue, not the answer.** `dsh-realtime-responder` 0.2.8 ·
+  `dsh-openai-live` 0.6.9. The answer window was armed at the request and `admit` was awaited after it, so
+  a prompt waiting behind the session's current work burned the answer's budget. Measured on a running app:
+  `delegation.seen` at +41.5s, `prompt.admitted` at +86.5s, `window.elapsed` at the instant of admission —
+  and the session answered 41 seconds later. `window.elapsed` means "a turn that was admitted and never
+  answered"; it fired on a turn that was answered, which is a record misnaming its own cause. The window is
+  now armed once the admission is accepted and the turn adopted.
+- **`dsh-realtime-responder` 0.2.7 and `dsh-openai-live` 0.6.8 stand unchanged** — the delegation receipt,
+  the adoption of a start seen before the admission settled, and everything 0.6.7 added.
+
+The admission itself remains unbounded, as it always was: bounding it needs a race, and a race costs a
+microtask that every existing test synchronises against. The model's own `delegationTimeoutMs` is what
+protects the person waiting.
+
+Publishing runs from main after the merge: pnpm's publish-branch check refuses any other branch.
+
 ## [0.6.8] — 2026-10-10
 
 ### Fixed

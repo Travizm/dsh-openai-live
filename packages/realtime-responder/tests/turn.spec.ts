@@ -361,6 +361,43 @@ describe('createTurnRunner', () => {
     expect(listeners).toHaveLength(1)
   })
 
+  it('adopts the turn the harness started before the admission settled', async () => {
+    // **The order a running app actually produces**, and the one that made a relayed answer disappear. The
+    // harness emits `turn/start` for our own prompt before the controller's promise resolves, so a latch
+    // that arms only after the await misses its own turn and then discards the answer as somebody else's.
+    // Measured on a running app: the harness produced the answer two seconds later (`turn/end: completed`,
+    // step 1) while the journal showed `prompt.admitted` and then `window.elapsed`, with no
+    // `answer.received` at all. Every other test here emits the start after the admission has settled, which
+    // is why the shipped version passed its own suite.
+    let settle!: () => void
+    const gate = new Promise<void>((resolve) => { settle = resolve })
+    const { listeners, run } = deps({ admit: () => gate })
+    const pending = run(request([{ kind: 'input', text: 'is staging ok?' }]))
+    await Promise.resolve()
+
+    // Our turn begins while the admission is still in flight; only then is the admission accepted.
+    listeners[0]!(turnStart(7), SESSION)
+    settle()
+    await Promise.resolve()
+
+    listeners[0]!(message([text('green')], 7), SESSION)
+    await expect(pending).resolves.toEqual({ kind: 'answered', text: 'green' })
+  })
+
+  it('adopts nothing when the admission was refused, so a refusal cannot speak a start it saw', async () => {
+    // The reason the adoption happens after the await rather than in the handler: a start seen while the
+    // admission was in flight belongs to our prompt only if that prompt was queued at all.
+    let reject!: (error: Error) => void
+    const gate = new Promise<void>((_resolve, fail) => { reject = fail })
+    const { listeners, run } = deps({ admit: () => gate })
+    const pending = run(request([{ kind: 'input', text: 'is staging ok?' }]))
+    await Promise.resolve()
+
+    listeners[0]!(turnStart(7), SESSION)
+    reject(new Error('session/model-unavailable'))
+    await expect(pending).resolves.toEqual({ kind: 'refused', reason: 'session/model-unavailable' })
+  })
+
   it('ignores unrelated events while waiting for its own answer', async () => {
     const { listeners, run } = deps()
     const pending = run(request([{ kind: 'input', text: 'q' }]))

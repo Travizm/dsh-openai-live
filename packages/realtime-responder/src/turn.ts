@@ -298,21 +298,29 @@ export function createTurnRunner(deps: TurnDeps): (request: DelegationRequest) =
      * somebody else's words in the voice's mouth. It only looked correct before because the two are
      * usually the same turn.
      *
-     * Latching only **after** the admission has been accepted is what makes the first turn the session
-     * starts *ours* rather than one already running — and requiring the latch at all is why a turn that
-     * never gets one times out instead of answering with the wrong thing. That failure is diagnosable
-     * from the record rather than from a guess: the journal shows `prompt.admitted` and then
-     * `window.elapsed`, never a refusal, which is the pair that says the turn was admitted and nothing
-     * came back on it.
+     * Latching only **after** the admission has been accepted was meant to make the first turn the session
+     * starts *ours* rather than one already running. It does not, and the version that shipped is why this
+     * file changed: the harness emits `turn/start` for our own prompt **before** the controller's promise
+     * resolves — measured, on a running app, where the answer to a relayed question arrived two seconds
+     * later while the journal showed `prompt.admitted` and then `window.elapsed`, the pair this comment
+     * claimed as the diagnosis of a turn nobody answered. The latch had no turn, so it dropped our own
+     * answer as somebody else's. A start seen while the admission is still in flight is therefore held
+     * aside and **adopted** once the admission is accepted: it arrived after we asked, on a subscription
+     * created before we asked, so it is ours. Nothing already running can be adopted this way — a turn in
+     * flight emitted its `turn/start` before this runner subscribed, so this runner never saw it.
      */
     let turn: unknown
+    /** A `turn/start` seen while the admission was in flight, held until the admission settles the question. */
+    let pending: unknown
     let admitted = false
     const unsubscribe = deps.subscribe((event, eventSessionId) => {
       // Scoped here, from the id the subscriber supplies: the owning session is the listener's first
       // argument and is never a field on the event, so this is the only place the comparison can be made.
       if (eventSessionId !== sessionId) return
       if (event.type === 'turn/start') {
-        if (admitted && turn === undefined) turn = event.data?.turn
+        if (turn !== undefined) return
+        if (admitted) turn = event.data?.turn
+        else pending = event.data?.turn
         return
       }
       // No latch, or another turn's event: nothing here belongs to this admission. Checked before the
@@ -347,9 +355,11 @@ export function createTurnRunner(deps: TurnDeps): (request: DelegationRequest) =
       unsubscribe()
       return { kind: 'refused', reason: refusalReason(error) }
     }
-    // Only now can the next `turn/start` be this admission's. Set after the await, before the answer is
-    // awaited, so the latch is armed for every event the session emits from here on.
+    // The admission is accepted, so a start already seen belongs to it — the harness emitted it before
+    // this promise resolved. Adopted here rather than in the handler because only now is it certain the
+    // prompt was queued at all: a refused admission returns above and adopts nothing.
     admitted = true
+    if (turn === undefined && pending !== undefined) turn = pending
 
     const text = await answered
     clearTimeout(timer)

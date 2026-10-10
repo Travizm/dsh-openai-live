@@ -14,7 +14,7 @@
  */
 
 import { MAX_APPEND_CHARS, RealtimeError, RealtimeRuntime } from 'dsh-realtime'
-import type { RealtimeSession, RealtimeSessionHandlers, RealtimeSessionStarted } from 'dsh-realtime'
+import type { Journal, RealtimeSession, RealtimeSessionHandlers, RealtimeSessionStarted } from 'dsh-realtime'
 import { contextAppend, inputAudioAppend, inputAudioMute, inputAudioUnmute, isKnownServerEvent, parseServerEvent, sessionClose } from './wire.ts'
 import type { AppendKind } from './wire.ts'
 import { toDelegation, toProviderError, toTranscript, toUsage } from './translate.ts'
@@ -32,6 +32,15 @@ export interface OpenAiLiveSessionOptions {
   handlers: RealtimeSessionHandlers
   /** Bound on waiting for one append acknowledgement. */
   appendAckTimeoutMs: number
+  /**
+   * Where a delegation's **receipt** is written, at the moment the frame is accepted.
+   *
+   * Optional, and that is the shape the seam's `Pick` idiom wants: this is a diagnostic, and a session
+   * constructed without one is a session that records nothing rather than a session that fails. Typed as the
+   * public surface this plugin uses rather than as the class, because `Journal` exists as two declarations in
+   * this repo — built `lib/` and `src/` — and a class with private members is nominally typed.
+   */
+  journal?: Pick<Journal, 'record'>
 }
 
 /** One context append awaiting its acknowledgement. */
@@ -56,6 +65,7 @@ export class OpenAiLiveSession implements RealtimeSession {
   private readonly transport: RealtimeTransport
   private readonly handlers: RealtimeSessionHandlers
   private readonly appendAckTimeoutMs: number
+  private readonly journal: Pick<Journal, 'record'> | undefined
   private readonly pending = new Map<string, PendingAppend>()
   private sequence = 0
   private closed = false
@@ -69,6 +79,7 @@ export class OpenAiLiveSession implements RealtimeSession {
     this.id = options.id
     this.handlers = options.handlers
     this.appendAckTimeoutMs = options.appendAckTimeoutMs
+    this.journal = options.journal
   }
 
   /** Reject any use of a session that has ended, naming the operation's own failure. */
@@ -241,6 +252,16 @@ export class OpenAiLiveSession implements RealtimeSession {
       }
       case 'session.delegation.created': {
         const delegation = toDelegation(event)
+        // The **receipt**, recorded where the frame is first accepted rather than where it is acted on. Three
+        // things can happen to a delegation downstream of here — the responder may find no session to answer
+        // into, may be refused by the controller, or may answer — and all of them are recorded at the far end
+        // of the bundle. Only this end can say *the frame arrived*, which is what separates "the model never
+        // raised one" from "it arrived and this adapter could not read it". That distinction is the whole of
+        // an evening's diagnosis, and without a receipt the two are the same silence. `id` and `offsetMs` are
+        // an identifier and a number; the delegation carries no other content to record.
+        this.journal?.record('delegation.received', delegation === undefined
+          ? { dropped: 'unreadable' }
+          : { id: delegation.id, offsetMs: String(delegation.offsetMs) })
         if (delegation !== undefined) this.handlers.onDelegation?.(delegation)
         return
       }

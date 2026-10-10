@@ -24,6 +24,14 @@ class RecordingAdapter extends RealtimeAdapter {
   refuseOpenWith: Error | undefined
   /** Make closing fail, as a session that is already gone does. */
   refuseClose = false
+  /**
+   * The reason the provider gives for ending the session, when it gives one.
+   *
+   * A real close carries one — `session.closed` on the wire has a reason and a usage figure — and it is the
+   * only field that says *why* a session someone was talking into ended. Left undefined, the fake closes as
+   * silently as it always did.
+   */
+  closeReason: string | undefined
 
   session(options: RealtimeSessionOptions): Promise<RealtimeSession> {
     // Wire the handlers exactly as a real adapter does: a substitute that drops them makes every
@@ -65,7 +73,7 @@ class RecordingAdapter extends RealtimeAdapter {
         // A real adapter reports the close — `realtime-openai/session.ts` calls this on teardown — and
         // that report is the only way the agent learns the session is gone. A fake that stayed silent
         // would leave the plugin journaling a close it had no way to observe.
-        adapter.handlers?.onClosed?.()
+        adapter.handlers?.onClosed?.(adapter.closeReason)
         return Promise.resolve()
       },
     })
@@ -136,6 +144,46 @@ describe('the journal the agent writes', () => {
     // one that knows whether one exists, so the entry lands here or nowhere.
     expect(kinds).toContain('session.opened')
     expect(kinds).toContain('session.closed')
+  })
+
+  it('records why a session closed, because an empty close cannot be told from any other', async () => {
+    // A run of five-second sessions with a bare `session.closed` is indistinguishable from somebody pressing
+    // stop twice — and the discarded field is the one that would have named a provider-side limit.
+    const { ctx: context, adapter, journal } = await started()
+
+    adapter.closeReason = 'session_limit_reached'
+    context.emit('realtime-agent/stop')
+    await tick()
+
+    const closed = journal.snapshot().find(entry => entry.kind === 'session.closed')
+    expect(closed?.detail).toEqual({ reason: 'session_limit_reached' })
+  })
+
+  it('bounds the reason it records, so one provider string cannot bloat the file', async () => {
+    const { ctx: context, adapter, journal } = await started()
+
+    adapter.closeReason = 'x'.repeat(4_000)
+    context.emit('realtime-agent/stop')
+    await tick()
+
+    const closed = journal.snapshot().find(entry => entry.kind === 'session.closed')
+    expect((closed?.detail as { reason?: string }).reason).toHaveLength(200)
+  })
+
+  it('records that the model heard something, and never what it heard', async () => {
+    // The entry whose absence made "the voice is broken" unanswerable: an output track that runs whatever
+    // happens, and no record at all of whether anything reached the model. It is a count, so that a journal
+    // can be handed to somebody.
+    const { adapter, journal } = await started()
+
+    adapter.handlers?.onTranscript?.({ kind: 'input', text: SENTINEL_TEXT, final: true })
+    await tick()
+
+    const heard = journal.snapshot().filter(entry => entry.kind === 'transcript.input')
+    expect(heard).toHaveLength(1)
+    expect(heard[0]!.detail).toEqual({ chars: String(SENTINEL_TEXT.length), final: 'true' })
+    // The words themselves are the one thing this entry must not carry.
+    expect(JSON.stringify(journal.snapshot())).not.toContain(SENTINEL_TEXT)
   })
 
   it('records the class of a session failure and never its message', async () => {

@@ -36,6 +36,17 @@ export interface TurnDeps {
   readonly sessionId: () => string
   /** Character budget for the prompt, read at the start of the turn. */
   readonly maxPromptChars: () => number
+  /**
+   * The preamble put in front of the relayed conversation, read at the start of the turn.
+   *
+   * Required rather than optional, and that is the lesson this field carries. The framing is what tells
+   * the session it is answering a spoken relay, and a field a caller *may* omit is a field a caller
+   * silently omits: this plugin shipped relaying bare speech, and nothing failed — the session simply
+   * inferred a provenance and answered in prose meant to be read. A required accessor makes the plugin
+   * the compiler's business instead of the author's memory. Read per turn with the session and the
+   * budgets beside it, so a change lands on the next turn.
+   */
+  readonly frame: () => string
   /** Bound on waiting for the answer, in milliseconds, read at the start of the turn. */
   readonly answerTimeoutMs: () => number
   /** Admit one prompt. Rejects when the controller refuses it. */
@@ -111,22 +122,56 @@ export interface MilestonePolicy {
 }
 
 /**
+ * A string no longer than the ceiling, by UTF-16 code units.
+ *
+ * Stated rather than implied: the ceiling is a budget for how much text a turn may carry, not a display
+ * width, and the provider counts tokens. A cut inside a surrogate pair is therefore accepted here — it
+ * is the same cut the seam has always made, and a grapheme-aware one would be a behaviour change to a
+ * bound rather than a framing change, which belongs in its own release.
+ * @param text - the text to cut.
+ * @param maxChars - the ceiling.
+ * @returns the text, or its prefix.
+ */
+function clip(text: string, maxChars: number): string {
+  return text.length > maxChars ? text.slice(0, maxChars) : text
+}
+
+/**
  * Build the prompt for one delegated turn from the conversation the model sent.
  *
  * The transcript is what the voice model heard, so it is the question. Lines are joined in order and
  * truncated on the character budget: a truncated question is worse than a refused one, but a prompt the
  * controller rejects is worse than both, so the budget is applied rather than ignored.
+ *
+ * **The frame says what this is.** Without one the relayed text arrives as a bare block of speech —
+ * both sides of the conversation, flattened, with nothing naming where it came from or what shape of
+ * answer suits an ear. Measured on a live relay: the session's own reasoning had to *infer* the
+ * provenance, and it answered in chat prose (markdown, a file link, a fenced block) which was then read
+ * aloud verbatim. The frame names the relay and asks for prose.
+ *
+ * Two degradations, both total rather than half-applied. An **empty frame** is a deployment that wants
+ * none, so the prompt is the bare question. And a budget **too small to carry the frame** is answered
+ * with the bare question clipped to the budget: the frame is never allowed to eat the question it exists
+ * to introduce, because the question is the part that cannot be reconstructed downstream. Neither is a
+ * branch a configuration cannot reach — `maxPromptChars` is a validated positive integer, so a budget of
+ * four is as reachable as a budget of four thousand.
  * @param request - the delegation, carrying the conversation so far.
- * @param maxChars - character ceiling.
+ * @param maxChars - character ceiling for the whole prompt, frame included.
+ * @param frame - the preamble, or an empty string for none.
  * @returns the prompt, or an empty string when the transcript carried no text.
  */
-export function promptFrom(request: DelegationRequest, maxChars: number): string {
+export function promptFrom(request: DelegationRequest, maxChars: number, frame: string): string {
   const joined = request.transcript
     .map(line => line.text)
     .filter(text => text.length > 0)
     .join('\n')
     .trim()
-  return joined.length > maxChars ? joined.slice(0, maxChars) : joined
+  // Nothing was said, so there is no question to introduce — and a frame alone would turn a turn that
+  // must be **declined** into one the controller is asked to admit. Checked before the frame is used at
+  // all, so framing can never manufacture a prompt out of silence.
+  if (joined.length === 0) return ''
+  if (frame.length === 0 || maxChars - frame.length - 1 < 1) return clip(joined, maxChars)
+  return `${frame}\n${clip(joined, maxChars - frame.length - 1)}`
 }
 
 /**
@@ -226,11 +271,11 @@ function refusalReason(error: unknown): string {
  */
 export function createTurnRunner(deps: TurnDeps): (request: DelegationRequest) => Promise<TurnOutcome> {
   return async (request: DelegationRequest): Promise<TurnOutcome> => {
-    // All three are read **once, here**: a change takes effect on the next use, and a turn is one use.
+    // All four are read **once, here**: a change takes effect on the next use, and a turn is one use.
     // Reading them per event instead would let a change made while a turn is in flight move the very
     // session the answer is expected on, stranding the turn the change was meant to help.
     const sessionId = deps.sessionId()
-    const prompt = promptFrom(request, deps.maxPromptChars())
+    const prompt = promptFrom(request, deps.maxPromptChars(), deps.frame())
     // An empty prompt is a turn the controller would reject, so it is declined before the admission
     // rather than reported as a failure after one.
     if (prompt.length === 0) return { kind: 'declined' }
@@ -244,10 +289,35 @@ export function createTurnRunner(deps: TurnDeps): (request: DelegationRequest) =
     const onStep = deps.onStep
     let spoken = 0
     let lastSpokenAt = 0
+    /**
+     * The turn this admission started, latched from the session's own `turn/start`.
+     *
+     * Everything this runner reports — the answer **and** the narrated steps — is gated on it, because a
+     * session can be busy with a turn nobody delegated: a message typed into the chat while the voice
+     * waits is a turn, and speaking its answer back, or narrating its tool calls, is this plugin putting
+     * somebody else's words in the voice's mouth. It only looked correct before because the two are
+     * usually the same turn.
+     *
+     * Latching only **after** the admission has been accepted is what makes the first turn the session
+     * starts *ours* rather than one already running — and requiring the latch at all is why a turn that
+     * never gets one times out instead of answering with the wrong thing. That failure is diagnosable
+     * from the record rather than from a guess: the journal shows `prompt.admitted` and then
+     * `window.elapsed`, never a refusal, which is the pair that says the turn was admitted and nothing
+     * came back on it.
+     */
+    let turn: unknown
+    let admitted = false
     const unsubscribe = deps.subscribe((event, eventSessionId) => {
       // Scoped here, from the id the subscriber supplies: the owning session is the listener's first
       // argument and is never a field on the event, so this is the only place the comparison can be made.
       if (eventSessionId !== sessionId) return
+      if (event.type === 'turn/start') {
+        if (admitted && turn === undefined) turn = event.data?.turn
+        return
+      }
+      // No latch, or another turn's event: nothing here belongs to this admission. Checked before the
+      // steps as well as the answer, so narration cannot leak across turns either.
+      if (turn === undefined || event.data?.turn !== turn) return
       if (milestone !== undefined && onStep !== undefined) {
         const tool = stepTool(event)
         if (tool !== undefined) {
@@ -277,6 +347,9 @@ export function createTurnRunner(deps: TurnDeps): (request: DelegationRequest) =
       unsubscribe()
       return { kind: 'refused', reason: refusalReason(error) }
     }
+    // Only now can the next `turn/start` be this admission's. Set after the await, before the answer is
+    // awaited, so the latch is armed for every event the session emits from here on.
+    admitted = true
 
     const text = await answered
     clearTimeout(timer)

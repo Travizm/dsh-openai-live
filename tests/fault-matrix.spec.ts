@@ -74,11 +74,17 @@ const SECRET = ['route', 'token', 'fault', String(Math.trunc(Math.random() * 1e9
 /** A delegation as the provider raises one: metadata only, no task text (see the seam's contract). */
 const DELEGATION: RealtimeDelegation = { id: 'item_1', target: 'client', offsetMs: 0 }
 
-/** The assistant's reply, as the session controller reports it. No session id on the event, on purpose. */
+/**
+ * The assistant's reply, as the session controller reports it. No session id on the event, on purpose.
+ *
+ * It carries the turn it belongs to, because that is what the responder matches on: a session can be busy
+ * with a turn nobody delegated, and an answer is only spoken back when it comes from the turn this
+ * admission started. A fixture without it is a fixture for a sequence the harness does not emit.
+ */
 const ANSWER_EVENT = {
   type: 'assistant/message',
   surfaceOp: 'append',
-  data: { message: { content: [{ type: 'text', text: 'Staging is green.' }] } },
+  data: { turn: 1, message: { content: [{ type: 'text', text: 'Staging is green.' }] } },
 }
 
 /** The recorded live session — evidence of what the provider actually sends. */
@@ -315,9 +321,25 @@ async function driveAckedWithoutPlayback(): Promise<Journal> {
   await vi.waitFor(() => {
     expect(mounted.controller.prompted).toHaveLength(1)
   })
+  // `prompted` proves the controller was **called**, not that the admission settled. This fake resolves
+  // synchronously, so an emit on the same tick as the call beats the runner's own continuation chain —
+  // which is a property of the fake, not of the harness: production's controller answers `{accepted: true}`
+  // from an async method and the turn begins later still. One macrotask is what a fixture has to give it
+  // before the turn it must latch is delivered.
+  await new Promise(resolve => { setTimeout(resolve, 0) })
   // `session/event` listeners take (session, event): the owning session is the FIRST argument, and the event
   // carries no session id of its own. Emitting it the harness's way is what makes this matrix an assertion
   // about the plugin rather than about the shape this file invented.
+  //
+  // The turn boundary comes first, as the harness emits it: the controller's `prompt` resolves on
+  // **admission** — measured in the harness itself, where it returns `{accepted: true}` straight after
+  // handing the message to the agent — and the session emits `turn/start` when the turn actually begins.
+  // Waiting on `prompted` above therefore outlasts the admission, and the latch is armed by the time this
+  // is delivered.
+  mounted.context.emit('session/event', { id: 'sess-1' } as never, {
+    type: 'turn/start',
+    data: { turn: 1 },
+  } as never)
   mounted.context.emit('session/event', { id: 'sess-1' } as never, ANSWER_EVENT as never)
   await vi.waitFor(() => {
     expect(mounted.journal.snapshot().some(entry => entry.kind === 'append.acknowledged')).toBe(true)

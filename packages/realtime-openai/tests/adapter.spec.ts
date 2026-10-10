@@ -114,9 +114,10 @@ const STARTED_FACTS: RealtimeSessionStarted = {
 async function openSession(
   overrides: Partial<OpenAiLiveConfig> = {},
   handlers: RealtimeSessionHandlers = {},
+  journal?: SessionJournal,
 ): Promise<{ factory: FakeFactory; transport: FakeTransport; pending: ReturnType<OpenAiLiveAdapter['session']> }> {
   const factory = new FakeFactory()
-  const adapter = new OpenAiLiveAdapter(config(overrides), factory)
+  const adapter = new OpenAiLiveAdapter(config(overrides), factory, journal)
   const pending = adapter.session({ provider: 'openai-live', model: 'gpt-live-1', handlers })
   await tick()
   const transport = factory.transport
@@ -364,7 +365,10 @@ describe('handshake', () => {
  * The transport is wired to the session exactly as the adapter wires it — a helper with inert
  * handlers would let a test deliver frames into nothing and read as a session bug.
  */
-function liveSession(handlers: RealtimeSessionHandlers = {}, appendAckTimeoutMs = 50) {
+/** The journal a session will take, derived from the session's own options rather than restated here. */
+type SessionJournal = NonNullable<ConstructorParameters<typeof OpenAiLiveSession>[0]['journal']>
+
+function liveSession(handlers: RealtimeSessionHandlers = {}, appendAckTimeoutMs = 50, journal?: SessionJournal) {
   const holder: { session?: OpenAiLiveSession } = {}
   const transport = new FakeTransport({
     onMessage: (frame: string) => holder.session?.handleFrame(frame),
@@ -377,6 +381,7 @@ function liveSession(handlers: RealtimeSessionHandlers = {}, appendAckTimeoutMs 
     id: 'sess_test',
     handlers,
     appendAckTimeoutMs,
+    ...journal === undefined ? {} : { journal },
   })
   holder.session = session
   return { transport, session }
@@ -565,6 +570,52 @@ describe('session callbacks', () => {
       delegation: { id: 'item_1', type: 'delegation', target: 'client' },
     })
     expect(delegations).toEqual([{ id: 'item_1', target: 'client' }])
+  })
+
+  it('records a receipt where the frame is accepted, not only where it is answered', () => {
+    // The distinction this exists for. Everything else recorded about a delegation is written at the far end
+    // of the bundle, by the plugin that answers it — so "the model never raised one" and "it arrived and this
+    // adapter could not read it" were the same silence, and an evening went into telling them apart.
+    const record = vi.fn()
+    const { transport } = liveSession({}, 50, { record })
+
+    transport.deliver({
+      type: 'session.delegation.created',
+      offset_ms: 4600,
+      delegation: { id: 'item_1', type: 'delegation', target: 'client' },
+    })
+
+    expect(record).toHaveBeenCalledWith('delegation.received', { id: 'item_1', offsetMs: '4600' })
+  })
+
+  it('records a delegation it could not read, rather than recording nothing at all', () => {
+    // A known event type whose payload this adapter cannot use is the invisible drop: the frame is not
+    // filtered out as unknown, so an event the provider did raise left no trace anywhere in the bundle.
+    const record = vi.fn()
+    const { transport } = liveSession({}, 50, { record })
+
+    transport.deliver({ type: 'session.delegation.created', delegation: {} })
+
+    expect(record).toHaveBeenCalledWith('delegation.received', { dropped: 'unreadable' })
+  })
+
+  it('hands the session the journal the composition gave the adapter', async () => {
+    // The wiring rather than the recorder: an adapter built without a journal opens sessions that record
+    // nothing about what they accepted, and nothing else in the bundle would notice — every other record
+    // about a delegation is written at the far end of it, by the plugin that answers.
+    const record = vi.fn()
+    const { transport, pending } = await openSession({}, {}, { record })
+
+    transport.deliver(STARTED_EVENT)
+    await pending
+
+    transport.deliver({
+      type: 'session.delegation.created',
+      offset_ms: 100,
+      delegation: { id: 'item_9', type: 'delegation', target: 'client' },
+    })
+
+    expect(record).toHaveBeenCalledWith('delegation.received', { id: 'item_9', offsetMs: '100' })
   })
 
   it('reports usage in audio-seconds', () => {

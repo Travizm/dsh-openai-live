@@ -50,6 +50,33 @@
         # The voice model waits this long for an answer. The responder's own `answerTimeoutMs` is the
         # other half of the same budget, and the smaller of the two decides what is actually heard.
         delegationTimeoutMs: 45000
+        # The delegation contract, stated to the model because the protocol does not state it to the
+        # model — `delegation: { type: 'client' }` in `session.start` tells the *service* that this
+        # client delegates, and tells the voice model nothing about what to do with a request it cannot
+        # fulfil.
+        #
+        # Measured, before and after, on one running app. Asked an unprimed question about the session it
+        # is attached to — "is there any animal mentioned in this session" — the model with no brief
+        # answered for its OWN conversation, three times, twice in its own words ("I don't have access to
+        # any such record of animals", "we haven't mentioned animals so far"), while the session it was
+        # steering did contain the animal; no delegation was raised at all. With this instruction in
+        # place, the same question was delegated, the session consulted and the answer spoken. The
+        # sentence about *the session* is the one that measurement bought: the model reads "their
+        # session" as this conversation, so the workspace has to be named as a different thing.
+        #
+        # The scope is named explicitly and so is the boundary — ordinary conversation stays the model's
+        # own, because an instruction to delegate everything would be as wrong as one to delegate nothing.
+        #
+        # Immutable after `session.start`, per the protocol, so this is a per-session setting and not a
+        # live one. A profile that patches this row replaces the whole config, which is why it belongs
+        # here rather than in a profile's own row: shipped as a default it travels with the bundle.
+        instructions: >-
+          You have no tools and no knowledge of this system: you cannot read files, run commands, or
+          look anything up yourself. When the user asks you to check, look up, retrieve, list, read,
+          describe or otherwise act on anything about their session, their machine, their files or
+          their work, you MUST delegate that request to the client, then speak the result you are
+          given, word for word. "The session" is the workspace you are attached to, not this
+          conversation: never answer for it from memory. Answer ordinary conversation yourself.
 
     # The responder is an *application*, in the seam's vocabulary: it listens for what the model
     # delegates and answers it by admitting a turn to a real DSH session. Without it the agent asks the

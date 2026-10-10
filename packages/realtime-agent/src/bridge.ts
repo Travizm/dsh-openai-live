@@ -23,6 +23,49 @@ export interface DelegationAsker {
 }
 
 /**
+ * Reshape an agent's reply into words a speaker can say.
+ *
+ * The `commentary` channel is **spoken**: the provider reads what it is given out loud, character for
+ * character. What an agent writes is prose for a screen — and measured on the live relay, that is
+ * exactly what came back: `**0.6.6.**`, a link whose *target* is a file path, and a fenced json block,
+ * all of it read out verbatim, URL and fence and all. The frame the responder puts on the relayed
+ * request is what should stop that being written; this is the floor under it, because a shape the model
+ * ignores must not become noise in somebody's ear.
+ *
+ * **It reshapes formatting; it never invents or deletes meaning.** Fence lines, heading and list
+ * markers, thematic breaks and the markers of emphasis go; the words stay, including the contents of a
+ * code block. Two deliberate omissions, both because guessing wrong is worse than leaving the character:
+ * **underscore emphasis** is not unscrambled, because one underscore is far more often part of an
+ * identifier (`dsh_openai_live`) than an emphasis marker, and **a bare URL** is left alone, because it is
+ * the author's own text and the instruction is what should have kept it out.
+ *
+ * The **silent** channel is untouched on purpose: `thinking` is context for the model, not words for an
+ * ear, and markdown is a perfectly good way to hand a model a snippet.
+ * @param text - the agent's reply, as written.
+ * @returns the same words, with the formatting a speaker would have read out removed.
+ */
+export function toSpeech(text: string): string {
+  return text
+    // A fence line is markup; what it encloses is content. The line goes with its own newline, so the
+    // removal does not leave a blank line behind where the fence was.
+    .replace(/^[ \t]*(?:`{3,}|~{3,})[^\n]*\n?/gm, '')
+    // Leading block markers: headings, block quotes, bullets, ordered items.
+    .replace(/^[ \t]*(?:#{1,6}|>|[-*+]|\d+[.)])[ \t]+/gm, '')
+    // Thematic breaks, which are three or more of one marker and nothing else.
+    .replace(/^[ \t]*(?:[-*_][ \t]*){3,}$/gm, '')
+    // A link or image becomes its text: the target is not sayable.
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    // The whitespace the removals leave behind, collapsed rather than left as a stutter.
+    .replace(/[ \t]+/g, ' ')
+    .replace(/ ?\n ?/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/^\n+|\s+$/g, '')
+}
+
+/**
  * Cut an answer to the seam's append bound.
  *
  * A bound applied here rather than at the append is deliberate: the append would *throw*, and losing a
@@ -100,12 +143,14 @@ export async function answerDelegation(
   // nothing here says a speaker rendered anything, and keeping those two apart is the whole of
   // invariant 6 — and the reason the fault-injection matrix has a row for exactly this pair.
   if (text.length === 0) {
-    await session.appendCommentary(UNANSWERED_NOTICE, delegation.id)
+    await session.appendCommentary(boundAppend(toSpeech(UNANSWERED_NOTICE)), delegation.id)
     onAcknowledged('commentary', delegation.id)
     return
   }
   if (answer?.mode === 'spoken') {
-    await session.appendCommentary(boundAppend(text), delegation.id)
+    // Spoken, so it is shaped — see `toSpeech`. Applied before the bound so the bound is what the ear
+    // finally gets, and so the truncation marker is never reshaped away.
+    await session.appendCommentary(boundAppend(toSpeech(text)), delegation.id)
     onAcknowledged('commentary', delegation.id)
     return
   }

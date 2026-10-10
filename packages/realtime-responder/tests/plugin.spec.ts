@@ -86,13 +86,27 @@ describe('plugin shape', () => {
     expect(typeof apply).toBe('function')
   })
 
-  it('defaults both budgets rather than leaving them undefined', () => {
+  it('defaults both budgets, and the frame, rather than leaving them undefined', () => {
     const resolved = Config({ sessionId: 'sess-1' }) as RealtimeResponderConfig
     expect(resolved.sessionId).toBe('sess-1')
     expect(resolved.maxPromptChars).toBe(4_000)
     expect(resolved.answerTimeoutMs).toBe(45_000)
+    // A frame that is absent is a session answering bare speech — the defect this default removes — so it
+    // has to be a **default** and not an empty string the plugin reads as "no frame".
+    expect(resolved.promptFrame).toBe(responder.DEFAULT_PROMPT_FRAME)
+    expect(resolved.promptFrame.length).toBeGreaterThan(0)
   })
 })
+
+/**
+ * Give a delegation time to reach the controller.
+ *
+ * The runner arms its turn latch only once its own admission has been **accepted**, so an event emitted
+ * before that is refused — with nothing to report. Reaching that point crosses the event bus and the
+ * controller, so it is more than one microtask deep, and a macrotask turn is what a fixture has to give it.
+ * Production has the same shape: nothing can arrive at the runner before the controller holds the prompt.
+ */
+const admitted = async (): Promise<void> => { await new Promise(resolve => { setTimeout(resolve, 0) }) }
 
 describe('answering a delegation', () => {
   it('admits a turn to the configured session and speaks the reply', async () => {
@@ -100,22 +114,32 @@ describe('answering a delegation', () => {
     apply(context, Config({ sessionId: 'sess-1', answerTimeoutMs: 1_000 }) as RealtimeResponderConfig)
 
     const answer = context.serial('realtime-agent/delegation', request)
-    await Promise.resolve()
+    await admitted()
 
     expect(controller.prompted).toHaveLength(1)
     expect(controller.prompted[0]).toMatchObject({
       sessionId: 'sess-1',
       mode: 'queue',
-      content: [{ type: 'text', text: 'is staging ok?' }],
+      // The frame travels with the question. This is the assertion that the plugin wires the configured
+      // preamble into what it admits, rather than holding it in config and never reading it.
+      content: [{ type: 'text', text: `${responder.DEFAULT_PROMPT_FRAME}\nis staging ok?` }],
     })
 
     // `session/event` listeners take (session, event): the owning session is the FIRST argument, and the
     // event carries no session id of its own. Emitting it the harness's way is the point of this suite — a
     // hand-built event carrying `sessionId` is what hid a defect that made every real turn time out.
+    //
+    // The turn boundary is part of that sequence and not decoration: the runner answers only the turn its
+    // own admission started, so a session busy with somebody else's turn cannot have its answer spoken
+    // back. A fixture that skips `turn/start` is a fixture that skips the thing under test.
+    context.emit('session/event', { id: 'sess-1' } as never, {
+      type: 'turn/start',
+      data: { turn: 1 },
+    } as unknown as never)
     context.emit('session/event', { id: 'sess-1' } as never, {
       type: 'assistant/message',
       surfaceOp: 'append',
-      data: { message: { content: [{ type: 'text', text: 'Staging is green.' }] } },
+      data: { turn: 1, message: { content: [{ type: 'text', text: 'Staging is green.' }] } },
     } as unknown as never)
 
     await expect(answer).resolves.toEqual({ text: 'Staging is green.', mode: 'spoken' })
@@ -131,17 +155,21 @@ describe('answering a delegation', () => {
     apply(context, Config({ sessionId: 'sess-1', answerTimeoutMs: 1_000 }) as RealtimeResponderConfig)
 
     const answer = context.serial('realtime-agent/delegation', request)
-    await Promise.resolve()
+    await admitted()
 
     const payload = {
       type: 'assistant/message',
       surfaceOp: 'append',
-      data: { message: { content: [{ type: 'text', text: 'from nowhere' }] } },
+      data: { turn: 1, message: { content: [{ type: 'text', text: 'from nowhere' }] } },
     } as unknown as never
     context.emit('session/event', undefined as never, payload)
     context.emit('session/event', { notAnId: 1 } as never, payload)
 
     // Neither was attributed, so the turn is still open — and the answer from the right session still lands.
+    context.emit('session/event', { id: 'sess-1' } as never, {
+      type: 'turn/start',
+      data: { turn: 1 },
+    } as unknown as never)
     context.emit('session/event', { id: 'sess-1' } as never, payload)
     await expect(answer).resolves.toEqual({ text: 'from nowhere', mode: 'spoken' })
   })
@@ -265,6 +293,7 @@ describe('answering a delegation', () => {
     // answer. Collapsing them is how "admitted and nothing came back" became indistinguishable from
     // "the controller refused", which is the silence S0 was spent on.
     expect(journal.snapshot().map(entry => entry.kind)).toEqual([
+      'config.resolved',
       'delegation.seen',
       'prompt.admitted',
       'window.elapsed',
@@ -280,7 +309,26 @@ describe('answering a delegation', () => {
 
     await context.serial('realtime-agent/delegation', silent)
 
-    expect(journal.snapshot().map(entry => entry.kind)).toEqual(['delegation.seen', 'prompt.declined'])
+    expect(journal.snapshot().map(entry => entry.kind)).toEqual(['config.resolved', 'delegation.seen', 'prompt.declined'])
+  })
+
+  it('records what it resolved at boot, including the session it will steer', async () => {
+    // The field that makes a **stale pin visible**. A session id outlives the session it names: the profile
+    // pins one, that session ends, and the next boot steers a conversation nobody is in — which is exactly
+    // how a working relay was made to look broken. Without this entry the journal cannot say what the voice
+    // was pointed at, and the plugin's own silence reads as a plugin that never loaded.
+    const { context, journal } = harness()
+    apply(context, Config({ sessionId: 'session-stale-candidate', answerTimeoutMs: 1_234 }) as RealtimeResponderConfig)
+
+    expect(journal.snapshot()[0]).toMatchObject({
+      kind: 'config.resolved',
+      detail: {
+        plugin: 'dsh-realtime-responder',
+        sessionId: 'session-stale-candidate',
+        maxPromptChars: '4000',
+        answerTimeoutMs: '1234',
+      },
+    })
   })
 
   it('redacts what reaches the journal through the same door as the bus and the speech', async () => {
@@ -331,14 +379,15 @@ describe('narrating a turn', () => {
     apply(context, Config({ sessionId: 'sess-1', answerTimeoutMs: 1_000 }) as RealtimeResponderConfig)
 
     const answer = context.serial('realtime-agent/delegation', request)
-    await Promise.resolve()
+    await admitted()
+    context.emit('session/event', { id: 'sess-1' } as never, { type: 'turn/start', data: { turn: 1 } } as unknown as never)
 
     // A `tool/call` is **not** a surface event and carries no `surfaceOp`, so a filter copied from
     // `answerText` (`surfaceOp === 'append'`) would drop this silently and the narration would simply never
     // happen. It is emitted here the way the harness emits one, with the session as the first argument.
     context.emit('session/event', { id: 'sess-1' } as never, {
       type: 'tool/call',
-      data: { name: 'read_file', arguments: '{"path":"/Users/asd/notes-that-must-not-be-spoken.md"}' },
+      data: { turn: 1, name: 'read_file', arguments: '{"path":"/Users/asd/notes-that-must-not-be-spoken.md"}' },
     } as unknown as never)
 
     expect(progress).toEqual([{ id: 'item_1', channel: 'commentary', text: 'Reading a file.' }])
@@ -349,7 +398,7 @@ describe('narrating a turn', () => {
     context.emit('session/event', { id: 'sess-1' } as never, {
       type: 'assistant/message',
       surfaceOp: 'append',
-      data: { message: { content: [{ type: 'text', text: 'Staging is green.' }] } },
+      data: { turn: 1, message: { content: [{ type: 'text', text: 'Staging is green.' }] } },
     } as unknown as never)
     await expect(answer).resolves.toEqual({ text: 'Staging is green.', mode: 'spoken' })
   })
@@ -363,10 +412,11 @@ describe('narrating a turn', () => {
     }) as RealtimeResponderConfig)
 
     const answer = context.serial('realtime-agent/delegation', request)
-    await Promise.resolve()
+    await admitted()
+    context.emit('session/event', { id: 'sess-1' } as never, { type: 'turn/start', data: { turn: 1 } } as unknown as never)
     context.emit('session/event', { id: 'sess-1' } as never, {
       type: 'tool/call',
-      data: { name: 'a_tool_this_plugin_has_never_heard_of' },
+      data: { turn: 1, name: 'a_tool_this_plugin_has_never_heard_of' },
     } as unknown as never)
 
     expect(progress).toEqual([{ id: 'item_1', channel: 'thinking', text: 'Working on it.' }])
@@ -374,7 +424,7 @@ describe('narrating a turn', () => {
     context.emit('session/event', { id: 'sess-1' } as never, {
       type: 'assistant/message',
       surfaceOp: 'append',
-      data: { message: { content: [{ type: 'text', text: 'Staging is green.' }] } },
+      data: { turn: 1, message: { content: [{ type: 'text', text: 'Staging is green.' }] } },
     } as unknown as never)
     await expect(answer).resolves.toEqual({ text: 'Staging is green.', mode: 'spoken' })
   })
@@ -466,22 +516,25 @@ describe('the settings it declares', () => {
       .toEqual({ ok: true, key: 'realtime-responder.sessionId', value: 'sess-2' })
 
     const answer = context.serial('realtime-agent/delegation', request)
-    await Promise.resolve()
+    await admitted()
 
     // The next turn is admitted to the new session — and an answer only counts if it comes from there,
     // which is what makes steering real rather than merely recorded. The session is carried as the
     // listener's first argument, which is the only place it exists: this assertion is the one that would
     // have caught the answer path never matching anything.
     expect(controller.prompted.at(-1)).toMatchObject({ sessionId: 'sess-2' })
+    // The latch is per admission and follows the session it was admitted to: the steered session starts the
+    // turn, and only that session's answer can settle it.
+    context.emit('session/event', { id: 'sess-2' } as never, { type: 'turn/start', data: { turn: 4 } } as unknown as never)
     context.emit('session/event', { id: 'sess-1' } as never, {
       type: 'assistant/message',
       surfaceOp: 'append',
-      data: { message: { content: [{ type: 'text', text: 'from the old session' }] } },
+      data: { turn: 3, message: { content: [{ type: 'text', text: 'from the old session' }] } },
     } as unknown as never)
     context.emit('session/event', { id: 'sess-2' } as never, {
       type: 'assistant/message',
       surfaceOp: 'append',
-      data: { message: { content: [{ type: 'text', text: 'from the new session' }] } },
+      data: { turn: 4, message: { content: [{ type: 'text', text: 'from the new session' }] } },
     } as unknown as never)
 
     await expect(answer).resolves.toEqual({ text: 'from the new session', mode: 'spoken' })
@@ -532,17 +585,18 @@ describe('the settings it declares', () => {
 
     // And the next turn honours them: switched off, a step is carried rather than spoken.
     const answer = context.serial('realtime-agent/delegation', request)
-    await Promise.resolve()
+    await admitted()
+    context.emit('session/event', { id: 'sess-1' } as never, { type: 'turn/start', data: { turn: 1 } } as unknown as never)
     context.emit('session/event', { id: 'sess-1' } as never, {
       type: 'tool/call',
-      data: { name: 'read_file' },
+      data: { turn: 1, name: 'read_file' },
     } as unknown as never)
     expect(progress).toEqual([{ id: 'item_1', channel: 'thinking', text: 'Reading a file.' }])
 
     context.emit('session/event', { id: 'sess-1' } as never, {
       type: 'assistant/message',
       surfaceOp: 'append',
-      data: { message: { content: [{ type: 'text', text: 'Staging is green.' }] } },
+      data: { turn: 1, message: { content: [{ type: 'text', text: 'Staging is green.' }] } },
     } as unknown as never)
     await expect(answer).resolves.toEqual({ text: 'Staging is green.', mode: 'spoken' })
 

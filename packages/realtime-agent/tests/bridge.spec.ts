@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { MAX_APPEND_CHARS } from 'dsh-realtime'
-import { answerDelegation, boundAppend, UNANSWERED_NOTICE, type DelegationAsker } from '../src/bridge.ts'
+import { answerDelegation, boundAppend, toSpeech, UNANSWERED_NOTICE, type DelegationAsker } from '../src/bridge.ts'
 import type { AgentTranscriptLine } from '../src/types.ts'
 
 /** A session that records what was appended to it. */
@@ -89,10 +89,85 @@ describe('boundAppend', () => {
   })
 })
 
+describe('toSpeech', () => {
+  it('drops fence lines and keeps what they enclosed', () => {
+    // A fence is markup; the snippet inside it is content, and dropping content would be the shaper
+    // deciding what the answer meant.
+    expect(toSpeech('before\n```json\n{"a":1}\n```\nafter')).toBe('before\n{"a":1}\nafter')
+  })
+
+  it('drops the markers a speaker would have read out', () => {
+    expect(toSpeech('# Heading\n> quoted\n- bullet\n1. ordered\n2) also ordered'))
+      .toBe('Heading\nquoted\nbullet\nordered\nalso ordered')
+  })
+
+  it('drops a thematic break, which is a line of nothing else', () => {
+    expect(toSpeech('above\n\n---\n\nbelow')).toBe('above\n\nbelow')
+  })
+
+  it('says a link text rather than its target', () => {
+    // The measured case: the target was a file path, and it was read out character by character.
+    expect(toSpeech('From [package.json](/Users/asd/dev/dsh-openai-live/package.json#L3):'))
+      .toBe('From package.json:')
+    expect(toSpeech('![diagram](https://example.com/x.png)')).toBe('diagram')
+  })
+
+  it('drops the markers of emphasis and inline code', () => {
+    expect(toSpeech('**0.6.6.** and *emphasis* and `code`')).toBe('0.6.6. and emphasis and code')
+  })
+
+  it('leaves an underscore alone, because a word is likelier than emphasis', () => {
+    // Deliberate omission, and the reason is the cost of guessing wrongly: `_emphasis_` and
+    // `dsh_openai_live` are the same shape, and unscrambling the second corrupts a name.
+    expect(toSpeech('the dsh_openai_live package')).toBe('the dsh_openai_live package')
+  })
+
+  it('leaves a bare URL alone, because it is the author own text', () => {
+    // The instruction is what should have kept it out of an answer meant for an ear.
+    expect(toSpeech('see https://example.com/docs for more')).toBe('see https://example.com/docs for more')
+  })
+
+  it('collapses the whitespace the removals leave behind', () => {
+    expect(toSpeech('a    b\t\tc\n\n\n\nd')).toBe('a b c\n\nd')
+  })
+
+  it('is idempotent, so a second pass cannot keep eating a reply', () => {
+    const once = toSpeech('**0.6.6.**\n\nFrom [x](/y):\n\n- one')
+    expect(toSpeech(once)).toBe(once)
+  })
+
+  it('reshapes the answer that was actually read out, into something an ear can take', () => {
+    // Verbatim from a live relay, before this existed: markdown, a link whose target is a file path, and
+    // a fenced json block, all of it spoken character for character. The snippet still reads oddly — the
+    // frame on the relayed request is what should stop it being written — but nothing is markup now.
+    const measured = '**0.6.6.**\n\nFrom [dsh-openai-live/package.json](/Users/asd/dev/dsh-openai-live/package.json#L3):\n\n```json\n"name": "dsh-openai-live",\n"version": "0.6.6",\n```'
+    expect(toSpeech(measured))
+      .toBe('0.6.6.\n\nFrom dsh-openai-live/package.json:\n\n"name": "dsh-openai-live",\n"version": "0.6.6",')
+  })
+})
+
 describe('answerDelegation', () => {
   it('speaks an answer marked spoken', async () => {
     const appends = await run(() => ({ text: 'Staging is green.', mode: 'spoken' }))
     expect(appends).toEqual([{ kind: 'commentary', text: 'Staging is green.', delegationId: 'item_1' }])
+  })
+
+  it('shapes a spoken answer, because that channel is read out loud', async () => {
+    const appends = await run(() => ({ text: '**Green** on [staging](/deploys/1).', mode: 'spoken' }))
+    expect(appends).toEqual([{ kind: 'commentary', text: 'Green on staging.', delegationId: 'item_1' }])
+  })
+
+  it('leaves the silent channel alone, because it is context rather than speech', async () => {
+    // The same text, deliberately unshaped: markdown is a perfectly good way to hand a model a snippet,
+    // and a reply that is never spoken has no ear to be noise in.
+    const appends = await run(() => ({ text: '**Green** on [staging](/deploys/1).' }))
+    expect(appends).toEqual([{ kind: 'thinking', text: '**Green** on [staging](/deploys/1).', delegationId: 'item_1' }])
+  })
+
+  it('shapes before it bounds, so the truncation marker is never reshaped away', async () => {
+    const appends = await run(() => ({ text: `**${'y'.repeat(MAX_APPEND_CHARS + 500)}**`, mode: 'spoken' }))
+    expect(appends[0]!.text.length).toBe(MAX_APPEND_CHARS)
+    expect(appends[0]!.text.endsWith('[truncated]')).toBe(true)
   })
 
   it('defaults to silent, so an answer is not announced unless it asked to be', async () => {

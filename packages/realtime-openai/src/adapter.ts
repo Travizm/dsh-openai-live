@@ -5,7 +5,7 @@
  */
 
 import { RealtimeAdapter, RealtimeError } from 'dsh-realtime'
-import type { RealtimeModelInfo, RealtimeProviderInfo, RealtimeSession } from 'dsh-realtime'
+import type { Journal, RealtimeModelInfo, RealtimeProviderInfo, RealtimeSession } from 'dsh-realtime'
 import { OpenAiLiveSession } from './session.ts'
 import { API_KEYS_URL, toStarted, toProviderError } from './translate.ts'
 import { isKnownServerEvent, parseServerEvent, sessionStart } from './wire.ts'
@@ -56,15 +56,18 @@ export function resolveApiKey(config: OpenAiLiveConfig): string {
 export class OpenAiLiveAdapter extends RealtimeAdapter {
   private readonly config: OpenAiLiveConfig
   private readonly transports: RealtimeTransportFactory
+  private readonly journal: Pick<Journal, 'record'> | undefined
 
   /**
    * @param config - resolved plugin configuration.
    * @param transports - transport factory; injected so tests drive the adapter with no network.
+   * @param journal - where a session records what it accepted, when the composition supplies one.
    */
-  constructor(config: OpenAiLiveConfig, transports: RealtimeTransportFactory) {
+  constructor(config: OpenAiLiveConfig, transports: RealtimeTransportFactory, journal?: Pick<Journal, 'record'>) {
     super()
     this.config = config
     this.transports = transports
+    this.journal = journal
   }
 
   /** @returns this adapter's display metadata for `provider`. */
@@ -151,6 +154,7 @@ export class OpenAiLiveAdapter extends RealtimeAdapter {
               id: `${target.model}:${String((event as { session?: { id?: unknown } }).session?.id ?? 'session')}`,
               handlers: options.handlers ?? {},
               appendAckTimeoutMs: this.config.appendAckTimeoutMs,
+              ...this.journal === undefined ? {} : { journal: this.journal },
             })
             established = session
             settleEstablish.resolve(session)

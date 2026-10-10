@@ -31,6 +31,16 @@ export interface RealtimeResponderConfig {
    */
   readonly redactSecrets: readonly string[]
   /**
+   * Preamble put in front of a relayed request, so the session knows what it is answering.
+   *
+   * Configuration rather than a constant for the same reason the milestone phrases are: it is this
+   * plugin's own prose, and prose a user may want to change is prose a user can edit in `cordis.yml`
+   * beside `instructions`. Deliberately **not** registered as a live setting — a paragraph of framing is
+   * not a value to poke at during a call, which is the same judgement that keeps the phrase table out of
+   * the panel.
+   */
+  readonly promptFrame: string
+  /**
    * Spoken phrase for each tool, keyed by the tool name the session reports.
    *
    * The only source of a spoken step. A tool's `arguments` are the model's own text and are never read
@@ -69,5 +79,13 @@ export interface SessionEventLike {
     readonly message?: { readonly content?: unknown }
     /** `tool/call` carries the tool's own name and its raw, unparsed arguments. */
     readonly name?: unknown
+    /**
+     * The turn the event belongs to, as the session reports it.
+     *
+     * Present on `turn/start`, `step/*`, `tool/call`, `assistant/message` and `turn/end` — every event
+     * this plugin reads except a surface replay. It is what lets a runner tell its own turn from one
+     * already in flight, so an answer typed into the chat while the voice waits is not spoken back.
+     */
+    readonly turn?: unknown
   }
 }

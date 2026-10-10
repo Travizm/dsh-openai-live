@@ -53,13 +53,18 @@ written down; classifying it live would have shipped a control that silently did
 one thing this gate exists to prevent. It is registered as restart-bound (below), so a `set` on it is
 **refused with the restart it needs** rather than accepted and ignored.
 
-## Two fields deliberately off the registry
+## Three fields deliberately off the registry
 
-The responder's `milestonePhrases` and `milestoneFallback` are read every turn, so they are live in the only
-sense that matters — but they are **not** declared on the registry and have **no** control. A phrase table is
-*prose*: the kind of value a user writes down once in `cordis.yml` beside `instructions`, not one they poke
-during a call. A control is for a value somebody changes while it runs; putting a text box on a phrase table
-would be an affordance for an edit nobody makes mid-conversation.
+The responder's `milestonePhrases`, `milestoneFallback` and `promptFrame` are read every turn, so they are
+live in the only sense that matters — but they are **not** declared on the registry and have **no** control.
+They are *prose*: the kind of value a user writes down once in `cordis.yml` beside `instructions`, not one
+they poke during a call. A control is for a value somebody changes while it runs; putting a text box on a
+phrase table — or on the paragraph that tells a session it is answering a spoken relay — would be an
+affordance for an edit nobody makes mid-conversation.
+
+`promptFrame` is the newest of the three, and it earned its place by having been **absent**: the plugin
+relayed bare speech, so the steered session had to infer what it was reading and answered in prose meant for
+a screen. A default a deployment can reword is the fix; a control is still the wrong affordance.
 
 ## How the gate is enforced, not just written down
 

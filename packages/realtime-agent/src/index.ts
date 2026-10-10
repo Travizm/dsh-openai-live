@@ -115,7 +115,7 @@ declare module '@deepseek-ai/cordis' {
 }
 
 export * from './types.ts'
-export { answerDelegation, boundAppend, UNANSWERED_NOTICE, type DelegationAsker } from './bridge.ts'
+export { answerDelegation, boundAppend, toSpeech, UNANSWERED_NOTICE, type DelegationAsker } from './bridge.ts'
 export { TranscriptBuffer } from './transcript.ts'
 export { voiceToolDefinitions, type VoiceToolDeps } from './tools.ts'
 
@@ -159,9 +159,19 @@ export interface HandlerDeps {
    */
   readonly timeoutMs: () => number
   /** Called when the session ended, so the caller can drop its reference. */
-  readonly onClosed: () => void
-  /** Where a session-scoped failure is reported. */
+  readonly onClosed: (reason?: string) => void
+  /**
+   * Where a session-scoped failure is reported. `reason` is the provider's or the transport's own, when
+   * there is one: it is the only field that says *why* a session a person was talking into ended.
+   */
   readonly onSessionError: (error: Error) => void
+  /**
+   * Where an input fragment is reported, so the record can say the model heard something.
+   *
+   * Called with the fragment; the recorder keeps only its size. A journal that copied the words would be a
+   * file nobody could hand to anybody, which is the same reason the audio itself is never journalled.
+   */
+  readonly onHeard?: (fragment: RealtimeTranscript) => void
   /** Where output audio is delivered. Called once per provider delta. */
   readonly onAudio: (pcm16: Uint8Array) => void
   /**
@@ -189,6 +199,7 @@ export function createHandlers(deps: HandlerDeps): RealtimeSessionHandlers {
   return {
     onTranscript: (fragment: RealtimeTranscript): void => {
       deps.transcript.append(fragment.kind, fragment.text, fragment.final)
+      deps.onHeard?.(fragment)
     },
     onDelegation: (delegation: RealtimeDelegation): void => {
       const session = deps.session()
@@ -210,7 +221,7 @@ export function createHandlers(deps: HandlerDeps): RealtimeSessionHandlers {
       ).catch(deps.onSessionError).finally(() => { deps.onDelegationSettled?.(delegation.id) })
     },
     onAudio: (pcm16: Uint8Array): void => { deps.onAudio(pcm16) },
-    onClosed: (): void => { deps.onClosed() },
+    onClosed: (reason?: string): void => { deps.onClosed(reason) },
     onError: (error: Error): void => { deps.onSessionError(error) },
   }
 }
@@ -230,6 +241,31 @@ function requireCount(field: string, value: number): number {
     throw new RealtimeError(`${field} must be a positive whole number`, REALTIME_ERROR_CODES.INVALID_SETTING)
   }
   return value
+}
+
+/**
+ * Character ceiling on a provider-supplied string this plugin records.
+ *
+ * Local, like the responder's own bound and for the same reason: what this plugin measures is part of this
+ * plugin's business, and a shared constant would tie two plugins' diagnostics to one number neither owns.
+ * The journal is bounded in entries, not in the size of one, so an unbounded provider string is one entry
+ * that can be arbitrarily large in a file meant to be read and quoted.
+ */
+const MAX_RECORDED_REASON_CHARS = 200
+
+/**
+ * The provider's or the transport's own words for a close, bounded.
+ *
+ * Not the message of an *error* — an error's text is where a credential turns up, which is why that path
+ * records a code. A close reason is short vocabulary by construction (`session.closed` carries a reason and
+ * a usage figure), and it is the only field that says why a session a person was talking into ended. It is
+ * recorded by the plugin that also registers its credential as a journal secret, so the value arm can
+ * redact it as it is written.
+ * @param reason - the provider's or transport's reason.
+ * @returns the reason, no longer than the ceiling.
+ */
+function boundedReason(reason: string): string {
+  return reason.length > MAX_RECORDED_REASON_CHARS ? reason.slice(0, MAX_RECORDED_REASON_CHARS) : reason
 }
 
 /**
@@ -324,10 +360,14 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
     session: () => session,
     ask: request => ctx.serial('realtime-agent/delegation', request),
     timeoutMs: () => live.delegationTimeoutMs,
-    onClosed: () => {
+    onClosed: (reason?: string) => {
       session = undefined
       waiting.clear()
-      journal.record('session.closed', {})
+      // The reason travels with the close, and it is the only field that says *why* — a run of five-second
+      // sessions with an empty record cannot be told from a person pressing stop twice. It is provider or
+      // transport text, so it is bounded and it is recorded by the plugin that registered the credential as
+      // a journal secret, which is what makes the value arm able to redact it.
+      journal.record('session.closed', reason === undefined ? {} : { reason: boundedReason(reason) })
     },
     onSessionError: (error) => {
       ctx.emit('realtime-agent/error', error)
@@ -344,6 +384,12 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
     onDelegationStarted: (delegationId, current) => { waiting.set(delegationId, current) },
     onDelegationSettled: (delegationId) => { waiting.delete(delegationId) },
     onAcknowledged,
+    onHeard: (fragment) => {
+      // A count, never the words. This is the entry that makes "did the model hear anything" answerable —
+      // and with nothing that reaches the model recorded anywhere, a session where the microphone carried
+      // silence and one where it carried speech were the same journal.
+      journal.record('transcript.input', { chars: String(fragment.text.length), final: String(fragment.final) })
+    },
   })
 
   /**

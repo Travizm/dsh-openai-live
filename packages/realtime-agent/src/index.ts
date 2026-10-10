@@ -115,7 +115,7 @@ declare module '@deepseek-ai/cordis' {
 }
 
 export * from './types.ts'
-export { answerDelegation, boundAppend, UNANSWERED_NOTICE, type DelegationAsker } from './bridge.ts'
+export { answerDelegation, boundAppend, toSpeech, UNANSWERED_NOTICE, type DelegationAsker } from './bridge.ts'
 export { TranscriptBuffer } from './transcript.ts'
 export { voiceToolDefinitions, type VoiceToolDeps } from './tools.ts'
 

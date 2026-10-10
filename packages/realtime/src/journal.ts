@@ -59,6 +59,8 @@ export type JournalKind =
    */
   | 'socket.accepted' | 'socket.rejected' | 'socket.closed'
   /** The model raised a delegation, and the id it will be correlated by. */
+  | 'delegation.received'
+  /** The model raised a delegation, and the id it will be correlated by. */
   | 'delegation.seen'
   /** A delegated turn was admitted to the session, refused, declined, or ran out of window. */
   | 'prompt.admitted' | 'prompt.refused' | 'prompt.declined' | 'window.elapsed'

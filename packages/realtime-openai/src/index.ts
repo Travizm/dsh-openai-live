@@ -69,5 +69,8 @@ export function apply(ctx: Context, config: OpenAiLiveConfig): void {
   // Registered before the adapter is, so no later record can be written ahead of the redaction that knows
   // about this value. Empty is ignored by `addSecrets`, which is what a profile with no credential has.
   ctx.realtime.journal.addSecrets(config.apiKey === undefined ? [] : [config.apiKey])
-  ctx.realtime.registerAdapter([config.provider], new OpenAiLiveAdapter(config, new WsTransportFactory()))
+  ctx.realtime.registerAdapter(
+    [config.provider],
+    new OpenAiLiveAdapter(config, new WsTransportFactory(), ctx.realtime.journal),
+  )
 }

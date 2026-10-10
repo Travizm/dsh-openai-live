@@ -4,6 +4,31 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.8] — 2026-10-10
+
+### Fixed
+
+- **A relayed answer was produced, delivered, and then discarded.** `dsh-realtime-responder` 0.2.7 ·
+  `dsh-openai-live` 0.6.8. 0.6.7's turn latch — the guard that keeps another conversation's answer out of the
+  voice's mouth — armed only on a `turn/start` seen *after* the admission promise resolved, and the harness
+  emits that event for our **own** prompt *before* it resolves. The latch therefore never held a turn and
+  every relayed answer was dropped as somebody else's: the journal showed `prompt.admitted` and then
+  `window.elapsed` with no `answer.received` at all, while the harness had completed the turn and produced
+  the answer two seconds later. A start seen while the admission is in flight is now adopted once the
+  admission is accepted — it arrived after we asked, on a subscription created before we asked. Nothing
+  already running is adopted: a turn in flight emitted its start before the runner subscribed.
+- **The version that shipped passed its own test suite because the tests used the friendlier order.** Every
+  existing test settled the admission before delivering `turn/start`. The new one delivers it while the
+  admission is still in flight, which is what the app actually does — and reverted against the fixed source
+  that test fails while the other seventy-four pass.
+
+`dsh-realtime` 0.2.8, `dsh-realtime-openai` 0.2.2, `dsh-realtime-agent` 0.2.12 and 0.6.7's other packages are
+unchanged and are not republished. Everything 0.6.7 added stands: the instruction that makes the voice
+delegate, the frame, the spoken-answer shaping, and the journal entries that made this visible at all —
+`prompt.admitted` followed by `window.elapsed` is what named the fault within one session.
+
+Publishing runs from main after the merge: pnpm's publish-branch check refuses any other branch.
+
 ## [0.6.7] — 2026-10-10
 
 ### Added

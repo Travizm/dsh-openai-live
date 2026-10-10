@@ -199,6 +199,35 @@ interface RegisteredSetting {
 }
 
 /**
+ * The detail one applied change leaves in the journal.
+ *
+ * The key, and never the value: this is the record built to be read and pasted. Two derived fields go
+ * beside it, because the question a reader actually has is *did the change I asked for happen*, and the
+ * journal could not answer it — a live steer was inferred from its consequences for the want of one field.
+ * `toChars` is the size of the value the owner **now holds**, so a value a setter clamped reads differently
+ * from one that landed as asked; `toDigest` is its fingerprint through {@link Journal.digest}, and therefore
+ * of the redacted form. A reader hashes the value it intended and compares, which is the whole distance
+ * between a change that is inferred and one that is verified.
+ *
+ * A setting declared `secret` gets neither. Its value is precisely the text that must not be retained, and
+ * a fingerprint of it is a stable identifier — the leak the leak scan already refuses in its own right.
+ * @param key - the setting's `<owner>.<field>` key.
+ * @param registered - the setting as registered, so secret-ness and the value now held are read at the
+ *   moment of the change rather than from a copy taken at registration.
+ * @param journal - the journal the entry goes to, for its digest and its own secret list.
+ * @returns the detail fields for the entry.
+ */
+function changedDetail(
+  key: string,
+  registered: RegisteredSetting,
+  journal: Pick<Journal, 'digest'>,
+): Record<string, string> {
+  if (registered.secret) return { key }
+  const held = String(registered.get())
+  return { key, toChars: String(held.length), toDigest: journal.digest(held) }
+}
+
+/**
  * The registry of settings a running plugin can be steered by.
  *
  * Owned by the seam, like the journal, and for the same reason: it is an object every plugin in the
@@ -217,7 +246,7 @@ export class RealtimeSettings {
    * @param journal - the seam's journal. A successful change is recorded there as `config.changed`;
    *   see {@link apply} for what is deliberately not recorded.
    */
-  constructor(private readonly journal: Pick<Journal, 'record'>) {}
+  constructor(private readonly journal: Pick<Journal, 'record' | 'digest'>) {}
 
   /**
    * Declare the settings one plugin owns, all-or-nothing.
@@ -375,7 +404,7 @@ export class RealtimeSettings {
       // act on, so its message is carried rather than replaced by a generic one.
       return this.refuse(key, 'INVALID_SETTING', `"${key}" refused the change: ${reasonOf(error)}`)
     }
-    this.journal.record('config.changed', { key })
+    this.journal.record('config.changed', changedDetail(key, registered, this.journal))
     return { ok: true, key, value: registered.secret ? undefined : registered.get() }
   }
 

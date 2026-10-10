@@ -86,6 +86,6 @@ export interface SessionEventLike {
      * this plugin reads except a surface replay. It is what lets a runner tell its own turn from one
      * already in flight, so an answer typed into the chat while the voice waits is not spoken back.
      */
-    readonly turn?: unknown
+    readonly turn?: number
   }
 }

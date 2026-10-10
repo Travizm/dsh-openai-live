@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { RealtimeSettings, type RealtimeSettingSpec } from '../src/settings.ts'
 import { Journal } from '../src/journal.ts'
+import { digestOf } from '../src/digest.ts'
 import { RealtimeError, REALTIME_ERROR_CODES } from '../src/error.ts'
 
 /** A registry with a real journal, so a change can be read back from the record it writes. */
@@ -199,10 +200,42 @@ describe('apply', () => {
       .toEqual({ ok: true, key: 'realtime-responder.answerTimeoutMs', value: 5_000 })
     expect(settings.apply('realtime-responder.answerTimeoutMs', '900000')).toMatchObject({ value: 60_000 })
 
-    // The key, and never the value: this is the record built to be read and pasted.
+    // The key, the size, and a fingerprint — and never the value: this is the record built to be read
+    // and pasted. The fingerprint is of the value the **owner now holds**, which is why the clamped
+    // 900000 digests as 60000: a reader that hashes what it asked for learns that the change was not
+    // the one it requested, which no record of the requested text could tell it.
     expect(journal.snapshot().map(entry => [entry.kind, entry.detail])).toEqual([
-      ['config.changed', { key: 'realtime-responder.answerTimeoutMs' }],
-      ['config.changed', { key: 'realtime-responder.answerTimeoutMs' }],
+      ['config.changed', {
+        key: 'realtime-responder.answerTimeoutMs',
+        toChars: '4',
+        toDigest: digestOf('5000'),
+      }],
+      ['config.changed', {
+        key: 'realtime-responder.answerTimeoutMs',
+        toChars: '5',
+        toDigest: digestOf('60000'),
+      }],
+    ])
+  })
+
+  it('records no size and no fingerprint for a setting declared secret', () => {
+    // A secret setting is write-only, and a digest of a secret is a stable identifier of it — which
+    // this repo's own leak scan already treats as a leak in its own right. So the entry carries the
+    // fact that a change happened, and nothing that describes what it changed to.
+    const { settings, journal } = registry()
+    const held = { value: '' }
+    settings.register('realtime-agent', [{
+      field: 'apiKey',
+      kind: 'string',
+      scope: 'live',
+      secret: true,
+      get: () => held.value,
+      set: (next: string) => { held.value = next },
+    }])
+
+    expect(settings.apply('realtime-agent.apiKey', 'a-value')).toMatchObject({ ok: true, value: undefined })
+    expect(journal.snapshot().map(entry => [entry.kind, entry.detail])).toEqual([
+      ['config.changed', { key: 'realtime-agent.apiKey' }],
     ])
   })
 

@@ -30,7 +30,10 @@ describe('createJournalFileSink', () => {
 
   it('writes one JSON object per line, so a reader can tail it', () => {
     const path = pathIn('records.jsonl')
-    const journal = new Journal()
+    // The run id is pinned here rather than minted, which is the point of it being injectable: a test
+    // asserting the exact bytes on disk should not be asserting a random value, and pinning it also
+    // proves the stamp survives the sink rather than only living in memory.
+    const journal = new Journal({ runId: 'run00001' })
     journal.onEntry(createJournalFileSink(path))
 
     journal.record('session.closed', {}, 1_000)
@@ -39,8 +42,8 @@ describe('createJournalFileSink', () => {
     const lines = readFileSync(path, 'utf8').trim().split('\n')
     expect(lines).toHaveLength(2)
     expect(lines.map(line => JSON.parse(line))).toEqual([
-      { seq: 1, at: 1_000, kind: 'session.closed', detail: {} },
-      { seq: 2, at: 1_001, kind: 'speech.sent', detail: { bytes: '8' } },
+      { runId: 'run00001', seq: 1, at: 1_000, kind: 'session.closed', detail: {} },
+      { runId: 'run00001', seq: 2, at: 1_001, kind: 'speech.sent', detail: { bytes: '8' } },
     ])
   })
 

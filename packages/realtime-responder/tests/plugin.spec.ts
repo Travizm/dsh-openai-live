@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { DelegationRequest } from 'dsh-realtime-agent'
-import RealtimeRuntime, { type Journal, type RealtimeDelegationProgress, type RealtimeDelegationSettlement } from 'dsh-realtime'
+import RealtimeRuntime, { digestOf, type Journal, type RealtimeDelegationProgress, type RealtimeDelegationSettlement } from 'dsh-realtime'
 import * as responder from '../src/index.ts'
 import { Config, apply } from '../src/index.ts'
 import type { RealtimeResponderConfig } from '../src/types.ts'
@@ -337,6 +337,46 @@ describe('answering a delegation', () => {
     ])
   })
 
+  it('names the session and fingerprints the prompt and the answer, so the record says where a turn landed', async () => {
+    // The gap this closes, in the form it was asked as: a delegation was admitted into one conversation
+    // while the app had another open, and the record named neither the target nor anything comparable
+    // with the session log's own copy of the prompt — so *which conversation answered* took two
+    // decompressed session logs to recover. The fingerprints are of exactly the bytes the controller was
+    // handed and of exactly the text the voice would speak, which are the two texts the session log holds.
+    const { context, controller, journal } = harness()
+    apply(context, Config({ sessionId: 'sess-1', answerTimeoutMs: 1_000 }) as RealtimeResponderConfig)
+
+    const answer = context.serial('realtime-agent/delegation', request)
+    await admitted()
+    context.emit('session/event', { id: 'sess-1' } as never, { type: 'turn/start', data: { turn: 2 } } as unknown as never)
+    context.emit('session/event', { id: 'sess-1' } as never, {
+      type: 'assistant/message',
+      surfaceOp: 'append',
+      data: { turn: 2, message: { content: [{ type: 'text', text: 'green' }] } },
+    } as unknown as never)
+    await answer
+
+    const sent = controller.prompted[0] as { readonly content: readonly { readonly text: string }[] }
+    const prompt = sent.content[0]!.text
+    expect(journal.snapshot().find(entry => entry.kind === 'prompt.admitted')?.detail).toEqual({
+      id: 'item_1',
+      sessionId: 'sess-1',
+      promptChars: String(prompt.length),
+      promptDigest: digestOf(prompt),
+    })
+    expect(journal.snapshot().find(entry => entry.kind === 'answer.received')?.detail).toMatchObject({
+      id: 'item_1',
+      sessionId: 'sess-1',
+      turn: '2',
+      chars: '5',
+      digest: digestOf('green'),
+    })
+    // Measured from the admission rather than by pairing two entries: the number the answer window
+    // governs, on the entry that reports the answer.
+    const received = journal.snapshot().find(entry => entry.kind === 'answer.received')
+    expect(Number(received?.detail.ms)).toBeGreaterThanOrEqual(0)
+  })
+
   it('journals a decline without recording a prompt that was never admitted', async () => {
     const { context, journal } = harness()
     apply(context, Config({ sessionId: 'sess-1' }) as RealtimeResponderConfig)
@@ -575,11 +615,18 @@ describe('the settings it declares', () => {
     } as unknown as never)
 
     await expect(answer).resolves.toEqual({ text: 'from the new session', mode: 'spoken' })
-    // The change is in the record, by key and not by value. (It is not the *last* entry: the turn it
-    // enabled wrote its own entries afterwards, which is exactly the sequence a reader wants.)
+    // The change is in the record: the key, the size of the value the responder **now holds**, and its
+    // fingerprint — and never the value itself. The fingerprint is what turns a steer from something
+    // inferred from its consequences into something verifiable: a reader hashes the id it sent and
+    // compares. (It is not the *last* entry: the turn it enabled wrote its own entries afterwards,
+    // which is exactly the sequence a reader wants.)
     expect(journal.snapshot()).toContainEqual(expect.objectContaining({
       kind: 'config.changed',
-      detail: { key: 'realtime-responder.sessionId' },
+      detail: {
+        key: 'realtime-responder.sessionId',
+        toChars: '6',
+        toDigest: digestOf('sess-2'),
+      },
     }))
   })
 

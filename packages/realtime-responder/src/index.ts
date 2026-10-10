@@ -189,12 +189,33 @@ function boundedReason(reason: string, secrets: readonly string[]): string {
 }
 
 /**
+ * The size and the fingerprint of a prompt, as the journal may retain it.
+ *
+ * The joiner between an entry and the session log that holds the same text verbatim: the size catches a
+ * truncation and the fingerprint catches everything else, so a reader can confirm the two records are
+ * describing one prompt without either carrying the other's words. Taken through `journal.digest`, so the
+ * fingerprint is of the redacted form — a fingerprint of a secret is a leak in its own right.
+ * @param journal - the journal, for its digest and its own secret list.
+ * @param prompt - the prompt as it was built for this admission.
+ * @returns the two detail fields.
+ */
+function promptDetail(journal: Pick<Journal, 'digest'>, prompt: string): Record<string, string> {
+  return { promptChars: String(prompt.length), promptDigest: journal.digest(prompt) }
+}
+
+/**
  * Journal one turn's outcome, in the seam's own vocabulary.
  *
  * Deliberately more than one entry per turn where the turn did more than one thing. A `timeout` is
  * recorded as *admitted* and then *window elapsed*, because those are two facts and the difference
  * between them is the one a reader needs: an admission that produced nothing used to be
  * indistinguishable from a controller refusing outright, which is the silence this layer removes.
+ *
+ * Every entry that reports a turn carries the **session it was admitted to**, and the prompt's size and
+ * fingerprint. That is one question this journal could not answer and an evening was spent on: the pin
+ * appeared once per boot in `config.resolved`, the outcome appeared nowhere, and *which conversation did
+ * that answer land in* had to be recovered by decompressing two session logs and reading whose turn had
+ * grown. Fingerprints rather than text, because this is the record built to be read and pasted.
  * @param journal - the seam's journal, shared with every other plugin in the bundle. Typed as the
  *   public surface this plugin uses rather than as the class: `Journal` exists as two declarations in
  *   this repo (built `lib/` and `src/`), and a class with private members is nominally typed, so the
@@ -203,24 +224,34 @@ function boundedReason(reason: string, secrets: readonly string[]): string {
  * @param outcome - how the turn ended.
  */
 function recordOutcome(
-  journal: Pick<Journal, 'record'>,
+  journal: Pick<Journal, 'record' | 'digest'>,
   request: DelegationRequest,
   outcome: TurnOutcome,
 ): void {
-  const id = { id: request.id }
+  const id = { id: request.id, sessionId: request.sessionId }
   switch (outcome.kind) {
     case 'answered':
-      journal.record('prompt.admitted', id)
-      journal.record('answer.received', { ...id, chars: String(outcome.text.length) })
+      journal.record('prompt.admitted', { ...id, ...promptDetail(journal, outcome.prompt) })
+      journal.record('answer.received', {
+        ...id,
+        turn: String(outcome.turn),
+        chars: String(outcome.text.length),
+        digest: journal.digest(outcome.text),
+        ms: String(outcome.ms),
+      })
       return
     case 'refused':
-      journal.record('prompt.refused', { ...id, reason: outcome.reason })
+      journal.record('prompt.refused', {
+        ...id,
+        reason: outcome.reason,
+        ...promptDetail(journal, outcome.prompt),
+      })
       return
     case 'declined':
       journal.record('prompt.declined', id)
       return
     case 'timeout':
-      journal.record('prompt.admitted', id)
+      journal.record('prompt.admitted', { ...id, ...promptDetail(journal, outcome.prompt) })
       journal.record('window.elapsed', id)
   }
 }

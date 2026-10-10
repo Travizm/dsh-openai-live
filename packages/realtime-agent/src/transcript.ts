@@ -13,10 +13,19 @@ interface BufferedLine extends AgentTranscriptLine {
  * that are least useful: a delegation is answered from the recent context, so eviction drops from the
  * front. Fragments are coalesced, because transcripts arrive as deltas and a record of eighty deltas
  * would evict the very conversation it exists to preserve.
+ *
+ * **A line ends when something ends it**, and that is the correction this class carries. The wire marks
+ * no utterance boundary at all, so coalescing cannot be left to a `final` flag that is never true — the
+ * buffer would merge every fragment from one side for the life of the session and one line would mean
+ * whatever a whole side of the conversation said. Two things end a line here instead: the other side
+ * speaking (the turn changed hands), and {@link seal}, called once the transcript has settled and a
+ * delegation is about to be answered from it.
  */
 export class TranscriptBuffer {
   private readonly buffered: BufferedLine[] = []
   private chars = 0
+  private fragments = 0
+  private lastAt: number | undefined
 
   /**
    * @param maxChars - character budget, read at every eviction.
@@ -32,13 +41,23 @@ export class TranscriptBuffer {
 
   /**
    * Record one fragment.
+   *
+   * `at` is injectable for the same reason {@link Journal.record}'s is: the quiet a buffer reports is
+   * measured against it, and a test that had to sleep to assert a wait would be a test that fails on a
+   * loaded machine.
    * @param kind - which side spoke.
-   * @param text - the fragment. An empty fragment carries nothing and is dropped.
-   * @param final - whether this fragment closes the utterance.
+   * @param text - the fragment. An empty fragment carries nothing and is dropped — including for the
+   *   quiet reading, because a frame with no text is not transcription progress.
+   * @param final - whether this fragment closes the utterance, as the wire reports it. Always `false`
+   *   from this adapter; kept because the seam's own type carries it, and meaningless here on purpose
+   *   rather than by accident. See {@link seal}.
+   * @param at - epoch milliseconds; defaults to now.
    */
-  append(kind: 'input' | 'output', text: string, final: boolean): void {
+  append(kind: 'input' | 'output', text: string, final: boolean, at: number = Date.now()): void {
     if (text.length === 0) return
     this.chars += text.length
+    this.fragments += 1
+    this.lastAt = at
 
     const last = this.buffered[this.buffered.length - 1]
     if (last !== undefined && last.kind === kind && !last.sealed) {
@@ -49,6 +68,39 @@ export class TranscriptBuffer {
     }
 
     this.evict()
+  }
+
+  /**
+   * End the line currently being written, so the next fragment starts a new one.
+   *
+   * Called when a delegation is answered from the buffer. Without it the line the request came from would
+   * keep absorbing whatever is said next, and the next delegation's "last line" would be one utterance plus
+   * however much of the following one had arrived — which is precisely the shape that made a relayed request
+   * read as a clipped sentence rather than as a question.
+   *
+   * A no-op on an empty buffer, which is reachable: a delegation can be raised with nothing heard at all.
+   */
+  seal(): void {
+    const last = this.buffered[this.buffered.length - 1]
+    if (last === undefined) return
+    last.sealed = true
+  }
+
+  /**
+   * Milliseconds since the last fragment arrived.
+   *
+   * `Infinity` when nothing ever has, which is the honest answer rather than zero: a transcript that has
+   * never carried anything can never become quieter, so a caller waiting for quiet should not wait at all.
+   * That is why the value is not clamped to the cap.
+   * @param now - epoch milliseconds; defaults to now.
+   */
+  quietFor(now: number = Date.now()): number {
+    return this.lastAt === undefined ? Number.POSITIVE_INFINITY : now - this.lastAt
+  }
+
+  /** Fragments appended since this buffer was created. What a settle can report having caught. */
+  get appends(): number {
+    return this.fragments
   }
 
   /**

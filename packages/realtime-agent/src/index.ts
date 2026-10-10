@@ -34,6 +34,7 @@ import type {
 } from 'dsh-realtime'
 import { REALTIME_ERROR_CODES, RealtimeError } from 'dsh-realtime'
 import { answerDelegation, type DelegationAppend, type DelegationAsker } from './bridge.ts'
+import { settleTranscript, type SettleOutcome } from './settle.ts'
 import { voiceToolDefinitions } from './tools.ts'
 import { VOICE_SKILL } from './skill.ts'
 import { TranscriptBuffer } from './transcript.ts'
@@ -150,8 +151,9 @@ export const Config = Schema.object({
   autoStart: Schema.boolean().default(false).description('Open a session as soon as the plugin mounts'),
   delegationTimeoutMs: Schema.number().default(10_000).description('Bound on waiting for a responder'),
   maxTranscriptChars: Schema.number().default(6_000).description('Character budget for the delegation transcript'),
-  journalEntries: Schema.number().default(25).description('Most journal entries voice_journal returns in one call'),
-})
+  transcriptQuietMs: Schema.number().default(500).description('How long the transcript must be quiet before a delegation is answered from it'),
+  transcriptSettleCapMs: Schema.number().default(1_500).description('Longest a delegation waits for the transcript to settle'),
+  journalEntries: Schema.number().default(25).description('Most journal entries voice_journal returns in one call'),})
 
 /** What {@link createHandlers} needs. Injected rather than closed over, so the handlers are testable. */
 export interface HandlerDeps {
@@ -169,6 +171,19 @@ export interface HandlerDeps {
    * to the next boot.
    */
   readonly timeoutMs: () => number
+  /**
+   * Wait for the transcript to settle, and report what the wait cost.
+   *
+   * Injected rather than closed over so the handlers stay exercisable without timers, and read at the same
+   * moment as {@link timeoutMs} for the same reason: both are **live**, so a change to either applies to the
+   * next delegation rather than to the next boot.
+   */
+  readonly settle: () => Promise<SettleOutcome>
+  /**
+   * Where the settle is reported, so the record can say whether a request was built from a settled transcript
+   * or from a prefix of one. Without it a clipped question and a badly-worded one read identically.
+   */
+  readonly onSettled: (outcome: SettleOutcome) => void
   /** Called when the session ended, so the caller can drop its reference. */
   readonly onClosed: (reason?: string) => void
   /**
@@ -220,16 +235,27 @@ export function createHandlers(deps: HandlerDeps): RealtimeSessionHandlers {
       // Marked waiting before the answer is dispatched, so a step that arrives while the turn is running is
       // appended rather than dropped for having beaten this line.
       deps.onDelegationStarted?.(delegation.id, session)
-      // Handlers are synchronous, so the answer is dispatched rather than awaited. A rejection is
-      // reported rather than thrown: an unanswered delegation is already the failure path.
-      void answerDelegation(
-        session,
-        delegation,
-        deps.transcript.lines(),
-        deps.ask,
-        deps.timeoutMs(),
-        deps.onAcknowledged,
-      ).catch(deps.onSessionError).finally(() => { deps.onDelegationSettled?.(delegation.id) })
+      // Handlers are synchronous, so both the wait and the answer are dispatched rather than awaited. A
+      // rejection is reported rather than thrown: an unanswered delegation is already the failure path.
+      void (async (): Promise<void> => {
+        // The transcript is read **after** this wait and never before it, which is the whole point of the wait:
+        // the provider raises a delegation while the transcription of the utterance it is acting on is still
+        // arriving. Measured on a running app, the next fragment landed 162 ms after the event, and the request
+        // built from that prefix read as a clipped sentence rather than as a question.
+        const outcome = await deps.settle()
+        // Sealed, so the next delegation's last line is the next utterance rather than this one plus however
+        // much of it had arrived.
+        deps.transcript.seal()
+        deps.onSettled(outcome)
+        await answerDelegation(
+          session,
+          delegation,
+          deps.transcript.lines(),
+          deps.ask,
+          deps.timeoutMs(),
+          deps.onAcknowledged,
+        )
+      })().catch(deps.onSessionError).finally(() => { deps.onDelegationSettled?.(delegation.id) })
     },
     onAudio: (pcm16: Uint8Array): void => { deps.onAudio(pcm16) },
     onClosed: (reason?: string): void => { deps.onClosed(reason) },
@@ -299,11 +325,12 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
     autoStart: String(config.autoStart),
     delegationTimeoutMs: String(config.delegationTimeoutMs),
     maxTranscriptChars: String(config.maxTranscriptChars),
-    journalEntries: String(config.journalEntries),
-  })
+    transcriptQuietMs: String(config.transcriptQuietMs),
+    transcriptSettleCapMs: String(config.transcriptSettleCapMs),
+    journalEntries: String(config.journalEntries),  })
 
   /**
-   * The two fields this plugin reads at the moment of use.
+   * The four fields this plugin reads at the moment of use.
    *
    * `autoStart` is deliberately **not** here as a changeable value. Its only read site is the boot
    * below, so a running process has nothing that could honour a change; the gate was corrected to say
@@ -313,8 +340,9 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
   const live = {
     delegationTimeoutMs: config.delegationTimeoutMs,
     maxTranscriptChars: config.maxTranscriptChars,
-    journalEntries: config.journalEntries,
-  }
+    transcriptQuietMs: config.transcriptQuietMs,
+    transcriptSettleCapMs: config.transcriptSettleCapMs,
+    journalEntries: config.journalEntries,  }
 
   const transcript = new TranscriptBuffer(() => live.maxTranscriptChars)
   let session: RealtimeSession | undefined
@@ -341,13 +369,26 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
         set: (value: number) => { live.maxTranscriptChars = requireCount('maxTranscriptChars', value) },
       },
       {
+        field: 'transcriptQuietMs',
+        kind: 'number',
+        scope: 'live',
+        describe: 'How long the transcript must be quiet before a delegation is answered from it',
+        get: () => live.transcriptQuietMs,
+        set: (value: number) => { live.transcriptQuietMs = requireCount('transcriptQuietMs', value) },
+      },
+      {
+        field: 'transcriptSettleCapMs',
+        kind: 'number',
+        scope: 'live',
+        describe: 'Longest a delegation waits for the transcript to settle',
+        get: () => live.transcriptSettleCapMs,
+        set: (value: number) => { live.transcriptSettleCapMs = requireCount('transcriptSettleCapMs', value) },
         field: 'journalEntries',
         kind: 'number',
         scope: 'live',
         describe: 'Most journal entries voice_journal returns in one call',
         get: () => live.journalEntries,
-        set: (value: number) => { live.journalEntries = requireCount('journalEntries', value) },
-      },
+        set: (value: number) => { live.journalEntries = requireCount('journalEntries', value) },      },
       {
         field: 'autoStart',
         kind: 'boolean',
@@ -378,6 +419,14 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
    * dropped while its id is still waiting — no sequence of events can actually produce.
    */
   const waiting = new Map<string, RealtimeSession>()
+
+  /**
+   * The settle's sleep: a timer that holds nothing open.
+   *
+   * Unref'd, exactly as the delegation's own bound is, so a wait in flight never keeps the host alive. A
+   * diagnostic pause must not be the reason a process lingers.
+   */
+  const sleep = (ms: number): Promise<void> => new Promise<void>((resolve) => { setTimeout(resolve, ms).unref() })
 
   /**
    * Open a provider session and close it, so the provider's own answer can be heard.
@@ -414,12 +463,25 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
       return { ok: false, refusal: refusalFor(error) }
     }
   }
-
   const handlers = createHandlers({
     transcript,
     session: () => session,
     ask: request => ctx.serial('realtime-agent/delegation', request),
     timeoutMs: () => live.delegationTimeoutMs,
+    settle: () => settleTranscript(
+      { quietFor: now => transcript.quietFor(now), appends: () => transcript.appends, now: () => Date.now(), sleep },
+      { quietMs: live.transcriptQuietMs, capMs: live.transcriptSettleCapMs },
+    ),
+    onSettled: (outcome) => {
+      // Three facts, and each answers something a reader cannot infer from the prompt itself: how long the wait
+      // was, whether the ceiling ended it (so the transcript was still arriving when it was read), and how much
+      // that wait actually caught.
+      journal.record('transcript.settled', {
+        waitedMs: String(outcome.waitedMs),
+        fragments: String(outcome.fragments),
+        capped: String(outcome.capped),
+      })
+    },
     onClosed: (reason?: string) => {
       session = undefined
       waiting.clear()

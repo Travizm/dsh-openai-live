@@ -71,9 +71,12 @@ export interface RealtimeAgentConfig {
   delegationTimeoutMs: number
   /** Character budget for the transcript carried on a delegation request. */
   maxTranscriptChars: number
+  /** How long the transcript must be quiet before a delegation is answered from it. */
+  transcriptQuietMs: number
+  /** Ceiling, in milliseconds, on a delegation's wait for the transcript to settle. */
+  transcriptSettleCapMs: number
   /** Ceiling, in entries, on what one `voice_journal` call returns. */
-  journalEntries: number
-}
+  journalEntries: number}
 
 /**
  * The voice session's state, as the plugin that owns it is the only one able to report it.

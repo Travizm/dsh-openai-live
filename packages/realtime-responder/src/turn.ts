@@ -282,7 +282,11 @@ export function createTurnRunner(deps: TurnDeps): (request: DelegationRequest) =
 
     let settle!: (text: string | undefined) => void
     const answered = new Promise<string | undefined>((resolve) => { settle = resolve })
-    const timer = setTimeout(() => { settle(undefined) }, deps.answerTimeoutMs())
+    // No window is armed yet: the answer window starts at the **admission**, below. A relayed prompt queues
+    // behind whatever the session is already doing — measured at 45.0s on a running app, `delegation.seen`
+    // +41.5s to `prompt.admitted` +86.5s — and a window armed up here expired while the prompt was still
+    // queued, reporting `window.elapsed`, documented as "admitted and never answered", for a turn the
+    // session then answered 41s later.
     // Narration state, per turn: how many milestones have been spoken, and when the last one was. The
     // policy is read once, with the session and the budgets, so a change lands on the next turn.
     const milestone = deps.milestone?.()
@@ -351,7 +355,6 @@ export function createTurnRunner(deps: TurnDeps): (request: DelegationRequest) =
     } catch (error) {
       // The controller refused the admission. Nothing was queued, so there is nothing to wait for —
       // and the reason it gave is the whole point of this patch, so it is returned rather than dropped.
-      clearTimeout(timer)
       unsubscribe()
       return { kind: 'refused', reason: refusalReason(error) }
     }
@@ -361,6 +364,8 @@ export function createTurnRunner(deps: TurnDeps): (request: DelegationRequest) =
     admitted = true
     if (turn === undefined && pending !== undefined) turn = pending
 
+    // The window that measures the **answer**, armed here because here is where a turn exists to answer on.
+    const timer = setTimeout(() => { settle(undefined) }, deps.answerTimeoutMs())
     const text = await answered
     clearTimeout(timer)
     unsubscribe()

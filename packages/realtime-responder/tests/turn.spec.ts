@@ -398,6 +398,27 @@ describe('createTurnRunner', () => {
     await expect(pending).resolves.toEqual({ kind: 'refused', reason: 'session/model-unavailable' })
   })
 
+  it('measures the answer window from the admission, not from the request', async () => {
+    // Tonight's failure, exactly. A relayed prompt queues behind whatever the session is doing — measured at
+    // 45.0s on a running app — and the answer window used to be armed at the request, so it expired while
+    // the prompt was still queued and reported `window.elapsed` for a turn the session then answered 41s
+    // later. The admission here resolves *after* the window would have expired, and the answer arrives
+    // inside the window that now starts at the admission.
+    let admitLater!: () => void
+    const slowAdmission = new Promise<void>((resolve) => { admitLater = resolve })
+    const { listeners, run } = deps({ admit: () => slowAdmission, answerTimeoutMs: () => 50 })
+    const pending = run(request([{ kind: 'input', text: 'is staging ok?' }]))
+    await Promise.resolve()
+
+    await new Promise(resolve => { setTimeout(resolve, 80) })
+    admitLater()
+    await Promise.resolve()
+
+    listeners[0]!(turnStart(9), SESSION)
+    listeners[0]!(message([text('green')], 9), SESSION)
+    await expect(pending).resolves.toEqual({ kind: 'answered', text: 'green' })
+  })
+
   it('ignores unrelated events while waiting for its own answer', async () => {
     const { listeners, run } = deps()
     const pending = run(request([{ kind: 'input', text: 'q' }]))

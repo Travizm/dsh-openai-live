@@ -22,6 +22,10 @@
       "types": "./lib/redact.d.ts",
       "default": "./lib/redact.js"
     },
+    "./digest": {
+      "types": "./lib/digest.d.ts",
+      "default": "./lib/digest.js"
+    },
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },

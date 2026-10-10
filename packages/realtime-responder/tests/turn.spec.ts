@@ -44,6 +44,45 @@ const text = (value: string): { type: 'text'; text: string } => ({ type: 'text',
 /** A frame short enough to leave room for the questions these tests ask. */
 const FRAME = 'Relayed from the voice conversation.'
 
+/**
+ * The outcome of an admitted turn that was answered, as {@link TurnOutcome} reports it: the text, plus the
+ * three facts the journal needs and a session log cannot hand it — what was admitted, which turn answered,
+ * and how long that took.
+ *
+ * `ms` is asserted by shape rather than by value: a suite that pinned an elapsed time would be a timing
+ * test. The prompt is pinned exactly by the test that is *about* these fields, and by shape everywhere
+ * else, where the subject is something other than the prompt.
+ */
+const answered = (text: string, turn: number) => ({
+  kind: 'answered',
+  text,
+  prompt: expect.any(String),
+  turn,
+  ms: expect.any(Number),
+})
+
+/**
+ * The outcome of an admission the controller accepted and nothing ever answered.
+ *
+ * No turn, even when one started: the facts this reports are what was admitted and how long the window
+ * ran, and a turn that never answered has no answer to attribute itself to. Adding a field here that no
+ * consumer reads would be a field that looks like information.
+ */
+const timedOut = () => ({
+  kind: 'timeout',
+  prompt: expect.any(String),
+  ms: expect.any(Number),
+})
+
+/**
+ * The outcome of a prompt the controller refused.
+ *
+ * No turn and no elapsed time, because nothing was queued: the refusal is the whole of what happened, and
+ * a `turn: undefined` beside a window nobody armed would be two fields pretending a turn existed.
+ */
+const refused = (reason: string) => ({ kind: 'refused', reason, prompt: expect.any(String) })
+
+
 describe('promptFrom', () => {
   it('puts the frame in front of the conversation, joined in order with empty lines dropped', () => {
     expect(promptFrom(request([
@@ -221,7 +260,7 @@ describe('narration', () => {
     listeners[0]!(call('read_file'), SESSION)
 
     expect(steps).toEqual([{ id: 'item_1', channel: 'commentary', text: 'Starting read_file.' }])
-    await expect(pending).resolves.toEqual({ kind: 'answered', text: 'green' })
+    await expect(pending).resolves.toEqual(answered('green', 1))
   })
 
   it('holds a rapid step back to `thinking`, rather than speaking over itself', async () => {
@@ -350,7 +389,7 @@ describe('createTurnRunner', () => {
     expect(admitted).toEqual([`${FRAME}\nis staging ok?`])
     listeners[0]!(turnStart(), SESSION)
     listeners[0]!(message([text('green')]), SESSION)
-    await expect(pending).resolves.toEqual({ kind: 'answered', text: 'green' })
+    await expect(pending).resolves.toEqual(answered('green', 1))
     expect(unsubscribed()).toBe(1)
   })
 
@@ -381,7 +420,7 @@ describe('createTurnRunner', () => {
     await Promise.resolve()
 
     listeners[0]!(message([text('green')], 7), SESSION)
-    await expect(pending).resolves.toEqual({ kind: 'answered', text: 'green' })
+    await expect(pending).resolves.toEqual(answered('green', 7))
   })
 
   it('adopts nothing when the admission was refused, so a refusal cannot speak a start it saw', async () => {
@@ -395,7 +434,7 @@ describe('createTurnRunner', () => {
 
     listeners[0]!(turnStart(7), SESSION)
     reject(new Error('session/model-unavailable'))
-    await expect(pending).resolves.toEqual({ kind: 'refused', reason: 'session/model-unavailable' })
+    await expect(pending).resolves.toEqual(refused('session/model-unavailable'))
   })
 
   it('measures the answer window from the admission, not from the request', async () => {
@@ -416,7 +455,7 @@ describe('createTurnRunner', () => {
 
     listeners[0]!(turnStart(9), SESSION)
     listeners[0]!(message([text('green')], 9), SESSION)
-    await expect(pending).resolves.toEqual({ kind: 'answered', text: 'green' })
+    await expect(pending).resolves.toEqual(answered('green', 9))
   })
 
   it('ignores unrelated events while waiting for its own answer', async () => {
@@ -427,7 +466,7 @@ describe('createTurnRunner', () => {
     listeners[0]!({}, SESSION)
     listeners[0]!({ type: 'assistant/chunk' }, SESSION)
     listeners[0]!(message([text('green')]), SESSION)
-    await expect(pending).resolves.toEqual({ kind: 'answered', text: 'green' })
+    await expect(pending).resolves.toEqual(answered('green', 1))
   })
 
   it('ignores an answer from another session, so one conversation cannot answer for another', async () => {
@@ -439,7 +478,7 @@ describe('createTurnRunner', () => {
     listeners[0]!(turnStart(), SESSION)
     listeners[0]!(message([text('elsewhere')]), 'sess-2')
     listeners[0]!(message([text('green')]), SESSION)
-    await expect(pending).resolves.toEqual({ kind: 'answered', text: 'green' })
+    await expect(pending).resolves.toEqual(answered('green', 1))
   })
 
   it('does not speak a turn nobody delegated, when the session is already busy with one', async () => {
@@ -459,7 +498,7 @@ describe('createTurnRunner', () => {
     // Now this admission's own turn, and only then does the run end.
     listeners[0]!(turnStart(4), SESSION)
     listeners[0]!(message([text('green')], 4), SESSION)
-    await expect(pending).resolves.toEqual({ kind: 'answered', text: 'green' })
+    await expect(pending).resolves.toEqual(answered('green', 4))
   })
 
   it('keeps the turn it latched first, so a later one cannot answer for this admission', async () => {
@@ -476,7 +515,7 @@ describe('createTurnRunner', () => {
     await expect(Promise.race([pending, Promise.resolve('still open')])).resolves.toBe('still open')
 
     listeners[0]!(message([text('green')], 4), SESSION)
-    await expect(pending).resolves.toEqual({ kind: 'answered', text: 'green' })
+    await expect(pending).resolves.toEqual(answered('green', 4))
   })
 
   it('reports a step of somebody else turn as nothing, rather than narrating it', async () => {
@@ -513,7 +552,7 @@ describe('createTurnRunner', () => {
 
   it('says it timed out when nothing answers, and stops listening', async () => {
     const { unsubscribed, run } = deps({ answerTimeoutMs: () => 5 })
-    await expect(run(request([{ kind: 'input', text: 'q' }]))).resolves.toEqual({ kind: 'timeout' })
+    await expect(run(request([{ kind: 'input', text: 'q' }]))).resolves.toEqual(timedOut())
     expect(unsubscribed()).toBe(1)
   })
 
@@ -522,26 +561,26 @@ describe('createTurnRunner', () => {
     // foundational failure could not be diagnosed from outside the plugin.
     const { unsubscribed, run } = deps({ admit: () => Promise.reject(new Error('session/model-unavailable')) })
     await expect(run(request([{ kind: 'input', text: 'q' }])))
-      .resolves.toEqual({ kind: 'refused', reason: 'session/model-unavailable' })
+      .resolves.toEqual(refused('session/model-unavailable'))
     expect(unsubscribed()).toBe(1)
   })
 
   it('carries a bare string rejection as the reason', async () => {
     const { run } = deps({ admit: () => Promise.reject('controller said no') })
     await expect(run(request([{ kind: 'input', text: 'q' }])))
-      .resolves.toEqual({ kind: 'refused', reason: 'controller said no' })
+      .resolves.toEqual(refused('controller said no'))
   })
 
   it('states the absence rather than inventing a reason when the rejection carries no message', async () => {
     const { run } = deps({ admit: () => Promise.reject(new Error('')) })
     await expect(run(request([{ kind: 'input', text: 'q' }])))
-      .resolves.toEqual({ kind: 'refused', reason: 'the session controller refused the prompt' })
+      .resolves.toEqual(refused('the session controller refused the prompt'))
   })
 
   it('states the absence for a rejection that is neither an Error nor a string', async () => {
     const { run } = deps({ admit: () => Promise.reject({ code: 500 }) })
     await expect(run(request([{ kind: 'input', text: 'q' }])))
-      .resolves.toEqual({ kind: 'refused', reason: 'the session controller refused the prompt' })
+      .resolves.toEqual(refused('the session controller refused the prompt'))
   })
 
   it('reads the session and the budgets once per turn, so a change lands on the next one', async () => {
@@ -575,7 +614,7 @@ describe('createTurnRunner', () => {
     await Promise.resolve()
     listeners[0]!(turnStart(1), 'sess-1')
     listeners[0]!(message([text('from one')], 1), 'sess-1')
-    await expect(inFlight).resolves.toEqual({ kind: 'answered', text: 'from one' })
+    await expect(inFlight).resolves.toEqual(answered('from one', 1))
 
     // The next turn uses the new session, the new budget, and the new frame — two characters of question,
     // because the frame it now carries leaves room for exactly that.
@@ -586,6 +625,56 @@ describe('createTurnRunner', () => {
     listeners[1]!(message([text('from two')], 2), 'sess-1')
     listeners[1]!(turnStart(2), 'sess-2')
     listeners[1]!(message([text('from two')], 2), 'sess-2')
-    await expect(next).resolves.toEqual({ kind: 'answered', text: 'from two' })
+    await expect(next).resolves.toEqual(answered('from two', 2))
+  })
+
+  it('reports what it admitted, which turn answered, and how long the answer took', async () => {
+    // The three facts the journal was missing, and why each earns its place: what was admitted, so a
+    // fingerprint recorded beside it can be tied to the session log's own copy of the prompt; which turn
+    // answered, so an answer can never be attributed to a turn nobody delegated — the latch the running
+    // app defeated once, at the cost of an evening; and the elapsed time, which is the number the answer
+    // window governs, measured where the turn exists rather than derived from a pair of entries.
+    const { admitted, listeners, run } = deps()
+    const pending = run(request([{ kind: 'input', text: 'is staging ok?' }]))
+    await Promise.resolve()
+
+    listeners[0]!(turnStart(3), SESSION)
+    listeners[0]!(message([text('green')], 3), SESSION)
+
+    await expect(pending).resolves.toEqual({
+      kind: 'answered',
+      text: 'green',
+      // The prompt **as admitted** — frame included, because that is the text the session log holds.
+      prompt: `${FRAME}\nis staging ok?`,
+      turn: 3,
+      ms: expect.any(Number),
+    })
+    expect(admitted).toEqual([`${FRAME}\nis staging ok?`])
+  })
+
+  it('reports the prompt it built when the controller refuses it', async () => {
+    // A refusal is at least two different faults — a budget that cut the question down to nothing useful,
+    // and a controller that would not take it — and the prompt as built is the only thing that tells them
+    // apart. Without it the two read identically in the record, which is the collapse this layer exists to
+    // remove.
+    const { run } = deps({ admit: () => Promise.reject(new Error('session/model-unavailable')) })
+
+    await expect(run(request([{ kind: 'input', text: 'is staging ok?' }]))).resolves.toEqual({
+      kind: 'refused',
+      reason: 'session/model-unavailable',
+      prompt: `${FRAME}\nis staging ok?`,
+    })
+  })
+
+  it('reports the prompt and the elapsed time when nothing ever answered', async () => {
+    // The prompt is carried on this path too, because a window that expired over a prompt truncated to
+    // nothing useful and one that expired over a good prompt are different faults, and the record is the
+    // only place that distinction survives.
+    const { admitted, run } = deps({ answerTimeoutMs: () => 5 })
+
+    const outcome = await run(request([{ kind: 'input', text: 'q' }]))
+
+    expect(outcome).toMatchObject({ kind: 'timeout', prompt: `${FRAME}\nq`, ms: expect.any(Number) })
+    expect(admitted).toEqual([`${FRAME}\nq`])
   })
 })

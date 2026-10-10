@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_JOURNAL_CAPACITY, Journal, REDACTED } from '../src/index.ts'
+import { DEFAULT_JOURNAL_CAPACITY, Journal, REDACTED, digestOf } from '../src/index.ts'
 
 /**
  * Assembled and derived, never written as a literal. A credential-shaped string in source fails the
@@ -127,5 +127,38 @@ describe('Journal', () => {
     expect(journal.snapshot()[0]?.detail.provider).toBe('openai-live')
     expect(journal.snapshot()[1]?.detail.url).toBe(`/dsh-realtime/audio?token=${REDACTED}`)
     expect(JSON.stringify(journal.snapshot())).not.toContain(ROUTE_TOKEN)
+  })
+
+  it('stamps every entry with one run id, minted per journal instance', () => {
+    // Eight journal instances sat in one file with nothing naming them: `seq` resets at each boot, so a
+    // reader could see that a boundary existed and never which boot a row belonged to. One id per
+    // instance, on every entry, is the smallest thing that repairs that — and it is what lets a
+    // fingerprint be correlated across two boots rather than within one.
+    const first = new Journal()
+    const second = new Journal()
+    first.record('config.resolved', { plugin: 'x' })
+    first.record('session.opened', {})
+    second.record('config.resolved', { plugin: 'x' })
+
+    const runIds = first.snapshot().map(entry => entry.runId)
+    expect(first.runId).toBe(runIds[0])
+    expect(new Set(runIds).size).toBe(1)
+    expect(first.runId).not.toBe(second.runId)
+  })
+
+  it('honours an injected run id, so a fixture can name the boot it describes', () => {
+    const journal = new Journal({ runId: 'boot0001' })
+    journal.record('session.opened', {})
+    expect(journal.snapshot()[0]?.runId).toBe('boot0001')
+  })
+
+  it('digests a value after this journal’s own redaction, so a fingerprint is of the safe form', () => {
+    // The digest exists to tie an entry to text the journal does not hold — and a *fingerprint of a
+    // secret* is a leak in its own right, stable and identifiable. So it is taken of the form this
+    // journal would retain rather than of the raw text, and a correlator reproduces it with the same
+    // two public calls: `digestOf(redact(text, secrets))`. One path, so the two cannot drift.
+    const journal = new Journal({ secrets: [ROUTE_TOKEN] })
+    expect(journal.digest(`token=${ROUTE_TOKEN}`)).toBe(digestOf(`token=${REDACTED}`))
+    expect(journal.digest('a question')).toBe(digestOf('a question'))
   })
 })

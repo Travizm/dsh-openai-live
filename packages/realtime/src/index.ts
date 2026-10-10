@@ -27,6 +27,7 @@ import type {
 export * from './types.ts'
 export * from './error.ts'
 export * from './redact.ts'
+export * from './digest.ts'
 export * from './journal.ts'
 export * from './steering.ts'
 export * from './transport.ts'

@@ -80,14 +80,27 @@ export interface TurnDeps {
  * worse than an honest absence.
  */
 export type TurnOutcome =
-  /** The agent answered. `text` is non-empty. */
-  | { readonly kind: 'answered'; readonly text: string }
+  /**
+   * The agent answered. `text` is non-empty.
+   *
+   * `prompt` and `turn` are carried out of the runner rather than re-derived by its caller, and that is
+   * the whole point of them being here: the prompt is what was **actually admitted**, frame and truncation
+   * included, and the turn is the one the answer was accepted on. A caller that rebuilt either — from the
+   * request, from the config as it stands now — would be reporting an intention, not a fact.
+   */
+  | {
+    readonly kind: 'answered'
+    readonly text: string
+    readonly prompt: string
+    readonly turn: number
+    readonly ms: number
+  }
   /** There was nothing to ask — the transcript carried no text. Declined before the admission. */
   | { readonly kind: 'declined' }
   /** The controller refused the admission. `reason` is what the controller said. */
-  | { readonly kind: 'refused'; readonly reason: string }
+  | { readonly kind: 'refused'; readonly reason: string; readonly prompt: string }
   /** The admission was accepted and nothing came back inside the bound. */
-  | { readonly kind: 'timeout' }
+  | { readonly kind: 'timeout'; readonly prompt: string; readonly ms: number }
 
 /**
  * One step of a delegated turn, ready to be narrated.
@@ -260,6 +273,19 @@ function refusalReason(error: unknown): string {
 }
 
 /**
+ * The answer to one admission, and the turn it was accepted on.
+ *
+ * A pair rather than the text alone, because the two facts arrive together and must not be re-derived
+ * separately: the listener has already compared this event's turn with the latched one by the time it
+ * settles, so carrying the matched value out is what makes "which turn answered" the same fact at the
+ * check and in the record.
+ */
+interface AdmittedAnswer {
+  readonly text: string
+  readonly turn: number
+}
+
+/**
  * Run one delegated turn.
  *
  * Subscribes **before** admitting, so an answer that lands on the same tick as the admission is not
@@ -280,8 +306,8 @@ export function createTurnRunner(deps: TurnDeps): (request: DelegationRequest) =
     // rather than reported as a failure after one.
     if (prompt.length === 0) return { kind: 'declined' }
 
-    let settle!: (text: string | undefined) => void
-    const answered = new Promise<string | undefined>((resolve) => { settle = resolve })
+    let settle!: (answered: AdmittedAnswer | undefined) => void
+    const answered = new Promise<AdmittedAnswer | undefined>((resolve) => { settle = resolve })
     // No window is armed yet: the answer window starts at the **admission**, below. A relayed prompt queues
     // behind whatever the session is already doing — measured at 45.0s on a running app, `delegation.seen`
     // +41.5s to `prompt.admitted` +86.5s — and a window armed up here expired while the prompt was still
@@ -313,9 +339,9 @@ export function createTurnRunner(deps: TurnDeps): (request: DelegationRequest) =
      * created before we asked, so it is ours. Nothing already running can be adopted this way — a turn in
      * flight emitted its `turn/start` before this runner subscribed, so this runner never saw it.
      */
-    let turn: unknown
+    let turn: number | undefined
     /** A `turn/start` seen while the admission was in flight, held until the admission settles the question. */
-    let pending: unknown
+    let pending: number | undefined
     let admitted = false
     const unsubscribe = deps.subscribe((event, eventSessionId) => {
       // Scoped here, from the id the subscriber supplies: the owning session is the listener's first
@@ -347,7 +373,10 @@ export function createTurnRunner(deps: TurnDeps): (request: DelegationRequest) =
       }
       const text = answerText(event)
       if (text === undefined) return
-      settle(text)
+      // `turn` is a number here: the guard above returned unless this event's turn matched the latched
+      // one, and only a number is ever latched. Carried out with the text so the journal cannot re-derive
+      // it and disagree with the check that accepted the answer.
+      settle({ text, turn })
     })
 
     try {
@@ -356,7 +385,7 @@ export function createTurnRunner(deps: TurnDeps): (request: DelegationRequest) =
       // The controller refused the admission. Nothing was queued, so there is nothing to wait for —
       // and the reason it gave is the whole point of this patch, so it is returned rather than dropped.
       unsubscribe()
-      return { kind: 'refused', reason: refusalReason(error) }
+      return { kind: 'refused', reason: refusalReason(error), prompt }
     }
     // The admission is accepted, so a start already seen belongs to it — the harness emitted it before
     // this promise resolved. Adopted here rather than in the handler because only now is it certain the
@@ -365,10 +394,18 @@ export function createTurnRunner(deps: TurnDeps): (request: DelegationRequest) =
     if (turn === undefined && pending !== undefined) turn = pending
 
     // The window that measures the **answer**, armed here because here is where a turn exists to answer on.
+    // The instant `ms` is measured from is this one, for the same reason: the number the budget governs is
+    // admission-to-answer, not request-to-answer. A prompt queues behind the session's own work, and
+    // measuring from the request already produced a `window.elapsed` — documented as "admitted and never
+    // answered" — for a turn the session answered forty-one seconds later.
+    const admittedAt = Date.now()
     const timer = setTimeout(() => { settle(undefined) }, deps.answerTimeoutMs())
-    const text = await answered
+    const settled = await answered
+    const ms = Date.now() - admittedAt
     clearTimeout(timer)
     unsubscribe()
-    return text === undefined ? { kind: 'timeout' } : { kind: 'answered', text }
+    return settled === undefined
+      ? { kind: 'timeout', prompt, ms }
+      : { kind: 'answered', text: settled.text, prompt, turn: settled.turn, ms }
   }
 }

@@ -25,7 +25,9 @@
  * @module dsh-realtime/journal
  */
 
+import { randomBytes } from 'node:crypto'
 import { redact } from './redact.ts'
+import { digestOf } from './digest.ts'
 
 /** Entries retained when a caller does not say otherwise. */
 export const DEFAULT_JOURNAL_CAPACITY = 200
@@ -97,6 +99,15 @@ export type JournalKind =
 /** One retained entry. */
 export interface JournalEntry {
   /**
+   * Which plugin instance recorded this — one id per journal, stable for that instance's whole life.
+   *
+   * `seq` is monotonic **within** one instance and starts again at every boot, so a file holding several
+   * boots can show that a boundary existed and never which boot a row belonged to: eight instances in one
+   * file was a real reading, and answering "did that fault happen before or after the upgrade?" took a
+   * reconstruction of boundaries from a decreasing counter. With this field it is a filter.
+   */
+  readonly runId: string
+  /**
    * Monotonic sequence number, never reused and never reset within one journal instance.
    *
    * A gap between the oldest retained `seq` and the newest means entries were evicted, which is the
@@ -115,6 +126,13 @@ export interface JournalEntry {
 export interface JournalOptions {
   /** Entries retained before the oldest is evicted. */
   capacity?: number
+  /**
+   * The id this instance stamps on every entry. Minted when omitted.
+   *
+   * Injectable so a fixture can name the boot it describes and assert on a stable value, exactly as
+   * `at` is injectable on {@link Journal.record}.
+   */
+  runId?: string
   /**
    * Values that must never appear in an entry, however they are spelled.
    *
@@ -135,6 +153,13 @@ export interface JournalOptions {
  */
 export class Journal {
   private readonly capacity: number
+  /**
+   * The id stamped on every entry this instance records.
+   *
+   * Public and read-only: a reader holding a journal should not have to read an entry to learn which
+   * run it is looking at, and a route serving a snapshot can state the run it is describing.
+   */
+  readonly runId: string
   private readonly secrets: string[]
   private readonly entries: JournalEntry[] = []
   private readonly sinks: ((entry: JournalEntry) => void)[] = []
@@ -151,6 +176,9 @@ export class Journal {
       throw new RangeError(`journal capacity must be a positive integer, received ${String(capacity)}`)
     }
     this.capacity = capacity
+    // Four bytes: enough that nine boots in one file are nine distinct runs, short enough that the
+    // stamp costs an entry about twenty bytes rather than ninety.
+    this.runId = options.runId ?? randomBytes(4).toString('hex')
     this.secrets = [...options.secrets ?? []]
   }
 
@@ -203,6 +231,7 @@ export class Journal {
       safe[key] = redact(value, this.secrets)
     }
     const entry: JournalEntry = Object.freeze({
+      runId: this.runId,
       seq: this.nextSeq++,
       at,
       kind,
@@ -223,6 +252,25 @@ export class Journal {
       }
     }
     return entry
+  }
+
+  /**
+   * The fingerprint of one text, as this journal would retain it.
+   *
+   * The correlation key between an entry and text the journal deliberately does not hold. A relayed
+   * prompt is recorded as a size and a digest; the session log holds that prompt verbatim, on the other
+   * side of a boundary this plugin does not own — and a reader with both can confirm they are the same
+   * text without either record carrying a word of the other's.
+   *
+   * Taken **after** this journal's own redaction, so a fingerprint is never of a secret: a fingerprint of
+   * a secret is stable and identifying, which this repo's leak scan already treats as a leak in its own
+   * right. A correlator reproduces it with the same two public calls — `digestOf(redact(text, secrets))` —
+   * so there is one path and nothing to drift.
+   * @param text - the text to name.
+   * @returns {@link DIGEST_CHARS} lowercase hexadecimal characters.
+   */
+  digest(text: string): string {
+    return digestOf(redact(text, this.secrets))
   }
 
   /**

@@ -60,5 +60,14 @@ export const Config = Schema.object({
  * @param config - validated configuration.
  */
 export function apply(ctx: Context, config: OpenAiLiveConfig): void {
+  // The credential becomes a **journal secret** here, and this is the plugin that has to do it: it is the
+  // one that holds the key, so it is the one that can name it for redaction. Until this existed the key was
+  // protected by the *shape* arm alone — a pattern that catches a vendor prefix — and a value arm that never
+  // knew the value cannot redact it whatever it looks like. The pattern this copies is the audio route's,
+  // which registers its own capability token for the same reason.
+  //
+  // Registered before the adapter is, so no later record can be written ahead of the redaction that knows
+  // about this value. Empty is ignored by `addSecrets`, which is what a profile with no credential has.
+  ctx.realtime.journal.addSecrets(config.apiKey === undefined ? [] : [config.apiKey])
   ctx.realtime.registerAdapter([config.provider], new OpenAiLiveAdapter(config, new WsTransportFactory()))
 }

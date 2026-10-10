@@ -70,6 +70,16 @@ export type JournalKind =
   | 'progress.dropped'
   /** Audio was handed to the transport. **Not** a claim that anyone heard it. */
   | 'speech.sent'
+  /**
+   * The provider transcribed some input audio — a **count**, never the words.
+   *
+   * The counterpart to `speech.sent`, and the entry whose absence made "the voice is broken" unanswerable
+   * in both directions at once: an output track that runs whatever happens, and no record at all of whether
+   * anything reached the model. With this, "the model heard you four times and raised no delegation" is
+   * sayable without retaining a word the user spoke — which is why the detail is a character count and a
+   * final flag rather than the text.
+   */
+  | 'transcript.input'
   /** The configuration as resolved, so a journal can be read without the profile beside it. */
   | 'config.resolved'
   /**

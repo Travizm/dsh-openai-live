@@ -293,6 +293,7 @@ describe('answering a delegation', () => {
     // answer. Collapsing them is how "admitted and nothing came back" became indistinguishable from
     // "the controller refused", which is the silence S0 was spent on.
     expect(journal.snapshot().map(entry => entry.kind)).toEqual([
+      'config.resolved',
       'delegation.seen',
       'prompt.admitted',
       'window.elapsed',
@@ -308,7 +309,26 @@ describe('answering a delegation', () => {
 
     await context.serial('realtime-agent/delegation', silent)
 
-    expect(journal.snapshot().map(entry => entry.kind)).toEqual(['delegation.seen', 'prompt.declined'])
+    expect(journal.snapshot().map(entry => entry.kind)).toEqual(['config.resolved', 'delegation.seen', 'prompt.declined'])
+  })
+
+  it('records what it resolved at boot, including the session it will steer', async () => {
+    // The field that makes a **stale pin visible**. A session id outlives the session it names: the profile
+    // pins one, that session ends, and the next boot steers a conversation nobody is in — which is exactly
+    // how a working relay was made to look broken. Without this entry the journal cannot say what the voice
+    // was pointed at, and the plugin's own silence reads as a plugin that never loaded.
+    const { context, journal } = harness()
+    apply(context, Config({ sessionId: 'session-stale-candidate', answerTimeoutMs: 1_234 }) as RealtimeResponderConfig)
+
+    expect(journal.snapshot()[0]).toMatchObject({
+      kind: 'config.resolved',
+      detail: {
+        plugin: 'dsh-realtime-responder',
+        sessionId: 'session-stale-candidate',
+        maxPromptChars: '4000',
+        answerTimeoutMs: '1234',
+      },
+    })
   })
 
   it('redacts what reaches the journal through the same door as the bus and the speech', async () => {

@@ -291,6 +291,23 @@ export function apply(ctx: Context, config: RealtimeResponderConfig): void {
     speakMilestones: config.speakMilestones,
   }
 
+  // What this plugin resolved, recorded so the journal can be read without the profile beside it — and, for
+  // the field at the end, so a **stale steering pin is visible**. A session id outlives the session it names:
+  // the profile pins one, that session ends, and the next boot steers a conversation that is not there until
+  // somebody steers it again. That is invisible without this entry, and it has already made a working relay
+  // look broken once — the delegation fired, went to a session nobody was in, and the voice spoke a refusal.
+  //
+  // The id is an identifier and not a credential: the same class of value the audio route records as its
+  // path. A recorder that produces a shareable artifact elides ids at that boundary; this file is the
+  // process's own record, and the field is read at use rather than copied from config so a steer shows here
+  // as the value the plugin now holds.
+  journal.record('config.resolved', {
+    plugin: 'dsh-realtime-responder',
+    sessionId: live.sessionId,
+    maxPromptChars: String(live.maxPromptChars),
+    answerTimeoutMs: String(live.answerTimeoutMs),
+  })
+
   /**
    * The narration policy as it stands for the next turn.
    *

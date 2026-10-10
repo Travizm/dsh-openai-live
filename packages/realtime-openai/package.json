@@ -1,6 +1,6 @@
 {
   "name": "dsh-realtime-openai",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "GPT-Live-1 full-duplex voice adapter for the dsh-realtime seam, over the OpenAI Live WebSocket API.",
   "type": "module",
   "main": "lib/index.js",

@@ -4,6 +4,48 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.7] — 2026-10-10
+
+### Added
+
+- **The voice model now knows what it is attached to, and delegates what it cannot answer.** `dsh-openai-live`
+  0.6.7 · `dsh-realtime` 0.2.8 · `dsh-realtime-openai` 0.2.2 · `dsh-realtime-agent` 0.2.12 ·
+  `dsh-realtime-responder` 0.2.6. Three things had to be true at once: the relayed request needed a **frame**
+  that says what is being asked and by whom, the bundle needed an **instruction** that makes the model treat
+  the attached workspace as something other than this conversation, and the answer needed to come back
+  **speakable**. The instruction is the one that measurement bought — the model read "their session" as
+  *this* conversation and answered from memory, and the same unprimed question scored 0/3 before it. The
+  frame is config rather than a constant, because it is a deployment's own prose; it counts inside the
+  character budget and degrades twice, so a frame can never eat the question it frames.
+- **`dsh-realtime` 0.2.8 · `dsh-realtime-openai` 0.2.2 · `dsh-realtime-agent` 0.2.12 · `dsh-realtime-responder`
+  0.2.6 — the journal answers the questions it was asked and could not.** `transcript.input` records that the
+  provider transcribed input audio: a count and a final flag, **never the words**, which is what makes "the
+  voice is broken" answerable in both directions and a delegation base rate measurable without retaining a
+  word somebody spoke. `session.closed` carries the reason the seam had always handed over and the agent
+  discarded. The adapter registers its credential as a journal **secret**, so provider text can be recorded
+  at all — until then the key was protected by the shape arm alone, and a value arm that never knew the value
+  cannot redact it whatever it looks like. `config.resolved` names the session the voice will steer, which is
+  how a **stale steering pin** becomes visible instead of looking like a plugin that never loaded.
+  `delegation.received` is written where a frame is first **accepted**, not only where it is answered:
+  "the model never raised one" and "it arrived and this adapter could not read it" were the same silence, and
+  telling those apart is what the investigation behind this release spent its first hours on.
+
+### Fixed
+
+- **An answer could be spoken to whoever asked first rather than to the turn that asked.** `dsh-realtime-agent`
+  0.2.12. The relay now latches the turn its own admission started, armed only once the controller has
+  accepted it, and ignores every other turn's events. Three guards fail without it.
+- **A relayed answer was spoken as markup.** `dsh-realtime-agent` 0.2.12. `toSpeech` reshapes formatting
+  without inventing or deleting meaning, and runs before the bound so a truncation marker is never reshaped
+  away. Deliberate omissions: underscore emphasis is not unscrambled (identifier risk) and a bare URL is left
+  alone.
+
+All five are inside the ranges the published `dsh-openai-live@0.6.6` declares — verified against the registry,
+not the tree — so consumers receive this with no action. `dsh-realtime-audio-ws` 0.2.7 and `dsh-realtime-replay`
+0.2.0 are unchanged and are not republished.
+
+Publishing runs from main after the merge: pnpm's publish-branch check refuses any other branch.
+
 ## [0.6.6] — 2026-10-10
 
 ### Added

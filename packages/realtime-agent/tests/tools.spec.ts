@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { JournalEntry, RealtimeSession } from 'dsh-realtime'
-import { voiceToolDefinitions, type DiagnoseAnswer, type JournalToolAnswer, type VoiceToolDeps } from '../src/tools.ts'
+import type { RealtimeSettingInfo, RealtimeSettingOutcome } from 'dsh-realtime'
+import { voiceToolDefinitions, type ConfigureAnswer, type DiagnoseAnswer, type JournalToolAnswer, type VoiceToolDeps } from '../src/tools.ts'
 import type { RealtimeVoiceStatus } from '../src/types.ts'
 
 /** The execute bodies under test never touch the execution context, so a placeholder is honest here. */
@@ -41,6 +42,7 @@ function build(overrides: Partial<VoiceToolDeps> = {}): { recorder: Recorder; to
     steering: () => [],
     providers: () => [],
     transports: () => [],
+    settings: { list: () => [], apply: () => ({ ok: false, key: '', code: 'UNKNOWN_SETTING', reason: 'none registered' }) },
     ...overrides,
   })
   return { recorder, tools }
@@ -56,7 +58,7 @@ describe('voiceToolDefinitions', () => {
   it('publishes the two session controls, the two that read the app, and the diagnosis', () => {
     const { tools } = build()
     expect(tools.map(definition => definition.name))
-      .toEqual(['voice_start', 'voice_stop', 'voice_status', 'voice_diagnose', 'voice_journal'])
+      .toEqual(['voice_start', 'voice_stop', 'voice_status', 'voice_configure', 'voice_diagnose', 'voice_journal'])
     for (const definition of tools) {
       expect(definition.description.length).toBeGreaterThan(0)
       expect(definition.output.schema).toBeDefined()
@@ -129,6 +131,114 @@ describe('voiceToolDefinitions', () => {
       const second = await tool(tools, 'voice_status').execute({}, EXEC)
       expect(first).toMatchObject({ open: false })
       expect(second).toMatchObject({ open: true })
+    })
+  })
+
+  describe('voice_configure', () => {
+    const setting = (over: Partial<RealtimeSettingInfo> = {}): RealtimeSettingInfo => ({
+      key: 'realtime-agent.journalEntries',
+      owner: 'realtime-agent',
+      field: 'journalEntries',
+      kind: 'number',
+      scope: 'live',
+      describe: 'Most journal entries one call returns',
+      value: 25,
+      ...over,
+    })
+
+    /** A registry with a live field, a field that needs a restart, and a secret that reports no value. */
+    const registry = (over: Partial<VoiceToolDeps['settings']> = {}): VoiceToolDeps['settings'] => ({
+      list: () => [
+        setting({ choices: ['10', '25', '50'] }),
+        setting({ key: 'realtime-agent.autoStart', field: 'autoStart', kind: 'boolean', scope: 'restart', value: false }),
+        setting({ key: 'realtime-responder.redactSecrets', owner: 'realtime-responder', field: 'redactSecrets', kind: 'string-list', value: undefined }),
+      ],
+      apply: () => ({ ok: true, key: 'realtime-agent.journalEntries', value: 25 }),
+      ...over,
+    })
+
+    const call = async (args: { key?: string; value?: string }, over: Partial<VoiceToolDeps['settings']> = {}): Promise<ConfigureAnswer> =>
+      await tool(build({ settings: registry(over) }).tools, 'voice_configure').execute(args, EXEC) as ConfigureAnswer
+
+    it('reads the registry when nothing is addressed, and changes nothing', async () => {
+      const answer = await call({})
+      expect(answer.action).toBe('read')
+      expect(answer.settings.map(entry => entry.key)).toEqual([
+        'realtime-agent.journalEntries',
+        'realtime-agent.autoStart',
+        'realtime-responder.redactSecrets',
+      ])
+      // The declared set travels with the field, so a caller deciding what to set is not guessing.
+      expect(answer.settings[0]?.choices).toEqual(['10', '25', '50'])
+      expect(answer.detail).toContain('3 setting(s)')
+    })
+
+    it('omits a secret’s value instead of echoing it', async () => {
+      // The registry reports no value for a setting that is write-only, and a surface that turned that absence
+      // into a null would be publishing the shape of the thing it must not publish.
+      const answer = await call({})
+      const secret = answer.settings.find(entry => entry.key === 'realtime-responder.redactSecrets')
+      expect(secret).toEqual({
+        key: 'realtime-responder.redactSecrets',
+        kind: 'string-list',
+        scope: 'live',
+        describe: 'Most journal entries one call returns',
+      })
+      expect('value' in (secret ?? {})).toBe(false)
+      expect(answer.settings[0]?.value).toBe(25)
+    })
+
+    it('omits a description the owner never wrote, rather than writing an empty one', async () => {
+      // An absent description is not an empty string: a surface that rendered one would show a blank line where
+      // there is nothing to say, and a reader would take the blank for a description nobody got round to.
+      const bare: RealtimeSettingInfo = {
+        key: 'realtime-agent.model',
+        owner: 'realtime-agent',
+        field: 'model',
+        kind: 'string',
+        scope: 'restart',
+        value: 'gpt-live-1',
+      }
+
+      const answer = await call({}, { list: () => [bare] })
+
+      expect(answer.settings).toEqual([
+        { key: 'realtime-agent.model', kind: 'string', scope: 'restart', value: 'gpt-live-1' },
+      ])
+    })
+
+    it('reports the value the plugin now holds, not the one that was asked for', async () => {
+      // A setter may clamp, and the difference between the two is the whole reason a caller reads back.
+      const answer = await call({ key: 'realtime-agent.journalEntries', value: '900000' }, {
+        apply: () => ({ ok: true, key: 'realtime-agent.journalEntries', value: 60_000 }),
+      })
+      expect(answer.action).toBe('applied')
+      expect(answer.detail).toContain('60000')
+      expect(answer.detail).not.toContain('900000')
+    })
+
+    it('relays the registry’s own refusal verbatim, because it is written to be relayed', async () => {
+      const reason = 'realtime-agent.autoStart needs a restart, so it cannot be changed while the plugin runs'
+      const answer = await call({ key: 'realtime-agent.autoStart', value: 'true' }, {
+        apply: (): RealtimeSettingOutcome => ({ ok: false, key: 'realtime-agent.autoStart', code: 'FROZEN_SETTING', reason }),
+      })
+      expect(answer.action).toBe('refused')
+      expect(answer.detail).toBe(reason)
+    })
+
+    it('refuses a key with no value rather than writing the empty string', async () => {
+      // Applying an empty string would silently write one: the failure a control surface exists to avoid, and
+      // the reason this is a refusal rather than a default.
+      let applied = 0
+      const answer = await call({ key: 'realtime-agent.journalEntries' }, {
+        apply: () => {
+          applied += 1
+          return { ok: true, key: '', value: '' }
+        },
+      })
+      expect(answer.action).toBe('refused')
+      expect(answer.detail).toContain('both a key and a value')
+      expect(applied).toBe(0)
     })
   })
 

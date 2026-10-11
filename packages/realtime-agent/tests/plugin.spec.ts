@@ -3,7 +3,7 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { RealtimeAdapter, RealtimeRuntime, REALTIME_ERROR_CODES, RealtimeError, type Journal, type RealtimeDelegationProgress, type RealtimeSession, type RealtimeSessionHandlers, type RealtimeSessionOptions } from 'dsh-realtime'
 import * as agent from '../src/index.ts'
-import type { DiagnoseAnswer, JournalToolAnswer } from '../src/tools.ts'
+import type { ConfigureAnswer, DiagnoseAnswer, JournalToolAnswer } from '../src/tools.ts'
 import { Config, createHandlers, apply } from '../src/index.ts'
 import { TranscriptBuffer } from '../src/transcript.ts'
 import type { DelegationRequest, RealtimeAgentConfig } from '../src/types.ts'
@@ -685,7 +685,7 @@ describe('the voice tools a session exposes', () => {
     const { ctx: context, tools } = harness()
     apply(context, Config({ provider: 'fake' }) as RealtimeAgentConfig)
     expect(tools.registered.map(definition => definition.name))
-      .toEqual(['voice_start', 'voice_stop', 'voice_status', 'voice_diagnose', 'voice_journal'])
+      .toEqual(['voice_start', 'voice_stop', 'voice_status', 'voice_configure', 'voice_diagnose', 'voice_journal'])
   })
 
   it('releases them with the fiber that registered them', async () => {
@@ -695,7 +695,7 @@ describe('the voice tools a session exposes', () => {
     ctx = undefined
     // Registrations are effects. If this ever needs a separate teardown path, that path is what will
     // be forgotten on the day it matters.
-    expect(tools.released).toEqual(['voice_start', 'voice_stop', 'voice_status', 'voice_diagnose', 'voice_journal'])
+    expect(tools.released).toEqual(['voice_start', 'voice_stop', 'voice_status', 'voice_configure', 'voice_diagnose', 'voice_journal'])
   })
 
   it('reports the session it opened, through the tool a model would call', async () => {
@@ -711,6 +711,19 @@ describe('the voice tools a session exposes', () => {
     expect(await call('voice_status')).toMatchObject({ open: false, provider: 'fake', steering: [] })
     await call('voice_start')
     expect(await call('voice_status')).toMatchObject({ open: true, sessionId: 'sess-1' })
+  })
+
+  it('reads the settings this bundle registered, through the tool a model would call', async () => {
+    // The wiring test: the unit suite hands the tool a registry it supplies, so only this can show the tool is
+    // pointed at the seam's own — the registry that is also the only route a live change can take.
+    const { ctx: context, tools } = harness()
+    apply(context, Config({ provider: 'fake' }) as RealtimeAgentConfig)
+    const answer = await tools.registered.find(definition => definition.name === 'voice_configure')!
+      .execute({}, {} as never) as ConfigureAnswer
+
+    expect(answer.action).toBe('read')
+    expect(answer.settings.map(entry => entry.key)).toContain('realtime-agent.journalEntries')
+    expect(answer.settings.every(entry => entry.scope.length > 0)).toBe(true)
   })
 
   it('diagnoses from the seam, through the tool a model would call', async () => {

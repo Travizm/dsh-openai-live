@@ -48,11 +48,21 @@ class FakeController extends Service {
 
 /** The tools service, with just enough shape for the agent to register its voice tools against. */
 class FakeTools extends Service {
+  /**
+   * What the agent published, so a test can call the tool a model would call.
+   *
+   * Recorded because the tools are the one surface where this repository's plugins have to agree through the
+   * *seam* rather than through a name: the responder declares which session it steers, and the agent's status
+   * tool reads it back. This is the only harness in the suite with both plugins mounted.
+   */
+  readonly registered: Array<{ name: string; execute: (args: never, exec: never) => Promise<unknown> }> = []
+
   constructor(context: Context) {
     super(context, 'tools')
   }
 
-  register(): () => void {
+  register(definition: { name: string; execute: (args: never, exec: never) => Promise<unknown> }): () => void {
+    this.registered.push(definition)
     return () => undefined
   }
 }
@@ -132,6 +142,8 @@ interface Mounted {
   readonly client: WebSocket
   /** Send one control frame and return its reply, as the client half will. */
   readonly ask: (frame: string) => Promise<Record<string, unknown>>
+  /** The tools the agent published on the harness's tools service. */
+  readonly tools: FakeTools
 }
 
 let cleanups: Array<() => Promise<void> | void> = []
@@ -150,7 +162,7 @@ async function mount(): Promise<Mounted> {
   const seam = new RealtimeRuntime(context)
   const controller = new FakeController(context)
   const web = new FakeWebServer(context)
-  new FakeTools(context)
+  const tools = new FakeTools(context)
   new FakeConnection(context)
   const provider = new FakeProvider()
   context.realtime.registerAdapter(['fake'], provider)
@@ -193,6 +205,7 @@ async function mount(): Promise<Mounted> {
     controller,
     journal: seam.journal,
     client,
+    tools,
     ask: async (frame: string): Promise<Record<string, unknown>> => {
       const reply = once(client, 'message')
       client.send(frame)
@@ -217,6 +230,19 @@ describe('status', () => {
     const settings = reply.settings as Array<{ key: string; scope: string }>
     expect(settings.map(entry => entry.key)).toContain('realtime-responder.sessionId')
     expect(settings.map(entry => entry.key)).toContain('realtime-agent.autoStart')
+  })
+
+  it('tells a model which conversation the voice is steering, without either plugin naming the other', async () => {
+    // The cross-plugin proof, and it needs this harness: the responder declares its claim on the seam here,
+    // the agent's tool reads the seam back, and neither imports nor knows the other's name. The session is the
+    // responder's, read through the agent.
+    const { tools } = await mount()
+    const status = tools.registered.find(definition => definition.name === 'voice_status')
+    expect(status).toBeDefined()
+
+    expect(await status?.execute({} as never, {} as never)).toMatchObject({
+      steering: [{ owner: 'realtime-responder', sessionId: 'sess-1' }],
+    })
   })
 })
 

@@ -12,6 +12,7 @@
 import { Service, type Context } from '@deepseek-ai/cordis'
 import { REALTIME_ERROR_CODES, RealtimeError } from './error.ts'
 import { Journal } from './journal.ts'
+import { SteeringRegistry } from './steering.ts'
 import { RealtimeSettings } from './settings.ts'
 import type {
   RealtimeDelegation,
@@ -26,6 +27,7 @@ export * from './types.ts'
 export * from './error.ts'
 export * from './redact.ts'
 export * from './journal.ts'
+export * from './steering.ts'
 export * from './settings.ts'
 export { RealtimeError, REALTIME_ERROR_CODES } from './error.ts'
 
@@ -133,6 +135,15 @@ export class RealtimeRuntime extends Service {
    * reason, on the same channel it arrived on.
    */
   readonly settings = new RealtimeSettings(this.journal)
+
+  /**
+   * Who is steering which session.
+   *
+   * Owned here for the same reason the journal and the settings are: it is a fact that spans plugins, and
+   * the seam is the one object all of them already hold. A plugin declares its claim where it is mounted, so
+   * a surface can report where the voice is pointed without knowing the name of the plugin that steers it.
+   */
+  readonly steering = new SteeringRegistry()
 
   /**
    * @param ctx - the Cordis context this service is mounted on.

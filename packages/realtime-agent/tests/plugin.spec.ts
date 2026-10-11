@@ -706,7 +706,9 @@ describe('the voice tools a session exposes', () => {
     const call = async (name: string) =>
       await tools.registered.find(definition => definition.name === name)!.execute({}, {} as never)
 
-    expect(await call('voice_status')).toMatchObject({ open: false, provider: 'fake' })
+    // `steering` is empty here because this harness mounts no responder: the list is read from the seam,
+    // and an empty one is the honest answer rather than an omission.
+    expect(await call('voice_status')).toMatchObject({ open: false, provider: 'fake', steering: [] })
     await call('voice_start')
     expect(await call('voice_status')).toMatchObject({ open: true, sessionId: 'sess-1' })
   })

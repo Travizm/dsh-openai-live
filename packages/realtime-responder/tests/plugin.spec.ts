@@ -73,6 +73,43 @@ const request = {
   transcript: [{ kind: 'input', text: 'is staging ok?' }],
 } as unknown as DelegationRequest
 
+describe('the session it steers', () => {
+  it('declares it on the seam, so a surface can find it without knowing this plugin', () => {
+    // The pairing between a plugin and the conversation it answers into is the seam's fact. Left in this
+    // plugin's own settings row, every reader would have to know this plugin's name and read its key.
+    const { context } = harness()
+    apply(context, Config({ sessionId: 'sess-1' }) as RealtimeResponderConfig)
+
+    expect(context.realtime.steering.snapshot()).toEqual([
+      { owner: 'realtime-responder', sessionId: 'sess-1' },
+    ])
+  })
+
+  it('follows a live change to the session, because the claim reads it when it is asked', () => {
+    const { context } = harness()
+    apply(context, Config({ sessionId: 'sess-1' }) as RealtimeResponderConfig)
+
+    expect(context.realtime.settings.apply('realtime-responder.sessionId', 'sess-2')).toMatchObject({ ok: true })
+    expect(context.realtime.steering.snapshot()).toEqual([
+      { owner: 'realtime-responder', sessionId: 'sess-2' },
+    ])
+  })
+
+  it('withdraws the claim with the fiber that made it', async () => {
+    // A claim that outlived its plugin would tell a status surface that a delegation would be answered,
+    // when the plugin that answers is no longer mounted.
+    const { context } = harness()
+    apply(context, Config({ sessionId: 'sess-1' }) as RealtimeResponderConfig)
+    // Held across the disposal, as the settings tests hold theirs: disposing the root fiber takes the seam
+    // with it, and the question is what the registry says afterwards.
+    const steering = context.realtime.steering
+    await context.fiber.dispose()
+    ctx = undefined
+
+    expect(steering.snapshot()).toEqual([])
+  })
+})
+
 describe('plugin shape', () => {
   it('named-exports its contract and has no default export', () => {
     // A default export makes the Loader discard a function plugin's namespace: it loads and

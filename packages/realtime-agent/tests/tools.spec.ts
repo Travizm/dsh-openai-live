@@ -39,6 +39,8 @@ function build(overrides: Partial<VoiceToolDeps> = {}): { recorder: Recorder; to
     journalEntries: () => 25,
     status: () => CLOSED,
     steering: () => [],
+    providers: () => [],
+    transports: () => [],
     ...overrides,
   })
   return { recorder, tools }
@@ -134,14 +136,19 @@ describe('voiceToolDefinitions', () => {
     const at = (seq: number, kind: JournalEntry['kind']): JournalEntry => ({ seq, at: 1_000 + seq, kind, detail: {} })
     const OPEN: RealtimeVoiceStatus = { open: true, provider: 'openai-live', model: 'gpt-live-1' }
     const CLAIM = [{ owner: 'realtime-responder', sessionId: 'session-a' }]
+    /** A route that says it is configured, and a transport with a client on it: the passing baseline. */
+    const ROUTE = [{ id: 'openai-live', name: 'OpenAI Live', configured: true }]
+    const ATTACHED = [{ path: '/dsh-realtime/audio', clients: 1 }]
     const judge = async (over: Partial<VoiceToolDeps> = {}): Promise<DiagnoseAnswer> =>
-      await tool(build({ status: () => OPEN, steering: () => CLAIM, ...over }).tools, 'voice_diagnose')
-        .execute({}, EXEC) as DiagnoseAnswer
+      await tool(build({
+        status: () => OPEN, steering: () => CLAIM, providers: () => ROUTE, transports: () => ATTACHED, ...over,
+      }).tools, 'voice_diagnose').execute({}, EXEC) as DiagnoseAnswer
 
     it('passes when a session is open, something steers, and the last turn was answered', async () => {
       const answer = await judge({ journal: () => [at(1, 'delegation.seen'), at(2, 'prompt.admitted'), at(3, 'answer.received')] })
       expect(answer.verdict).toBe('pass')
-      expect(answer.checks.map(check => check.state)).toEqual(['pass', 'pass', 'pass'])
+      expect(answer.checks.map(check => check.name)).toEqual(['key', 'route', 'session', 'delegation', 'turn'])
+      expect(answer.checks.every(check => check.state === 'pass')).toBe(true)
     })
 
     it('fails on the closed session that has no responder behind it', async () => {
@@ -152,6 +159,49 @@ describe('voiceToolDefinitions', () => {
       expect(answer.verdict).toBe('fail')
       expect(answer.checks.find(check => check.name === 'session')?.detail).toContain('no session is open')
       expect(answer.checks.find(check => check.name === 'delegation')?.detail).toContain('answered by nobody')
+    })
+
+    it('fails the credential check when the route that would open reports nothing configured', async () => {
+      // The failure with no other symptom: from outside, a route with no credential and a provider that is
+      // down produce the same refusal.
+      const answer = await judge({ providers: () => [{ id: 'openai-live', name: 'OpenAI Live', configured: false }] })
+      expect(answer.checks.find(check => check.name === 'key')).toMatchObject({ state: 'fail' })
+      expect(answer.checks.find(check => check.name === 'key')?.detail).toContain('NOT_CONFIGURED')
+      expect(answer.verdict).toBe('fail')
+    })
+
+    it('waits on a route that does not report whether it is configured', async () => {
+      // Not a pass. An adapter that says nothing has told us nothing, and a two-valued check would have to call
+      // that fine — which is the check becoming one that cannot fail.
+      const answer = await judge({ providers: () => [{ id: 'openai-live', name: 'OpenAI Live' }] })
+      expect(answer.checks.find(check => check.name === 'key')).toMatchObject({ state: 'waiting' })
+      expect(answer.verdict).toBe('partial')
+    })
+
+    it('fails when no adapter is registered for the route a session would use', async () => {
+      const answer = await judge({ providers: () => [] })
+      expect(answer.checks.find(check => check.name === 'key')?.detail).toContain('no adapter is registered')
+    })
+
+    it('fails the route check when nothing declares a transport', async () => {
+      const answer = await judge({ transports: () => [] })
+      expect(answer.checks.find(check => check.name === 'route')?.detail).toContain('no audio transport is declared')
+      expect(answer.verdict).toBe('fail')
+    })
+
+    it('fails the route check when a transport has nothing attached', async () => {
+      const answer = await judge({ transports: () => [{ path: '/dsh-realtime/audio', clients: 0 }] })
+      expect(answer.checks.find(check => check.name === 'route')?.detail).toContain('has nothing attached')
+    })
+
+    it('names the transports that are attached, and not the ones that are not', async () => {
+      const answer = await judge({
+        transports: () => [{ path: '/quiet', clients: 0 }, { path: '/busy', clients: 2 }],
+      })
+      const route = answer.checks.find(check => check.name === 'route')
+      expect(route).toMatchObject({ state: 'pass' })
+      expect(route?.detail).toContain('/busy with 2 client(s)')
+      expect(route?.detail).not.toContain('/quiet')
     })
 
     it('says nothing has been delegated yet rather than judging a turn that never happened', async () => {

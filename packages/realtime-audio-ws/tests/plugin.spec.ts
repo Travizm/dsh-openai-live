@@ -102,6 +102,17 @@ async function mount(over: Partial<RealtimeAudioWsConfig> = {}) {
   }
 }
 
+describe('the transport it declares', () => {
+  it('reports its own path and client count on the seam, so a reader need not know this plugin', async () => {
+    // A reader asked whether the voice works has to be able to say whether anything is attached — the audio
+    // fault that looks like a broken model — and it should not have to import this plugin or read its control
+    // surface to find out. The count is read when asked, so a connection that has since gone does not linger.
+    const { context } = await mount()
+
+    expect(context.realtime.transports.snapshot()).toEqual([{ path: DEFAULT_PATH, clients: 0 }])
+  })
+})
+
 describe('the journal it writes to a file', () => {
   it('carries the boot record too, because an entry that depends on load order lies by omission', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'audio-ws-boot-'))

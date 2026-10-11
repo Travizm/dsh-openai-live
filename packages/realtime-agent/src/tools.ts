@@ -1,5 +1,5 @@
 import { defineTool, type InferValue, type ToolDefinition, type ValueSchemaSpec } from '@deepseek-ai/dsh-tools'
-import type { JournalEntry, RealtimeSession, SteeringClaim } from 'dsh-realtime'
+import type { JournalEntry, RealtimeProviderInfo, RealtimeSession, SteeringClaim, TransportStatus } from 'dsh-realtime'
 import type { RealtimeVoiceStatus } from './types.ts'
 
 /**
@@ -51,6 +51,10 @@ export interface VoiceToolDeps {
    * to a plugin it has no other business with.
    */
   readonly steering: () => readonly SteeringClaim[]
+  /** The registered routes, so the credential question can be answered without the adapter's help. */
+  readonly providers: () => readonly RealtimeProviderInfo[]
+  /** What carries audio, as the plugins that own the routes report it. */
+  readonly transports: () => readonly TransportStatus[]
   /**
    * Ceiling on how many entries one call may return.
    *
@@ -200,6 +204,111 @@ const JOURNAL_VALUE = {
 } as const
 
 /**
+ * Whether the route a session would open on reports having what it needs.
+ *
+ * Three answers, not two: an adapter that says nothing gets `waiting` rather than a pass. The fault this
+ * catches has no other symptom — a route with no credential configured fails every open with a coded error,
+ * and from outside that is indistinguishable from a provider that is down.
+ * @param current - the session's status, which names the route in question.
+ * @param providers - the registered routes.
+ * @returns the check, with a detail naming the route.
+ */
+function credentialCheck(current: RealtimeVoiceStatus, providers: readonly RealtimeProviderInfo[]): DiagnoseCheck {
+  const route = providers.find(provider => provider.id === current.provider)
+  if (route === undefined) {
+    return {
+      name: 'key',
+      state: 'fail',
+      detail: `no adapter is registered for "${current.provider}", so no session can open at all`,
+    }
+  }
+  if (route.configured === false) {
+    return {
+      name: 'key',
+      state: 'fail',
+      detail: `the "${current.provider}" route reports nothing configured — opening fails with NOT_CONFIGURED, which names the setting`,
+    }
+  }
+  if (route.configured === true) {
+    return { name: 'key', state: 'pass', detail: `the "${current.provider}" route reports what it needs to open` }
+  }
+  return {
+    name: 'key',
+    state: 'waiting',
+    detail: `the "${current.provider}" route does not report whether it is configured, so this cannot be judged from here`,
+  }
+}
+
+/**
+ * Whether anything can carry audio, and whether anything is.
+ *
+ * The half of the self-test's route check that is visible from inside: a route exists and a client is
+ * attached. Whether the route *refuses* an unauthorised client is a property of a handler and is only proven
+ * by probing it, so it is not claimed here.
+ * @param transports - what the plugins owning the routes declared.
+ * @returns the check, naming the paths and the clients.
+ */
+function transportCheck(transports: readonly TransportStatus[]): DiagnoseCheck {
+  if (transports.length === 0) {
+    return {
+      name: 'route',
+      state: 'fail',
+      detail: 'no audio transport is declared, so no microphone can reach the session — the route plugin is not mounted',
+    }
+  }
+  const attached = transports.filter(transport => transport.clients > 0)
+  if (attached.length === 0) {
+    return {
+      name: 'route',
+      state: 'fail',
+      detail: `${transports.map(transport => transport.path).join(', ')} has nothing attached — the client half has not connected`,
+    }
+  }
+  return {
+    name: 'route',
+    state: 'pass',
+    detail: attached.map(transport => `${transport.path} with ${transport.clients} client(s)`).join('; '),
+  }
+}
+
+/**
+ * Whether a session is open, and on what.
+ * @param current - the status the plugin reports.
+ * @returns the check.
+ */
+function sessionCheck(current: RealtimeVoiceStatus): DiagnoseCheck {
+  return current.open
+    ? { name: 'session', state: 'pass', detail: `open on ${current.provider}/${current.model}` }
+    : {
+        name: 'session',
+        state: 'fail',
+        detail: 'no session is open — ask for voice_start, and read the record for why the last one failed',
+      }
+}
+
+/**
+ * Whether a delegated question would be answered, and where.
+ *
+ * Nothing steering is a fault rather than a quiet state: the delegation still leaves, and nobody answers it,
+ * which looks from the outside like a model that cannot do the thing it was asked.
+ * @param steering - the claims in force.
+ * @returns the check, naming the plugin and the conversation.
+ */
+function delegationCheck(steering: readonly SteeringClaim[]): DiagnoseCheck {
+  return steering.length > 0
+    ? {
+        name: 'delegation',
+        state: 'pass',
+        detail: steering.map(claim => `${claim.owner} answers into ${claim.sessionId}`).join('; '),
+      }
+    : {
+        name: 'delegation',
+        state: 'fail',
+        detail: 'nothing is steering, so a delegated question would be answered by nobody — the responder is not mounted or not loaded',
+      }
+}
+
+/**
  * How the relayed turn that a delegation began actually ended.
  *
  * Reads the entries *after* the delegation rather than the whole record: a turn that failed an hour ago is
@@ -291,42 +400,32 @@ export function voiceToolDefinitions(deps: VoiceToolDeps): ToolDefinition[] {
       name: 'voice_diagnose',
       description:
         'Answer "is the voice working, and if not which part is wrong" from inside the running app. Reports '
-        + 'three checks with one verdict: whether a session is open, whether anything is steering — a '
-        + 'delegation nobody would answer is the most common fault and it looks like a broken model — and how '
-        + 'the last relayed turn actually ended, from the record rather than from anybody\'s recollection. '
-        + 'It does not check the credential or the audio route: those live in plugins this one does not hold, '
-        + 'and a check that cannot fail is not a check. Run `pnpm self-test` in the plugin repository for '
-        + 'those two.',
+        + 'five checks with one verdict: whether the route has what it needs to open a session at all, whether '
+        + 'anything is carrying audio and whether a client is attached, whether a session is open, whether '
+        + 'anything is steering — a delegation nobody would answer is the most common fault and it looks like a '
+        + 'broken model — and how the last relayed turn actually ended, from the record rather than from '
+        + 'anybody\'s recollection. Each check is pass, fail or waiting, and waiting means it could not be '
+        + 'judged rather than that it was fine. It cannot check that the route REFUSES an unauthorised client: '
+        + 'that is a property only a probe proves, so `pnpm self-test` in the plugin repository makes it.',
       parameters: {},
       output: jsonOutput(DIAGNOSE_VALUE),
       async execute(): Promise<DiagnoseAnswer> {
         const current = deps.status()
-        const steering = deps.steering()
-
-        const session = current.open
-          ? { name: 'session', state: 'pass' as const, detail: `open on ${current.provider}/${current.model}` }
-          : { name: 'session', state: 'fail' as const, detail: 'no session is open — ask for voice_start, and read the record for why the last one failed' }
-
-        // Nothing steering is a fault and not a quiet state: the delegation still leaves, and nobody answers it.
-        const delegation = steering.length > 0
-          ? {
-              name: 'delegation',
-              state: 'pass' as const,
-              detail: steering.map(claim => `${claim.owner} answers into ${claim.sessionId}`).join('; '),
-            }
-          : {
-              name: 'delegation',
-              state: 'fail' as const,
-              detail: 'nothing is steering, so a delegated question would be answered by nobody — the responder is not mounted or not loaded',
-            }
-
         const entries = deps.journal()
         const seen = entries.map(entry => entry.kind).lastIndexOf('delegation.seen')
-        const turn = seen === -1
-          ? { name: 'turn', state: 'waiting' as const, detail: 'nothing has been delegated yet, so there is no turn to judge' }
-          : turnCheck(entries.slice(seen + 1))
 
-        const checks = [session, delegation, turn]
+        // The five checks `scripts/self-test.mjs` makes from outside, in its order, restricted to the ones that
+        // can be made from in here: the credential and the transport are the seam's facts, the session, the
+        // delegation and the turn are this plugin's own, and the route's refusal half stays with the script.
+        const checks = [
+          credentialCheck(current, deps.providers()),
+          transportCheck(deps.transports()),
+          sessionCheck(current),
+          delegationCheck(deps.steering()),
+          seen === -1
+            ? { name: 'turn', state: 'waiting' as const, detail: 'nothing has been delegated yet, so there is no turn to judge' }
+            : turnCheck(entries.slice(seen + 1)),
+        ]
         const verdict = checks.some(check => check.state === 'fail')
           ? 'fail' as const
           : checks.some(check => check.state === 'waiting')

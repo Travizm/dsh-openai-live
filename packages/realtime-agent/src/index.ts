@@ -583,6 +583,8 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
       stop,
       status,
       steering: () => ctx.realtime.steering.snapshot(),
+      providers: () => ctx.realtime.listProviders(),
+      transports: () => ctx.realtime.transports.snapshot(),
       journal: () => journal.snapshot(),
       journalEntries: () => live.journalEntries,
     })

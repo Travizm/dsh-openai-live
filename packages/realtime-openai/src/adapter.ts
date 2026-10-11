@@ -26,9 +26,22 @@ const PROVIDER_NAME = 'OpenAI Live'
  * @returns the trimmed key.
  * @throws RealtimeError `NOT_CONFIGURED` when the setting is absent or blank.
  */
+/**
+ * Whether this route has anything to send as a credential.
+ *
+ * The non-throwing half of {@link resolveApiKey}, and exported beside it so the two cannot drift: a diagnostic
+ * that decided "configured" by its own rule would eventually disagree with the request path about the same
+ * configuration, and the disagreement would surface as a status that says fine while every open fails.
+ * @param config - the resolved configuration.
+ * @returns true when a key is present, whatever its value.
+ */
+export function hasApiKey(config: OpenAiLiveConfig): boolean {
+  return (config.apiKey ?? '').trim().length > 0
+}
+
 export function resolveApiKey(config: OpenAiLiveConfig): string {
   const key = (config.apiKey ?? '').trim()
-  if (key.length === 0) {
+  if (!hasApiKey(config)) {
     // A missing credential is a *state*, not a fault: it is what a fresh install looks like, and it
     // is fixed by supplying a value rather than by retrying. The detail says so in words the caller
     // can relay, and names the setting without ever approaching a value.
@@ -76,6 +89,9 @@ export class OpenAiLiveAdapter extends RealtimeAdapter {
       id: provider,
       name: PROVIDER_NAME,
       description: 'GPT-Live-1 full-duplex voice with client delegation',
+      // Whether, not which: the seam is readable by every plugin in the bundle, and a reader only ever needs
+      // to tell "nothing is configured" — the failure with no other symptom — from everything else.
+      configured: hasApiKey(this.config),
     }
   }
 

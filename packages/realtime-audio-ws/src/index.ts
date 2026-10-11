@@ -224,6 +224,15 @@ export function apply(ctx: Context, config: RealtimeAudioWsConfig): void {
       yield () => { release() }
     }, 'realtime-audio-ws.settings')
 
+    // The transport's own facts, on the seam beside the steering claims. A reader asked whether the voice works
+    // can then say whether a client is attached without importing this plugin or reading its control surface —
+    // and "nothing is attached" is the audio fault that looks like a broken model. An effect, so the
+    // declaration goes with the fiber that made it.
+    ctx.effect(function* () {
+      const release = injected.realtime.transports.add(() => ({ path: config.path, clients: clients.size }))
+      yield () => { release() }
+    }, 'realtime-audio-ws.transport')
+
     ctx.effect(() => {
       // The page is told where the route is and what to present. The web server gathers this table on every
       // index render and every worker boot-payload request, so the row is built at emit time — the only

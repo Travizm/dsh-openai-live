@@ -13,6 +13,18 @@ export interface RealtimeProviderInfo {
   name: string
   /** Optional one-line description of what this route speaks. */
   description?: string
+  /**
+   * Whether this route has what it needs to open a session at all — a credential, an endpoint, a fixture.
+   *
+   * A boolean, and that is the whole of what a diagnostics reader may have: never the value, and never a
+   * fingerprint or length of it, because the seam is readable by every plugin in the bundle and a
+   * credential-derived identifier leaks just as permanently as the key. An adapter that has nothing to
+   * configure omits it, and a reader must report that as "does not say" rather than assuming either answer.
+   *
+   * Absent-but-configured is the failure that looks like every other failure from the outside, which is why
+   * the self-test checks it before anything else.
+   */
+  configured?: boolean
 }
 
 /** One voice model advertised by an adapter. Catalog membership is advisory: it never gates a session. */

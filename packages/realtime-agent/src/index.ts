@@ -582,6 +582,7 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
       start: open,
       stop,
       status,
+      steering: () => ctx.realtime.steering.snapshot(),
       journal: () => journal.snapshot(),
       journalEntries: () => live.journalEntries,
     })

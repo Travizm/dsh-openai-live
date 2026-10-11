@@ -38,6 +38,7 @@ function build(overrides: Partial<VoiceToolDeps> = {}): { recorder: Recorder; to
     journal: () => [],
     journalEntries: () => 25,
     status: () => CLOSED,
+    steering: () => [],
     ...overrides,
   })
   return { recorder, tools }
@@ -91,14 +92,29 @@ describe('voiceToolDefinitions', () => {
         open: true, provider: 'openai-live', model: 'gpt-live-1', voice: 'marin', sessionId: 'sess-1',
       }
       const { tools } = build({ status: () => open })
-      expect(await tool(tools, 'voice_status').execute({}, EXEC)).toEqual(open)
+      expect(await tool(tools, 'voice_status').execute({}, EXEC)).toEqual({ ...open, steering: [] })
     })
 
     it('reports what a start would use when nothing is open', async () => {
       // "No session, and it would be openai-live" is a different answer from an absence, and it is the one
       // that lets a caller tell a wrong configuration from a closed session.
       const { tools } = build()
-      expect(await tool(tools, 'voice_status').execute({}, EXEC)).toEqual(CLOSED)
+      expect(await tool(tools, 'voice_status').execute({}, EXEC)).toEqual({ ...CLOSED, steering: [] })
+    })
+
+    it('reports which sessions plugins are steering, so the answer names the conversation', async () => {
+      // The doc's third question. An empty list is itself the answer to "would a delegation be answered".
+      const claims = [{ owner: 'realtime-responder', sessionId: 'session-a' }]
+      const { tools } = build({ steering: () => claims })
+      expect(await tool(tools, 'voice_status').execute({}, EXEC)).toMatchObject({ steering: claims })
+    })
+
+    it('copies the claims, so a caller cannot mutate the registry through a tool result', async () => {
+      const claims = [{ owner: 'realtime-responder', sessionId: 'session-a' }]
+      const { tools } = build({ steering: () => claims })
+      const answer = await tool(tools, 'voice_status').execute({}, EXEC)
+      ;(answer as { steering: Array<{ owner: string }> }).steering[0]!.owner = 'tampered'
+      expect(claims[0]?.owner).toBe('realtime-responder')
     })
 
     it('reads the status at the moment it is called, not when the tools were built', async () => {

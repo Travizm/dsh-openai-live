@@ -419,6 +419,16 @@ export function apply(ctx: Context, config: RealtimeResponderConfig): void {
     yield () => { release() }
   }, 'realtime-responder.settings')
 
+  // The session this responder answers into, declared on the seam rather than left inside this plugin's own
+  // settings row: a surface that wants to show which conversation the voice is steering reads the seam, and
+  // no plugin has to know another's name to say so. An effect, so the claim is withdrawn with the fiber that
+  // made it — a delegation arriving after this plugin is gone must not read as something that would be
+  // answered.
+  ctx.effect(function* () {
+    const release = ctx.realtime.steering.add({ owner: name, sessionId: () => live.sessionId })
+    yield () => { release() }
+  }, 'realtime-responder.steering')
+
   const run = createTurnRunner({
     // Accessors, not values: see `LiveValues`. This is the change that makes the resolved config an
     // initial state rather than the state.

@@ -1,5 +1,5 @@
 import { defineTool, type InferValue, type ToolDefinition, type ValueSchemaSpec } from '@deepseek-ai/dsh-tools'
-import type { JournalEntry, RealtimeSession } from 'dsh-realtime'
+import type { JournalEntry, RealtimeSession, SteeringClaim } from 'dsh-realtime'
 import type { RealtimeVoiceStatus } from './types.ts'
 
 /**
@@ -43,6 +43,14 @@ export interface VoiceToolDeps {
    * describe the session that existed then.
    */
   readonly status: () => RealtimeVoiceStatus
+  /**
+   * Which sessions plugins are steering, if any.
+   *
+   * Read from the seam rather than from a settings key: the pairing between a plugin and the conversation it
+   * answers into is the seam's fact, and a reader that had to name the responder to find it would be coupled
+   * to a plugin it has no other business with.
+   */
+  readonly steering: () => readonly SteeringClaim[]
   /**
    * Ceiling on how many entries one call may return.
    *
@@ -105,6 +113,18 @@ const STATUS_VALUE = {
     model: { type: 'string', required: true },
     voice: { type: 'string' },
     sessionId: { type: 'string' },
+    steering: {
+      type: 'array',
+      required: true,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          owner: { type: 'string', required: true },
+          sessionId: { type: 'string', required: true },
+        },
+      },
+    },
   },
 } as const
 
@@ -172,11 +192,18 @@ export function voiceToolDefinitions(deps: VoiceToolDeps): ToolDefinition[] {
       description:
         'Report the live voice session: whether one is open, which provider route and model it is on, the '
         + 'voice it settled on, and the provider\'s own session id while one is open. With nothing open it '
-        + 'reports what a start would use, which is the difference between "no session" and "no idea".',
+        + 'reports what a start would use, which is the difference between "no session" and "no idea". '
+        + 'Also reports which DSH session a plugin is steering, if any: that is the conversation a delegated '
+        + 'question is actually asked in, so an empty list means a delegation now would be answered by nobody.',
       parameters: {},
       output: jsonOutput(STATUS_VALUE),
       async execute() {
-        return deps.status()
+        // The claims are copied rather than handed out as the registry holds them, for the same reason the
+        // journal's entries are: a tool result must not be a handle on a registry's own state.
+        return {
+          ...deps.status(),
+          steering: deps.steering().map(claim => ({ owner: claim.owner, sessionId: claim.sessionId })),
+        }
       },
     }),
 

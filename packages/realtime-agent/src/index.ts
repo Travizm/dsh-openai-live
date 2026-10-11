@@ -140,6 +140,7 @@ export const Config = Schema.object({
   autoStart: Schema.boolean().default(false).description('Open a session as soon as the plugin mounts'),
   delegationTimeoutMs: Schema.number().default(10_000).description('Bound on waiting for a responder'),
   maxTranscriptChars: Schema.number().default(6_000).description('Character budget for the delegation transcript'),
+  journalEntries: Schema.number().default(25).description('Most journal entries voice_journal returns in one call'),
 })
 
 /** What {@link createHandlers} needs. Injected rather than closed over, so the handlers are testable. */
@@ -288,6 +289,7 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
     autoStart: String(config.autoStart),
     delegationTimeoutMs: String(config.delegationTimeoutMs),
     maxTranscriptChars: String(config.maxTranscriptChars),
+    journalEntries: String(config.journalEntries),
   })
 
   /**
@@ -298,7 +300,11 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
    * so, and it is registered below as restart-bound — which is what makes that correction bite rather
    * than merely being written down.
    */
-  const live = { delegationTimeoutMs: config.delegationTimeoutMs, maxTranscriptChars: config.maxTranscriptChars }
+  const live = {
+    delegationTimeoutMs: config.delegationTimeoutMs,
+    maxTranscriptChars: config.maxTranscriptChars,
+    journalEntries: config.journalEntries,
+  }
 
   const transcript = new TranscriptBuffer(() => live.maxTranscriptChars)
   let session: RealtimeSession | undefined
@@ -323,6 +329,14 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
         describe: 'Character budget for the transcript carried on a delegation',
         get: () => live.maxTranscriptChars,
         set: (value: number) => { live.maxTranscriptChars = requireCount('maxTranscriptChars', value) },
+      },
+      {
+        field: 'journalEntries',
+        kind: 'number',
+        scope: 'live',
+        describe: 'Most journal entries voice_journal returns in one call',
+        get: () => live.journalEntries,
+        set: (value: number) => { live.journalEntries = requireCount('journalEntries', value) },
       },
       {
         field: 'autoStart',
@@ -563,7 +577,13 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
   // Tools are an effect, like every other contribution this plugin makes: the fiber that mounted them
   // releases them, so there is no separate teardown path to forget.
   ctx.effect(function* () {
-    const disposers = voiceToolDefinitions({ session: () => session, start: open, stop })
+    const disposers = voiceToolDefinitions({
+      session: () => session,
+      start: open,
+      stop,
+      journal: () => journal.snapshot(),
+      journalEntries: () => live.journalEntries,
+    })
       .map(definition => ctx.tools.register(definition))
     yield () => { for (const dispose of disposers) dispose() }
   }, 'realtime-agent.tools')

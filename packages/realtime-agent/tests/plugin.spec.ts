@@ -3,6 +3,7 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { RealtimeAdapter, RealtimeRuntime, REALTIME_ERROR_CODES, RealtimeError, type Journal, type RealtimeDelegationProgress, type RealtimeSession, type RealtimeSessionHandlers, type RealtimeSessionOptions } from 'dsh-realtime'
 import * as agent from '../src/index.ts'
+import type { JournalToolAnswer } from '../src/tools.ts'
 import { Config, createHandlers, apply } from '../src/index.ts'
 import { TranscriptBuffer } from '../src/transcript.ts'
 import type { DelegationRequest, RealtimeAgentConfig } from '../src/types.ts'
@@ -298,6 +299,7 @@ describe('the journal the agent writes', () => {
       autoStart: 'true',
       delegationTimeoutMs: '10000',
       maxTranscriptChars: '6000',
+      journalEntries: '25',
     })
     // `instructions` is authored text of unbounded length: the journal records what happened, rather than
     // copying the configuration into itself. The sentinel is the same one the leak test uses.
@@ -683,7 +685,7 @@ describe('the voice tools a session exposes', () => {
     const { ctx: context, tools } = harness()
     apply(context, Config({ provider: 'fake' }) as RealtimeAgentConfig)
     expect(tools.registered.map(definition => definition.name))
-      .toEqual(['voice_start', 'voice_stop'])
+      .toEqual(['voice_start', 'voice_stop', 'voice_journal'])
   })
 
   it('releases them with the fiber that registered them', async () => {
@@ -693,7 +695,23 @@ describe('the voice tools a session exposes', () => {
     ctx = undefined
     // Registrations are effects. If this ever needs a separate teardown path, that path is what will
     // be forgotten on the day it matters.
-    expect(tools.released).toEqual(['voice_start', 'voice_stop'])
+    expect(tools.released).toEqual(['voice_start', 'voice_stop', 'voice_journal'])
+  })
+
+  it('reads the record this plugin writes, not an empty one it was handed', async () => {
+    // The unit suite hands the tool a journal it supplies, so only a test at this level can show that the
+    // tool the plugin actually registers is pointed at the journal the plugin actually writes to. Without
+    // it, a mis-wired accessor would answer every question with an empty record and every other test
+    // would still pass.
+    const { ctx: context, tools } = harness()
+    apply(context, Config({ provider: 'fake', autoStart: true }) as RealtimeAgentConfig)
+    await tick()
+
+    const journalTool = tools.registered.find(definition => definition.name === 'voice_journal')
+    const result = await journalTool!.execute({}, {} as never) as JournalToolAnswer
+
+    expect(result.entries.map(e => e.kind)).toContain('config.resolved')
+    expect(result.entries.map(e => e.kind)).toContain('session.opened')
   })
 
   it('opens exactly one session however often it is asked', async () => {
@@ -722,7 +740,7 @@ describe('the voice tools a session exposes', () => {
 })
 
 describe('the settings it declares', () => {
-  it('declares its two live fields, and the field the gate reclassified', async () => {
+  it('declares its three live fields, and the field the gate reclassified', async () => {
     const { ctx: context } = harness()
     apply(context, Config({ provider: 'fake', maxTranscriptChars: 6_000 }) as RealtimeAgentConfig)
 
@@ -744,6 +762,17 @@ describe('the settings it declares', () => {
         scope: 'live',
         describe: 'Character budget for the transcript carried on a delegation',
         value: 6_000,
+      },
+      {
+        // Read at each call of the journal tool, so a change reaches the next question rather than the
+        // next boot: this is the size of one answer, not of the record.
+        key: 'realtime-agent.journalEntries',
+        owner: 'realtime-agent',
+        field: 'journalEntries',
+        kind: 'number',
+        scope: 'live',
+        describe: 'Most journal entries voice_journal returns in one call',
+        value: 25,
       },
       {
         // Restart-bound, and declared so that the classification bites: see the refusal below. Its one
@@ -842,6 +871,22 @@ describe('the settings it declares', () => {
       .toMatchObject({ code: 'INVALID_SETTING', reason: /delegationTimeoutMs must be a positive whole number/ })
     expect(context.realtime.settings.apply('realtime-agent.maxTranscriptChars', 'lots'))
       .toMatchObject({ code: 'INVALID_SETTING' })
+    expect(context.realtime.settings.apply('realtime-agent.journalEntries', 'lots'))
+      .toMatchObject({ code: 'INVALID_SETTING', reason: /journalEntries must be a positive whole number/ })
+  })
+
+  it('applies a changed journal ceiling to the next call, rather than to the next boot', async () => {
+    // The field is read when the tool is called, so a change has to reach the next question: a copy taken
+    // when the plugin mounted would make the change look applied while the answer kept its old size.
+    const { ctx: context, tools } = harness()
+    apply(context, Config({ provider: 'fake', autoStart: true }) as RealtimeAgentConfig)
+    await tick()
+
+    expect(context.realtime.settings.apply('realtime-agent.journalEntries', '1')).toMatchObject({ ok: true })
+
+    const journalTool = tools.registered.find(definition => definition.name === 'voice_journal')
+    const answer = await journalTool!.execute({}, {} as never) as JournalToolAnswer
+    expect(answer.entries).toHaveLength(1)
   })
 
   it('withdraws its settings with the fiber that registered them', async () => {

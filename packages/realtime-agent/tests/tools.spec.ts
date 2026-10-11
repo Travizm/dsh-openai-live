@@ -14,12 +14,21 @@ interface Recorder {
 /** Only the id is read: the tool surface reports which session it opened, not what was said in it. */
 const sessionOf = (): RealtimeSession => ({ id: 'sess-1' } as unknown as RealtimeSession)
 
+/**
+ * The run these fixtures belong to.
+ *
+ * A journal names the run that wrote each entry, because `seq` restarts every boot and a file holding several
+ * boots could otherwise say that a boundary existed and never which one a row belonged to. Nothing the tools
+ * here do filters on it — they filter on the journal's *kinds* — so one id serves every fixture.
+ */
+const RUN_ID = 'run-1'
+
 /** A status as the plugin reports it with nothing open: the route a start *would* use. */
 const CLOSED: RealtimeVoiceStatus = { open: false, provider: 'openai-live', model: 'gpt-live-1' }
 
 /** One entry as the journal holds it. Real kinds, because the filter keys off one of them. */
 const entry = (seq: number, kind: JournalEntry['kind'], detail: Record<string, string> = {}): JournalEntry =>
-  ({ seq, at: 1_000 + seq, kind, detail })
+  ({ seq, at: 1_000 + seq, runId: RUN_ID, kind, detail })
 
 /** A journal whose last few entries are the playout frames that, measured, are 90% of a real one. */
 const withFrames = (before: JournalEntry[], frames: number): JournalEntry[] => [
@@ -247,7 +256,8 @@ describe('voiceToolDefinitions', () => {
   })
 
   describe('voice_diagnose', () => {
-    const at = (seq: number, kind: JournalEntry['kind']): JournalEntry => ({ seq, at: 1_000 + seq, kind, detail: {} })
+    const at = (seq: number, kind: JournalEntry['kind']): JournalEntry =>
+      ({ seq, at: 1_000 + seq, runId: RUN_ID, kind, detail: {} })
     const OPEN: RealtimeVoiceStatus = { open: true, provider: 'openai-live', model: 'gpt-live-1' }
     const CLAIM = [{ owner: 'realtime-responder', sessionId: 'session-a' }]
     /** A route that says it is configured, and a transport with a client on it: the passing baseline. */

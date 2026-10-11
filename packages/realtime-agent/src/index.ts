@@ -330,7 +330,7 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
     journalEntries: String(config.journalEntries),  })
 
   /**
-   * The four fields this plugin reads at the moment of use.
+   * The five fields this plugin reads at the moment of use.
    *
    * `autoStart` is deliberately **not** here as a changeable value. Its only read site is the boot
    * below, so a running process has nothing that could honour a change; the gate was corrected to say
@@ -342,7 +342,8 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
     maxTranscriptChars: config.maxTranscriptChars,
     transcriptQuietMs: config.transcriptQuietMs,
     transcriptSettleCapMs: config.transcriptSettleCapMs,
-    journalEntries: config.journalEntries,  }
+    journalEntries: config.journalEntries,
+  }
 
   const transcript = new TranscriptBuffer(() => live.maxTranscriptChars)
   let session: RealtimeSession | undefined
@@ -383,12 +384,15 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
         describe: 'Longest a delegation waits for the transcript to settle',
         get: () => live.transcriptSettleCapMs,
         set: (value: number) => { live.transcriptSettleCapMs = requireCount('transcriptSettleCapMs', value) },
+      },
+      {
         field: 'journalEntries',
         kind: 'number',
         scope: 'live',
         describe: 'Most journal entries voice_journal returns in one call',
         get: () => live.journalEntries,
-        set: (value: number) => { live.journalEntries = requireCount('journalEntries', value) },      },
+        set: (value: number) => { live.journalEntries = requireCount('journalEntries', value) },
+      },
       {
         field: 'autoStart',
         kind: 'boolean',

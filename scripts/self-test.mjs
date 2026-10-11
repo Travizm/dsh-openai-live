@@ -17,7 +17,8 @@
  *    unauthorised one. Both halves, because a route that accepts everybody is not "accepting".
  * 3. **session** — the agent opens a session and the seam has it.
  * 4. **prompt** — a delegation reaches a controller and is admitted.
- * 5. **turn** — the answer comes back and the provider acknowledges the append.
+ * 5. **turn** — the answer comes back, it is *our* turn's answer rather than one typed into the chat
+ *    while the voice waited, and the provider acknowledges the append.
  *
  * Checks 3-5 run against harness substitutes for the two things a script outside the app cannot
  * provide — a session controller and a provider — and against the **installed** seam, agent, responder
@@ -97,15 +98,29 @@ if (fromEnv || fromPatch) {
 // 2. Mount the installed artefacts, then check the route, the session, the prompt and the turn.
 // ---------------------------------------------------------------------------------------------
 
-/** A session controller the self-test owns: it records admissions. */
+/** A session controller the self-test owns: it records admissions, and starts the turn it was handed. */
 class SelfTestController extends Service {
   constructor(context) {
     super(context, 'sessionController')
     this.admitted = []
+    /** One turn number per admission, minted in the order the host would mint them. */
+    this.turns = []
+    this.context = context
   }
 
   prompt(request) {
     this.admitted.push(request)
+    // The host emits `turn/start` for our **own** prompt before the controller's promise resolves —
+    // measured on a running app. The runner gates everything it reports on the turn it latched, so that a
+    // session busy with somebody else's turn cannot have that turn's answer spoken back. A substitute that
+    // merely resolves leaves the latch with nothing to adopt, and every answer it produces is discarded as
+    // another conversation's: from the release that introduced the latch, this script reported
+    // `turn FAIL: returned null instead of the canned answer` for exactly that reason, against a stack
+    // whose delegation path the journal shows working. The shape is the host's own:
+    // `{ type: 'turn/start', data: { turn } }`, a number.
+    const turn = this.turns.length
+    this.turns.push(turn)
+    this.context.emit('session/event', { id: request.sessionId }, { type: 'turn/start', data: { turn } })
     return Promise.resolve({ accepted: true })
   }
 }
@@ -343,11 +358,30 @@ if (!existsSync(profileDir)) {
     provider.handlers?.onTranscript?.({ kind: 'input', text: 'is staging ok?', final: true })
     provider.handlers?.onDelegation?.(delegation)
     await new Promise(resolve => setTimeout(resolve, 25))
-    context.emit('session/event', { id: 'sess-self-test' }, {
+
+    // Every event the runner accepts has to carry the latched turn — ours — so each answer is emitted with
+    // the number the controller started that turn with. `step` is the host's own field on an assistant
+    // message; it is carried because a real one does.
+    //
+    // ONE ANSWER PER ADMISSION, not one answer for the latest: this script delivers the delegation down two
+    // paths on purpose (the serial call *and* the provider's own handler), and the version that only answered
+    // the last admission left the first runner — the one whose promise the check awaits — with a turn number
+    // that never matched, so it dropped its own answer and reported `returned null`. Which admission answered
+    // is not the check's business; that each admitted turn gets its answer is.
+    const turns = [...controller.turns]
+    const foreign = turns.length + 5
+    const answer = (forTurn, text) => context.emit('session/event', { id: 'sess-self-test' }, {
       type: 'assistant/message',
       surfaceOp: 'append',
-      data: { message: { content: [{ type: 'text', text: 'Staging is healthy.' }] } },
+      data: { turn: forTurn, step: 0, message: { content: [{ type: 'text', text }] } },
     })
+    if (turns.length > 0) {
+      // A turn nobody delegated, emitted FIRST. This is the only order in which the check can tell a latch
+      // that holds from a plugin that speaks whatever it sees: if this text is what comes back, the runner
+      // ignored whose turn it was, and the voice would read out a conversation it was not asked about.
+      answer(foreign, 'Not for the voice.')
+      for (const admittedTurn of turns) answer(admittedTurn, 'Staging is healthy.')
+    }
 
     if (controller.admitted.length > 0) pass('prompt', `controller admitted ${String(controller.admitted.length)} turn(s)`)
     else fail('prompt', 'no turn reached the controller — a session with nothing to admit into')
@@ -362,7 +396,9 @@ if (!existsSync(profileDir)) {
       acknowledged = kinds().includes('append.acknowledged')
     }
     if (speech?.text !== 'Staging is healthy.') {
-      fail('turn', `returned ${JSON.stringify(speech ?? null)} instead of the canned answer`)
+      fail('turn', speech?.text === 'Not for the voice.'
+        ? "returned ANOTHER turn's answer — the runner's turn latch did not hold, so the voice would speak a conversation it was not asked about"
+        : `returned ${JSON.stringify(speech ?? null)} instead of the canned answer`)
     } else if (journal === undefined) {
       warn('turn', `returned ${JSON.stringify(speech.text)} as ${String(speech.mode)}; no journal, so no acknowledgement to check`)
     } else if (acknowledged) {

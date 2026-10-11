@@ -117,6 +117,15 @@ if (context.realtime !== undefined) {
 const published = tools.registered.map(definition => definition.name)
 check(published.includes('voice_journal'), `voice_journal was not published: [${published.join(', ')}]`)
 
+const statusTool = tools.registered.find(definition => definition.name === 'voice_status')
+if (statusTool !== undefined) {
+  const reported = await statusTool.execute({}, {})
+  // Nothing is open in this composition, so the honest answer is what a start *would* use — which here is
+  // the replay route the row was configured with, read back through the built artifact.
+  check(reported.open === false, `voice_status reported an open session, and none was opened`)
+  check(reported.provider === 'replay', `voice_status reported provider ${reported.provider}`)
+}
+
 const journalTool = tools.registered.find(definition => definition.name === 'voice_journal')
 if (journalTool === undefined) {
   check(false, 'voice_journal is not on the tools service, so it could not be called')

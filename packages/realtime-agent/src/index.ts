@@ -581,6 +581,7 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
       session: () => session,
       start: open,
       stop,
+      status,
       journal: () => journal.snapshot(),
       journalEntries: () => live.journalEntries,
     })

@@ -1009,6 +1009,8 @@ describe('the settings it declares', () => {
         scope: 'live',
         describe: 'Longest a delegation waits for the transcript to settle',
         value: 1_500,
+      },
+      {
         // Read at each call of the journal tool, so a change reaches the next question rather than the
         // next boot: this is the size of one answer, not of the record.
         key: 'realtime-agent.journalEntries',
@@ -1017,7 +1019,8 @@ describe('the settings it declares', () => {
         kind: 'number',
         scope: 'live',
         describe: 'Most journal entries voice_journal returns in one call',
-        value: 25,      },
+        value: 25,
+      },
       {
         // Restart-bound, and declared so that the classification bites: see the refusal below. Its one
         // read site is the boot, so nothing a running process could do would honour a change.

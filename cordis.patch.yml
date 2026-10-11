@@ -49,7 +49,12 @@
         autoStart: false
         # The voice model waits this long for an answer. The responder's own `answerTimeoutMs` is the
         # other half of the same budget, and the smaller of the two decides what is actually heard.
-        delegationTimeoutMs: 45000
+        #
+        # Raised from 45 s to 180 s on measurement: a relayed turn that looked across sessions ran 87 s,
+        # and both 45 s budgets expired before the session had answered. It is shipped as the default so
+        # that no profile needs a row of its own to hold it — the profile that did was restating all four
+        # of this row's fields to change one of them, and the other three were already here, verbatim.
+        delegationTimeoutMs: 180000
         # The delegation contract, stated to the model because the protocol does not state it to the
         # model — `delegation: { type: 'client' }` in `session.start` tells the *service* that this
         # client delegates, and tells the voice model nothing about what to do with a request it cannot
@@ -93,7 +98,9 @@
       name: 'dsh-realtime-responder'
       config:
         sessionId: REPLACE_WITH_THE_SESSION_ID_TO_STEER
-        answerTimeoutMs: 45000
+        # Raised with the agent's `delegationTimeoutMs`, because the smaller of the two decides what is
+        # actually heard: a profile that raised only that one was answered by a 45 s window here.
+        answerTimeoutMs: 180000
         maxPromptChars: 4000
 
     # The audio route: the host end of the client half's transport. It claims a WebSocket upgrade route on

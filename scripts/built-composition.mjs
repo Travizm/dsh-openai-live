@@ -117,6 +117,15 @@ if (context.realtime !== undefined) {
 const published = tools.registered.map(definition => definition.name)
 check(published.includes('voice_journal'), `voice_journal was not published: [${published.join(', ')}]`)
 
+const configureTool = tools.registered.find(definition => definition.name === 'voice_configure')
+if (configureTool !== undefined) {
+  const listed = await configureTool.execute({}, {})
+  const keys = listed.settings.map(entry => entry.key)
+  check(listed.action === 'read', `voice_configure answered ${listed.action} with nothing addressed`)
+  // The registry the *installed* plugin registered, read back through the built artifact.
+  check(keys.includes('realtime-agent.journalEntries'), `the settings read back as [${keys.join(', ')}]`)
+}
+
 const diagnoseTool = tools.registered.find(definition => definition.name === 'voice_diagnose')
 if (diagnoseTool !== undefined) {
   const reported = await diagnoseTool.execute({}, {})

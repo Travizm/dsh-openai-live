@@ -1,5 +1,13 @@
 import { defineTool, type InferValue, type ToolDefinition, type ValueSchemaSpec } from '@deepseek-ai/dsh-tools'
-import type { JournalEntry, RealtimeProviderInfo, RealtimeSession, SteeringClaim, TransportStatus } from 'dsh-realtime'
+import type {
+  JournalEntry,
+  RealtimeProviderInfo,
+  RealtimeSession,
+  RealtimeSettingInfo,
+  RealtimeSettings,
+  SteeringClaim,
+  TransportStatus,
+} from 'dsh-realtime'
 import type { RealtimeVoiceStatus } from './types.ts'
 
 /**
@@ -56,6 +64,13 @@ export interface VoiceToolDeps {
   /** What carries audio, as the plugins that own the routes report it. */
   readonly transports: () => readonly TransportStatus[]
   /**
+   * The seam's settings registry, which is the only route a live field can be changed by.
+   *
+   * Taken as the registry's own members rather than restated, so this cannot disagree with the thing it
+   * describes about what a change returns or what a refusal carries.
+   */
+  readonly settings: Pick<RealtimeSettings, 'list' | 'apply'>
+  /**
    * Ceiling on how many entries one call may return.
    *
    * A bound is not a limit on what happened — it is the size of one answer, and it is configuration
@@ -109,7 +124,89 @@ export interface JournalToolAnswer {
 }
 
 /**
- * What one check found, in the vocabulary `scripts/self-test.mjs` already uses.
+ /**
+  * One setting, as the tool reports it.
+  *
+  * A `Pick` of the registry's own description rather than a restatement of it, and narrower than the whole
+  * thing on purpose: a status surface wants to know what can be changed and what it holds now, not which
+  * plugin registered it under which internal name.
+  */
+ function summariseSetting(setting: RealtimeSettingInfo): {
+   key: string
+   kind: string
+   scope: string
+   describe?: string
+   choices?: string[]
+   value?: ConfigureValue
+   } {
+   return {
+     key: setting.key,
+     kind: setting.kind,
+     scope: setting.scope,
+     ...setting.describe === undefined ? {} : { describe: setting.describe },
+    // The legal values, when the owner declared a set worth picking from: a caller deciding what to set has no
+    // business guessing at a value the registry could have named.
+    ...setting.choices === undefined ? {} : { choices: [...setting.choices] },
+     // Omitted rather than sent as nothing, because a **secret** setting reports no value back at all: a
+     // surface that echoed one would be the leak the write-only rule exists to prevent.
+     //
+     // The narrowing is where the registry's `unknown` meets this tool's declared kinds, and it is a narrowing
+     // rather than a guess: a setting declares one of string, number, boolean or string-list, so nothing else
+     // can be here. Written as a named cast so the one place the two representations meet is visible.
+     ...setting.value === undefined ? {} : { value: setting.value as ConfigureValue },
+   }
+ }
+
+ /**
+ * A setting's value as a surface may hold it, and every kind the registry declares.
+ *
+ * Narrower than the harness's own JSON value and deliberately so: this is a *subset*, which is assignable
+ * where a general JSON value is expected without importing the harness's type into a shipped file.
+ */
+export type ConfigureValue = string | number | boolean | string[] | null
+
+/** What one `voice_configure` call answers with. */
+ export interface ConfigureAnswer {
+   readonly action: 'read' | 'applied' | 'refused'
+   /** One line a person can act on, and for a refusal it is the registry's own reason, relayed verbatim. */
+   readonly detail: string
+   /** Every setting as it stands **after** the call, so a caller sees the effect rather than the request. */
+   readonly settings: Array<{
+    key: string
+    kind: string
+    scope: string
+    describe?: string
+    choices?: string[]
+    value?: ConfigureValue
+  }>
+ }
+
+ const CONFIGURE_VALUE = {
+   type: 'object',
+   additionalProperties: false,
+   properties: {
+     action: { type: 'string', required: true, enum: ['read', 'applied', 'refused'] },
+     detail: { type: 'string', required: true },
+     settings: {
+       type: 'array',
+       required: true,
+       items: {
+         type: 'object',
+         additionalProperties: false,
+         properties: {
+           key: { type: 'string', required: true },
+           kind: { type: 'string', required: true },
+           scope: { type: 'string', required: true },
+           describe: { type: 'string' },
+           choices: { type: 'array', items: { type: 'string' } },
+           value: { type: 'json' },
+         },
+       },
+     },
+   },
+ } as const
+
+ /** What one check found, in the vocabulary `scripts/self-test.mjs` already uses.
  *
  * `waiting` is not a hedge: a check with nothing to look at yet — no delegation has been raised — reports
  * that, and a two-valued field would have to call it a pass and become a check that cannot fail.
@@ -393,6 +490,59 @@ export function voiceToolDefinitions(deps: VoiceToolDeps): ToolDefinition[] {
           ...deps.status(),
           steering: deps.steering().map(claim => ({ owner: claim.owner, sessionId: claim.sessionId })),
         }
+      },
+    }),
+
+    defineTool({
+      name: 'voice_configure',
+      description:
+        'Read the voice plugins\' live settings, and change one. Call it with no arguments to list every '
+        + 'field with what it holds now and whether a change would take effect; call it with a key and a value '
+        + 'to change one. Only fields marked `live` can be changed — a session-bound or restart-bound field is '
+        + 'refused with the reason, and the reason is written to be relayed as it stands. The registry is the '
+        + 'only route a live change can take, so this is the same path the app\'s own controls use, and a value '
+        + 'a plugin clamps is reported as the plugin now holds it rather than as it was asked for.',
+      parameters: {
+        key: {
+          type: 'string',
+          description: 'The setting to change, as `<owner>.<field>`. Omit it to read instead of changing anything.',
+        },
+        value: {
+          type: 'string',
+          description: 'The new value as text; the registry validates it. Required when a key is given.',
+        },
+      },
+      output: jsonOutput(CONFIGURE_VALUE),
+      async execute(args): Promise<ConfigureAnswer> {
+        const listed = (): ConfigureAnswer['settings'] => deps.settings.list().map(setting => summariseSetting(setting))
+
+        if (args.key === undefined) {
+          const settings = listed()
+          return {
+            action: 'read',
+            detail: `${settings.length} setting(s) declared by the plugins in this bundle`,
+            settings,
+          }
+        }
+        // Refused rather than guessed: a key with no value is a change nobody described, and applying the
+        // empty string would silently write one — the failure mode a control surface exists to avoid.
+        if (args.value === undefined) {
+          return {
+            action: 'refused',
+            detail: `a change needs both a key and a value: "${args.key}" was given without one`,
+            settings: listed(),
+          }
+        }
+        const outcome = deps.settings.apply(args.key, args.value)
+        return outcome.ok
+          ? {
+              action: 'applied',
+              // The value the plugin *now* holds, not the one that was asked for: a setter may clamp it, and
+              // the difference is the whole reason a caller reads back.
+              detail: `"${outcome.key}" is now ${JSON.stringify(outcome.value)}`,
+              settings: listed(),
+            }
+          : { action: 'refused', detail: outcome.reason, settings: listed() }
       },
     }),
 

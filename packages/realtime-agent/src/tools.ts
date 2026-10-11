@@ -104,6 +104,55 @@ export interface JournalToolAnswer {
   readonly skippedFrames: number
 }
 
+/**
+ * What one check found, in the vocabulary `scripts/self-test.mjs` already uses.
+ *
+ * `waiting` is not a hedge: a check with nothing to look at yet — no delegation has been raised — reports
+ * that, and a two-valued field would have to call it a pass and become a check that cannot fail.
+ */
+export interface DiagnoseCheck {
+  readonly name: string
+  readonly state: 'pass' | 'fail' | 'waiting'
+  /** One line a person can act on, which is the only reason to report the check at all. */
+  readonly detail: string
+}
+
+/** The verdict and the checks behind it. */
+export interface DiagnoseAnswer {
+  readonly verdict: 'pass' | 'partial' | 'fail'
+  readonly checks: DiagnoseCheck[]
+}
+
+/**
+ * The three ways a relayed turn ends, and only these three end it.
+ *
+ * Named as a set because the check was first written to stop at *any* entry it recognised — and
+ * `prompt.admitted` is an intermediate step, not an ending, so a turn that had already been answered
+ * reported as still running. What ends a turn is an answer, a refusal, or a window elapsing with neither.
+ */
+const TURN_ENDINGS = ['prompt.refused', 'window.elapsed', 'answer.received']
+
+const DIAGNOSE_VALUE = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    verdict: { type: 'string', required: true, enum: ['pass', 'partial', 'fail'] },
+    checks: {
+      type: 'array',
+      required: true,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          name: { type: 'string', required: true },
+          state: { type: 'string', required: true, enum: ['pass', 'fail', 'waiting'] },
+          detail: { type: 'string', required: true },
+        },
+      },
+    },
+  },
+} as const
+
 const STATUS_VALUE = {
   type: 'object',
   additionalProperties: false,
@@ -149,6 +198,37 @@ const JOURNAL_VALUE = {
     skippedFrames: { type: 'number', required: true },
   },
 } as const
+
+/**
+ * How the relayed turn that a delegation began actually ended.
+ *
+ * Reads the entries *after* the delegation rather than the whole record: a turn that failed an hour ago is
+ * history, and the question is what happened to the last one. The first ending kind wins, because the
+ * responder stops at one of them — an answer, a refusal, or a window that elapsed with none.
+ * @param after - the entries recorded since the delegation was seen.
+ * @returns the check, with a detail naming the ending.
+ */
+function turnCheck(after: readonly JournalEntry[]): DiagnoseCheck {
+  const ended = after.find(entry => TURN_ENDINGS.includes(entry.kind))?.kind
+  if (ended === 'answer.received') {
+    return { name: 'turn', state: 'pass', detail: 'the last delegation was answered' }
+  }
+  if (ended === 'prompt.refused') {
+    return { name: 'turn', state: 'fail', detail: 'the last delegation was refused, so nothing was asked — the refusal entry names the reason' }
+  }
+  if (ended === 'window.elapsed') {
+    return {
+      name: 'turn',
+      state: 'fail',
+      detail: 'the last delegation was admitted and never answered — it is the session that is quiet, not the voice',
+    }
+  }
+  // No ending yet: either the turn is running, or it has not begun to be answered at all. The difference is
+  // the one thing a person watching would notice, so it is the one thing the detail names.
+  return after.some(entry => entry.kind === 'prompt.admitted')
+    ? { name: 'turn', state: 'waiting', detail: 'the last delegation was admitted and has not ended yet' }
+    : { name: 'turn', state: 'waiting', detail: 'the last delegation was seen and nothing has come of it yet' }
+}
 
 /**
  * The tools that let an agent drive a voice session, and read what happened to it.
@@ -204,6 +284,55 @@ export function voiceToolDefinitions(deps: VoiceToolDeps): ToolDefinition[] {
           ...deps.status(),
           steering: deps.steering().map(claim => ({ owner: claim.owner, sessionId: claim.sessionId })),
         }
+      },
+    }),
+
+    defineTool({
+      name: 'voice_diagnose',
+      description:
+        'Answer "is the voice working, and if not which part is wrong" from inside the running app. Reports '
+        + 'three checks with one verdict: whether a session is open, whether anything is steering — a '
+        + 'delegation nobody would answer is the most common fault and it looks like a broken model — and how '
+        + 'the last relayed turn actually ended, from the record rather than from anybody\'s recollection. '
+        + 'It does not check the credential or the audio route: those live in plugins this one does not hold, '
+        + 'and a check that cannot fail is not a check. Run `pnpm self-test` in the plugin repository for '
+        + 'those two.',
+      parameters: {},
+      output: jsonOutput(DIAGNOSE_VALUE),
+      async execute(): Promise<DiagnoseAnswer> {
+        const current = deps.status()
+        const steering = deps.steering()
+
+        const session = current.open
+          ? { name: 'session', state: 'pass' as const, detail: `open on ${current.provider}/${current.model}` }
+          : { name: 'session', state: 'fail' as const, detail: 'no session is open — ask for voice_start, and read the record for why the last one failed' }
+
+        // Nothing steering is a fault and not a quiet state: the delegation still leaves, and nobody answers it.
+        const delegation = steering.length > 0
+          ? {
+              name: 'delegation',
+              state: 'pass' as const,
+              detail: steering.map(claim => `${claim.owner} answers into ${claim.sessionId}`).join('; '),
+            }
+          : {
+              name: 'delegation',
+              state: 'fail' as const,
+              detail: 'nothing is steering, so a delegated question would be answered by nobody — the responder is not mounted or not loaded',
+            }
+
+        const entries = deps.journal()
+        const seen = entries.map(entry => entry.kind).lastIndexOf('delegation.seen')
+        const turn = seen === -1
+          ? { name: 'turn', state: 'waiting' as const, detail: 'nothing has been delegated yet, so there is no turn to judge' }
+          : turnCheck(entries.slice(seen + 1))
+
+        const checks = [session, delegation, turn]
+        const verdict = checks.some(check => check.state === 'fail')
+          ? 'fail' as const
+          : checks.some(check => check.state === 'waiting')
+            ? 'partial' as const
+            : 'pass' as const
+        return { verdict, checks }
       },
     }),
 

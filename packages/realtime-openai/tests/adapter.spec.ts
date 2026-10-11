@@ -1,7 +1,7 @@
 import { Buffer } from 'node:buffer'
 import { describe, expect, it, vi } from 'vitest'
 import type { RealtimeSessionHandlers, RealtimeSessionStarted } from 'dsh-realtime'
-import { OpenAiLiveAdapter, resolveApiKey } from '../src/adapter.ts'
+import { hasApiKey, OpenAiLiveAdapter, resolveApiKey } from '../src/adapter.ts'
 import { OpenAiLiveSession } from '../src/session.ts'
 import type {
   OpenAiLiveConfig,
@@ -157,7 +157,25 @@ describe('OpenAiLiveAdapter metadata', () => {
       id: 'openai-live',
       name: 'OpenAI Live',
       description: 'GPT-Live-1 full-duplex voice with client delegation',
+      configured: true,
     })
+  })
+
+  it('reports a route with no credential as unconfigured rather than failing to describe itself', () => {
+    // The boolean is the whole of what a diagnostics reader may have, and it answers rather than throwing,
+    // because the question is asked exactly when an open has already failed — a status that threw here would
+    // be a status nobody could get.
+    const bare = new OpenAiLiveAdapter(configWithoutKey(), new FakeFactory())
+    expect(bare.providerInfo('openai-live')).toMatchObject({ id: 'openai-live', configured: false })
+  })
+
+  it('decides "configured" by the same rule the request path uses, whitespace included', () => {
+    // `resolveApiKey` and this must never disagree: a diagnostic that said fine while every open was refused
+    // for want of a key would be worse than no diagnostic.
+    expect(hasApiKey(config())).toBe(true)
+    expect(hasApiKey(configWithoutKey())).toBe(false)
+    expect(hasApiKey(config({ apiKey: '   ' }))).toBe(false)
+    expect(() => resolveApiKey(config({ apiKey: '   ' }))).toThrow()
   })
 
   it('advertises the configured model as advisory metadata', async () => {

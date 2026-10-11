@@ -13,6 +13,7 @@ import { Service, type Context } from '@deepseek-ai/cordis'
 import { REALTIME_ERROR_CODES, RealtimeError } from './error.ts'
 import { Journal } from './journal.ts'
 import { SteeringRegistry } from './steering.ts'
+import { TransportRegistry } from './transport.ts'
 import { RealtimeSettings } from './settings.ts'
 import type {
   RealtimeDelegation,
@@ -28,6 +29,7 @@ export * from './error.ts'
 export * from './redact.ts'
 export * from './journal.ts'
 export * from './steering.ts'
+export * from './transport.ts'
 export * from './settings.ts'
 export { RealtimeError, REALTIME_ERROR_CODES } from './error.ts'
 
@@ -144,6 +146,15 @@ export class RealtimeRuntime extends Service {
    * a surface can report where the voice is pointed without knowing the name of the plugin that steers it.
    */
   readonly steering = new SteeringRegistry()
+
+  /**
+   * What carries audio, as the plugins that own the routes report it.
+   *
+   * Here rather than on the audio plugin for the same reason the steering claims are: a reader asked whether
+   * the voice works needs to say whether anything could reach it, without importing the plugin that owns the
+   * transport.
+   */
+  readonly transports = new TransportRegistry()
 
   /**
    * @param ctx - the Cordis context this service is mounted on.

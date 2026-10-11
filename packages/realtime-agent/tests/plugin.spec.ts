@@ -3,7 +3,7 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { RealtimeAdapter, RealtimeRuntime, REALTIME_ERROR_CODES, RealtimeError, type Journal, type RealtimeDelegationProgress, type RealtimeSession, type RealtimeSessionHandlers, type RealtimeSessionOptions } from 'dsh-realtime'
 import * as agent from '../src/index.ts'
-import type { JournalToolAnswer } from '../src/tools.ts'
+import type { DiagnoseAnswer, JournalToolAnswer } from '../src/tools.ts'
 import { Config, createHandlers, apply } from '../src/index.ts'
 import { TranscriptBuffer } from '../src/transcript.ts'
 import type { DelegationRequest, RealtimeAgentConfig } from '../src/types.ts'
@@ -711,6 +711,26 @@ describe('the voice tools a session exposes', () => {
     expect(await call('voice_status')).toMatchObject({ open: false, provider: 'fake', steering: [] })
     await call('voice_start')
     expect(await call('voice_status')).toMatchObject({ open: true, sessionId: 'sess-1' })
+  })
+
+  it('diagnoses from the seam, through the tool a model would call', async () => {
+    // The wiring test for the five checks: every one of them is read from the seam or from this plugin's own
+    // record, so only a test at this level can show the accessors are pointed at the live ones. This harness
+    // mounts no transport, no responder and an adapter that reports nothing about its credential, and all
+    // three of those facts have to come back out of the tool.
+    const { ctx: context, tools } = harness()
+    apply(context, Config({ provider: 'fake' }) as RealtimeAgentConfig)
+    const call = async (name: string) =>
+      await tools.registered.find(definition => definition.name === name)!.execute({}, {} as never)
+    const answer = await call('voice_diagnose') as DiagnoseAnswer
+
+    expect(answer.checks.map(check => check.name)).toEqual(['key', 'route', 'session', 'delegation', 'turn'])
+    // The adapter here is the seam's base class, whose metadata says nothing about a credential: `waiting` is
+    // the honest answer, and the branch that reports it.
+    expect(answer.checks.find(check => check.name === 'key')).toMatchObject({ state: 'waiting' })
+    expect(answer.checks.find(check => check.name === 'route')).toMatchObject({ state: 'fail' })
+    expect(answer.checks.find(check => check.name === 'delegation')).toMatchObject({ state: 'fail' })
+    expect(answer.verdict).toBe('fail')
   })
 
   it('reads the record this plugin writes, not an empty one it was handed', async () => {

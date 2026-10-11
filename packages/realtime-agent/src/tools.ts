@@ -1,5 +1,6 @@
 import { defineTool, type InferValue, type ToolDefinition, type ValueSchemaSpec } from '@deepseek-ai/dsh-tools'
 import type { JournalEntry, RealtimeSession } from 'dsh-realtime'
+import type { RealtimeVoiceStatus } from './types.ts'
 
 /**
  * A canonical output declaration rendered as JSON.
@@ -35,6 +36,13 @@ export interface VoiceToolDeps {
    * "what has happened", and a copy taken at registration would answer that once and then lie.
    */
   readonly journal: () => readonly JournalEntry[]
+  /**
+   * The live session's state, as the plugin that owns the session is the only one that can report it.
+   *
+   * An accessor for the same reason the journal is one: a copy taken when the tools were built would
+   * describe the session that existed then.
+   */
+  readonly status: () => RealtimeVoiceStatus
   /**
    * Ceiling on how many entries one call may return.
    *
@@ -87,6 +95,18 @@ export interface JournalToolAnswer {
   /** Entries left out for being per-frame audio accounting. See {@link PLAYOUT_KIND}. */
   readonly skippedFrames: number
 }
+
+const STATUS_VALUE = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    open: { type: 'boolean', required: true },
+    provider: { type: 'string', required: true },
+    model: { type: 'string', required: true },
+    voice: { type: 'string' },
+    sessionId: { type: 'string' },
+  },
+} as const
 
 const JOURNAL_VALUE = {
   type: 'object',
@@ -144,6 +164,19 @@ export function voiceToolDefinitions(deps: VoiceToolDeps): ToolDefinition[] {
         const wasOpen = deps.session() !== undefined
         await deps.stop()
         return { closed: wasOpen }
+      },
+    }),
+
+    defineTool({
+      name: 'voice_status',
+      description:
+        'Report the live voice session: whether one is open, which provider route and model it is on, the '
+        + 'voice it settled on, and the provider\'s own session id while one is open. With nothing open it '
+        + 'reports what a start would use, which is the difference between "no session" and "no idea".',
+      parameters: {},
+      output: jsonOutput(STATUS_VALUE),
+      async execute() {
+        return deps.status()
       },
     }),
 

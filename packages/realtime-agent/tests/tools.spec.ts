@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { JournalEntry, RealtimeSession } from 'dsh-realtime'
 import { voiceToolDefinitions, type JournalToolAnswer, type VoiceToolDeps } from '../src/tools.ts'
+import type { RealtimeVoiceStatus } from '../src/types.ts'
 
 /** The execute bodies under test never touch the execution context, so a placeholder is honest here. */
 const EXEC = {} as never
@@ -11,6 +12,9 @@ interface Recorder {
 
 /** Only the id is read: the tool surface reports which session it opened, not what was said in it. */
 const sessionOf = (): RealtimeSession => ({ id: 'sess-1' } as unknown as RealtimeSession)
+
+/** A status as the plugin reports it with nothing open: the route a start *would* use. */
+const CLOSED: RealtimeVoiceStatus = { open: false, provider: 'openai-live', model: 'gpt-live-1' }
 
 /** One entry as the journal holds it. Real kinds, because the filter keys off one of them. */
 const entry = (seq: number, kind: JournalEntry['kind'], detail: Record<string, string> = {}): JournalEntry =>
@@ -33,6 +37,7 @@ function build(overrides: Partial<VoiceToolDeps> = {}): { recorder: Recorder; to
     },
     journal: () => [],
     journalEntries: () => 25,
+    status: () => CLOSED,
     ...overrides,
   })
   return { recorder, tools }
@@ -45,9 +50,10 @@ const tool = (tools: ReturnType<typeof voiceToolDefinitions>, name: string) => {
 }
 
 describe('voiceToolDefinitions', () => {
-  it('publishes the two session controls and the one that reads the record', () => {
+  it('publishes the two session controls, the status, and the one that reads the record', () => {
     const { tools } = build()
-    expect(tools.map(definition => definition.name)).toEqual(['voice_start', 'voice_stop', 'voice_journal'])
+    expect(tools.map(definition => definition.name))
+      .toEqual(['voice_start', 'voice_stop', 'voice_status', 'voice_journal'])
     for (const definition of tools) {
       expect(definition.description.length).toBeGreaterThan(0)
       expect(definition.output.schema).toBeDefined()
@@ -77,6 +83,35 @@ describe('voiceToolDefinitions', () => {
     const { recorder, tools } = build()
     expect(await tool(tools, 'voice_stop').execute({}, EXEC)).toEqual({ closed: true })
     expect(recorder.stopped).toBe(1)
+  })
+
+  describe('voice_status', () => {
+    it('reports an open session as the plugin holds it, field for field', async () => {
+      const open: RealtimeVoiceStatus = {
+        open: true, provider: 'openai-live', model: 'gpt-live-1', voice: 'marin', sessionId: 'sess-1',
+      }
+      const { tools } = build({ status: () => open })
+      expect(await tool(tools, 'voice_status').execute({}, EXEC)).toEqual(open)
+    })
+
+    it('reports what a start would use when nothing is open', async () => {
+      // "No session, and it would be openai-live" is a different answer from an absence, and it is the one
+      // that lets a caller tell a wrong configuration from a closed session.
+      const { tools } = build()
+      expect(await tool(tools, 'voice_status').execute({}, EXEC)).toEqual(CLOSED)
+    })
+
+    it('reads the status at the moment it is called, not when the tools were built', async () => {
+      // A snapshot taken at registration would describe the session that existed then, and would answer
+      // "closed" for ever after the first start.
+      let open = false
+      const { tools } = build({ status: () => ({ open, provider: 'openai-live', model: 'gpt-live-1' }) })
+      const first = await tool(tools, 'voice_status').execute({}, EXEC)
+      open = true
+      const second = await tool(tools, 'voice_status').execute({}, EXEC)
+      expect(first).toMatchObject({ open: false })
+      expect(second).toMatchObject({ open: true })
+    })
   })
 
   describe('voice_journal', () => {

@@ -685,7 +685,7 @@ describe('the voice tools a session exposes', () => {
     const { ctx: context, tools } = harness()
     apply(context, Config({ provider: 'fake' }) as RealtimeAgentConfig)
     expect(tools.registered.map(definition => definition.name))
-      .toEqual(['voice_start', 'voice_stop', 'voice_journal'])
+      .toEqual(['voice_start', 'voice_stop', 'voice_status', 'voice_journal'])
   })
 
   it('releases them with the fiber that registered them', async () => {
@@ -695,7 +695,20 @@ describe('the voice tools a session exposes', () => {
     ctx = undefined
     // Registrations are effects. If this ever needs a separate teardown path, that path is what will
     // be forgotten on the day it matters.
-    expect(tools.released).toEqual(['voice_start', 'voice_stop', 'voice_journal'])
+    expect(tools.released).toEqual(['voice_start', 'voice_stop', 'voice_status', 'voice_journal'])
+  })
+
+  it('reports the session it opened, through the tool a model would call', async () => {
+    // The wiring test for the status tool: the unit suite supplies the status, so only this can show that
+    // the registered tool is reading the plugin's own session rather than a fixed answer.
+    const { ctx: context, tools } = harness()
+    apply(context, Config({ provider: 'fake' }) as RealtimeAgentConfig)
+    const call = async (name: string) =>
+      await tools.registered.find(definition => definition.name === name)!.execute({}, {} as never)
+
+    expect(await call('voice_status')).toMatchObject({ open: false, provider: 'fake' })
+    await call('voice_start')
+    expect(await call('voice_status')).toMatchObject({ open: true, sessionId: 'sess-1' })
   })
 
   it('reads the record this plugin writes, not an empty one it was handed', async () => {

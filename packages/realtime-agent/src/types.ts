@@ -71,6 +71,8 @@ export interface RealtimeAgentConfig {
   delegationTimeoutMs: number
   /** Character budget for the transcript carried on a delegation request. */
   maxTranscriptChars: number
+  /** Ceiling, in entries, on what one `voice_journal` call returns. */
+  journalEntries: number
 }
 
 /**

@@ -23,7 +23,15 @@
 
 import Schema from '@deepseek-ai/schemastery'
 import type { Context } from '@deepseek-ai/cordis'
-import type { RealtimeDelegation, RealtimeDelegationProgress, RealtimeDelegationSettlement, RealtimeSession, RealtimeSessionHandlers, RealtimeTranscript } from 'dsh-realtime'
+import type {
+  RealtimeDelegation,
+  RealtimeDelegationProgress,
+  RealtimeDelegationSettlement,
+  RealtimeSession,
+  RealtimeSessionHandlers,
+  RealtimeSessionOptions,
+  RealtimeTranscript,
+} from 'dsh-realtime'
 import { REALTIME_ERROR_CODES, RealtimeError } from 'dsh-realtime'
 import { answerDelegation, type DelegationAppend, type DelegationAsker } from './bridge.ts'
 import { voiceToolDefinitions } from './tools.ts'
@@ -369,6 +377,42 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
    */
   const waiting = new Map<string, RealtimeSession>()
 
+  /**
+   * Open a provider session and close it, so the provider's own answer can be heard.
+   *
+   * Deliberately not `open()`: that path adopts whatever it opens as the live session, and a diagnostic that
+   * displaced the session it was reporting on would be worse than no diagnostic. The `refusalFor` classifier
+   * is reused rather than re-derived, so a probe's answer and an open's refusal cannot disagree about what a
+   * provider error means — and it drops the message for the same reason, because a provider error is where a
+   * credential turns up and this plugin holds none to redact against.
+   * @returns whether a session was accepted, and the classified refusal when it was not.
+   */
+  /**
+   * What this plugin asks a provider for, in one place.
+   *
+   * Shared with {@link probeProvider} so that a probe and the live session cannot ask for different things: a
+   * diagnostic that tested a session configuration nobody uses would answer, confidently, about the wrong
+   * thing. The optional fields are spread rather than set to `undefined`, because a provider default is what an
+   * unset voice or instruction set means.
+   * @returns the options, without the handlers each caller supplies for itself.
+   */
+  const sessionOptions = (): Omit<RealtimeSessionOptions, 'handlers'> => ({
+    provider: config.provider,
+    model: config.model,
+    ...config.voice === undefined ? {} : { voice: config.voice },
+    ...config.instructions === undefined ? {} : { instructions: config.instructions },
+  })
+
+  const probeProvider = async (): Promise<{ ok: true } | { ok: false; refusal: RealtimeSessionRefusal }> => {
+    try {
+      const opened = await ctx.realtime.session({ ...sessionOptions() })
+      await opened.close()
+      return { ok: true }
+    } catch (error) {
+      return { ok: false, refusal: refusalFor(error) }
+    }
+  }
+
   const handlers = createHandlers({
     transcript,
     session: () => session,
@@ -442,13 +486,7 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
   const open = async (): Promise<RealtimeSession> => {
     const current = session
     if (current !== undefined) return current
-    const opened = await ctx.realtime.session({
-      provider: config.provider,
-      model: config.model,
-      ...config.voice === undefined ? {} : { voice: config.voice },
-      ...config.instructions === undefined ? {} : { instructions: config.instructions },
-      handlers,
-    })
+    const opened = await ctx.realtime.session({ ...sessionOptions(), handlers })
     session = opened
     journal.record('session.opened', { provider: config.provider, model: config.model })
     return opened
@@ -585,6 +623,7 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
       steering: () => ctx.realtime.steering.snapshot(),
       providers: () => ctx.realtime.listProviders(),
       settings: ctx.realtime.settings,
+      probe: probeProvider,
       transports: () => ctx.realtime.transports.snapshot(),
       journal: () => journal.snapshot(),
       journalEntries: () => live.journalEntries,

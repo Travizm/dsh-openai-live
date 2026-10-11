@@ -3,7 +3,7 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { RealtimeAdapter, RealtimeRuntime, REALTIME_ERROR_CODES, RealtimeError, type Journal, type RealtimeDelegationProgress, type RealtimeSession, type RealtimeSessionHandlers, type RealtimeSessionOptions } from 'dsh-realtime'
 import * as agent from '../src/index.ts'
-import type { ConfigureAnswer, DiagnoseAnswer, JournalToolAnswer } from '../src/tools.ts'
+import type { ConfigureAnswer, DiagnoseAnswer, JournalToolAnswer, ProbeAnswer } from '../src/tools.ts'
 import { Config, createHandlers, apply } from '../src/index.ts'
 import { TranscriptBuffer } from '../src/transcript.ts'
 import type { DelegationRequest, RealtimeAgentConfig } from '../src/types.ts'
@@ -685,7 +685,10 @@ describe('the voice tools a session exposes', () => {
     const { ctx: context, tools } = harness()
     apply(context, Config({ provider: 'fake' }) as RealtimeAgentConfig)
     expect(tools.registered.map(definition => definition.name))
-      .toEqual(['voice_start', 'voice_stop', 'voice_status', 'voice_configure', 'voice_diagnose', 'voice_journal'])
+      .toEqual([
+        'voice_start', 'voice_stop', 'voice_status', 'voice_configure', 'voice_diagnose', 'voice_probe_provider',
+        'voice_journal',
+      ])
   })
 
   it('releases them with the fiber that registered them', async () => {
@@ -695,7 +698,10 @@ describe('the voice tools a session exposes', () => {
     ctx = undefined
     // Registrations are effects. If this ever needs a separate teardown path, that path is what will
     // be forgotten on the day it matters.
-    expect(tools.released).toEqual(['voice_start', 'voice_stop', 'voice_status', 'voice_configure', 'voice_diagnose', 'voice_journal'])
+    expect(tools.released).toEqual([
+      'voice_start', 'voice_stop', 'voice_status', 'voice_configure', 'voice_diagnose', 'voice_probe_provider',
+      'voice_journal',
+    ])
   })
 
   it('reports the session it opened, through the tool a model would call', async () => {
@@ -711,6 +717,26 @@ describe('the voice tools a session exposes', () => {
     expect(await call('voice_status')).toMatchObject({ open: false, provider: 'fake', steering: [] })
     await call('voice_start')
     expect(await call('voice_status')).toMatchObject({ open: true, sessionId: 'sess-1' })
+  })
+
+  it('probes the provider without adopting the session it opens', async () => {
+    // The property that makes the probe safe to call at all: it goes through the seam directly rather than
+    // through the agent's own `open()`, so the live session is untouched — a diagnostic that displaced the
+    // session it was reporting on would be worse than no diagnostic.
+    const { ctx: context, adapter, tools } = harness()
+    apply(context, Config({ provider: 'fake' }) as RealtimeAgentConfig)
+    const call = async (name: string) =>
+      await tools.registered.find(definition => definition.name === name)!.execute({}, {} as never)
+
+    expect(await call('voice_probe_provider')).toMatchObject({ ok: true })
+    expect(adapter.opened).toBe(1)
+    // Still closed, because the probe's session was not adopted as the plugin's own.
+    expect(await call('voice_status')).toMatchObject({ open: false })
+
+    // And a provider that refuses is reported as a class when there is no code: the same classifier an open
+    // uses, so the two cannot disagree about what a provider error means.
+    adapter.refuseOpen = true
+    expect(await call('voice_probe_provider') as ProbeAnswer).toMatchObject({ ok: false, class: 'Error' })
   })
 
   it('reads the settings this bundle registered, through the tool a model would call', async () => {

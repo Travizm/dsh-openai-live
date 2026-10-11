@@ -8,7 +8,7 @@ import type {
   SteeringClaim,
   TransportStatus,
 } from 'dsh-realtime'
-import type { RealtimeVoiceStatus } from './types.ts'
+import type { RealtimeSessionRefusal, RealtimeVoiceStatus } from './types.ts'
 
 /**
  * A canonical output declaration rendered as JSON.
@@ -70,6 +70,13 @@ export interface VoiceToolDeps {
    * describes about what a change returns or what a refusal carries.
    */
   readonly settings: Pick<RealtimeSettings, 'list' | 'apply'>
+  /**
+   * Attempt a provider session and close it, reporting only what the provider's answer classifies to.
+   *
+   * Injected because the attempt belongs where the config and the seam are, and the *words* belong here: what
+   * a refusal means for a caller is this tool's business, and the classification is the seam's.
+   */
+  readonly probe: () => Promise<{ ok: true } | { ok: false; refusal: RealtimeSessionRefusal }>
   /**
    * Ceiling on how many entries one call may return.
    *
@@ -158,6 +165,40 @@ export interface JournalToolAnswer {
  }
 
  /**
+ * What one `voice_probe_provider` call answers with.
+ *
+ * Deliberately the same vocabulary as the seam's own refusal — the code, the remedy written to be relayed, and
+ * the page the remedy is carried out on — because a probe that invented its own words for a provider's answer
+ * would be a second classification to keep in step with the first.
+ */
+export interface ProbeAnswer {
+  readonly ok: boolean
+  /** What happened, in words written to be relayed. */
+  readonly detail: string
+  /** The seam's machine code, when the failure was one of its classified ones. */
+  readonly code?: string
+  /** What to do about it, written to be relayed verbatim. */
+  readonly remedy?: string
+  /** Where the remedy is carried out, when the provider publishes a page for it. */
+  readonly link?: string
+  /** The failing class, when there was no code to carry. A class, never an instance's message. */
+  readonly class?: string
+}
+
+const PROBE_VALUE = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    ok: { type: 'boolean', required: true },
+    detail: { type: 'string', required: true },
+    code: { type: 'string' },
+    remedy: { type: 'string' },
+    link: { type: 'string' },
+    class: { type: 'string' },
+  },
+} as const
+
+/**
  * A setting's value as a surface may hold it, and every kind the registry declares.
  *
  * Narrower than the harness's own JSON value and deliberately so: this is a *subset*, which is assignable
@@ -582,6 +623,26 @@ export function voiceToolDefinitions(deps: VoiceToolDeps): ToolDefinition[] {
             ? 'partial' as const
             : 'pass' as const
         return { verdict, checks }
+      },
+    }),
+
+    defineTool({
+      name: 'voice_probe_provider',
+      description:
+        'Ask the provider whether it would accept a session right now, and why not if it would not. It opens a '
+        + 'throwaway session and closes it, so it costs a small amount of provider credit — and that cost is the '
+        + 'point: a bare handshake is not metered and succeeds even when every real session is refused, so only '
+        + 'a real attempt tells a refused credential from an account with no credit from a model the account is '
+        + 'not entitled to. It never touches the live session. A refusal comes back as the code and the remedy, '
+        + 'the remedy written to be relayed as it stands. Call it when a session will not open and the record '
+        + 'does not already say which of those it is.',
+      parameters: {},
+      output: jsonOutput(PROBE_VALUE),
+      async execute(): Promise<ProbeAnswer> {
+        const outcome = await deps.probe()
+        return outcome.ok
+          ? { ok: true, detail: 'the provider accepted a session, and it was closed again' }
+          : { ok: false, detail: 'the provider refused a session', ...outcome.refusal }
       },
     }),
 

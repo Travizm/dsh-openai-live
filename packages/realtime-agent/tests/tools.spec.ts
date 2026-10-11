@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { JournalEntry, RealtimeSession } from 'dsh-realtime'
 import type { RealtimeSettingInfo, RealtimeSettingOutcome } from 'dsh-realtime'
-import { voiceToolDefinitions, type ConfigureAnswer, type DiagnoseAnswer, type JournalToolAnswer, type VoiceToolDeps } from '../src/tools.ts'
+import { voiceToolDefinitions, type ConfigureAnswer, type DiagnoseAnswer, type JournalToolAnswer, type ProbeAnswer, type VoiceToolDeps } from '../src/tools.ts'
 import type { RealtimeVoiceStatus } from '../src/types.ts'
 
 /** The execute bodies under test never touch the execution context, so a placeholder is honest here. */
@@ -43,6 +43,7 @@ function build(overrides: Partial<VoiceToolDeps> = {}): { recorder: Recorder; to
     providers: () => [],
     transports: () => [],
     settings: { list: () => [], apply: () => ({ ok: false, key: '', code: 'UNKNOWN_SETTING', reason: 'none registered' }) },
+    probe: () => Promise.resolve({ ok: true }),
     ...overrides,
   })
   return { recorder, tools }
@@ -58,7 +59,10 @@ describe('voiceToolDefinitions', () => {
   it('publishes the two session controls, the two that read the app, and the diagnosis', () => {
     const { tools } = build()
     expect(tools.map(definition => definition.name))
-      .toEqual(['voice_start', 'voice_stop', 'voice_status', 'voice_configure', 'voice_diagnose', 'voice_journal'])
+      .toEqual([
+        'voice_start', 'voice_stop', 'voice_status', 'voice_configure', 'voice_diagnose', 'voice_probe_provider',
+        'voice_journal',
+      ])
     for (const definition of tools) {
       expect(definition.description.length).toBeGreaterThan(0)
       expect(definition.output.schema).toBeDefined()
@@ -357,6 +361,43 @@ describe('voiceToolDefinitions', () => {
         ],
       })
       expect(answer.verdict).toBe('pass')
+    })
+  })
+
+  describe('voice_probe_provider', () => {
+    const probe = async (over: Partial<VoiceToolDeps> = {}): Promise<ProbeAnswer> =>
+      await tool(build(over).tools, 'voice_probe_provider').execute({}, EXEC) as ProbeAnswer
+
+    it('reports an accepted session as a fact rather than as the session it opened', async () => {
+      // The probe's own throwaway session is not reported as anything: a caller asked whether the provider
+      // would take one, not which one it took.
+      const answer = await probe({ probe: () => Promise.resolve({ ok: true }) })
+      expect(answer).toEqual({ ok: true, detail: 'the provider accepted a session, and it was closed again' })
+    })
+
+    it('relays a refusal in the seam’s own vocabulary, rather than inventing words for it', async () => {
+      // The same fields a refusal carries everywhere else: the code, the remedy written to be relayed, and the
+      // page the remedy is carried out on. A probe with its own vocabulary would be a second classification to
+      // keep in step with the first.
+      const answer = await probe({
+        probe: () => Promise.resolve({
+          ok: false,
+          refusal: { code: 'INSUFFICIENT_CREDIT', remedy: 'add credit to the account', link: 'https://example.test/billing' },
+        }),
+      })
+      expect(answer).toEqual({
+        ok: false,
+        detail: 'the provider refused a session',
+        code: 'INSUFFICIENT_CREDIT',
+        remedy: 'add credit to the account',
+        link: 'https://example.test/billing',
+      })
+    })
+
+    it('carries a class when there was no code to carry', async () => {
+      const answer = await probe({ probe: () => Promise.resolve({ ok: false, refusal: { class: 'TypeError' } }) })
+      expect(answer).toMatchObject({ ok: false, class: 'TypeError' })
+      expect(answer.code).toBeUndefined()
     })
   })
 

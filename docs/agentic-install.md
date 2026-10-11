@@ -108,15 +108,29 @@ Both are deliberately last in the list *and* in the description a model reads. A
 or changes a running system should be the one a caller reaches for after the cheap checks have failed, not
 before.
 
-### Still open: the skill
+### The skill
 
-Order 4 is the one piece not built, and it is the one that makes the other four get *called*. The tools
-answer questions; nothing yet tells a model which question to ask first, so a session that is merely quiet
-still looks, from the outside, like a session that is broken.
+Order 4 is built, and it is the piece that makes the other four get *called*: the tools answer questions,
+and the skill is what tells a model which question to ask first. Without it a session that is merely quiet
+looks, from the outside, exactly like a session that is broken.
 
-There is also a question this document had skipped: it says the skill is rendered by `dsh-realtime`, but
-that package is a **service** — it default-exports its class and has no `apply`, by the export-form
-contract — so something with an `apply` has to render it. The candidates are the agent (which is already a
-row and already holds the session), a new small plugin, or the responder. Whichever it is decides where
-the triage text lives, and it should be decided before the text is written rather than after.
+It is **contributed at runtime by `dsh-realtime-agent`**, through `ctx.skills.register()`, and that answers
+the question this document had skipped. `dsh-realtime` cannot render it: that package is a *service* — it
+default-exports its class and has no `apply`, by the export-form contract. The agent can, for the reason
+that makes it the right place rather than merely an available one: the text's first instruction is to call
+one of the agent's own tools, and the agent is the row that publishes them.
+
+Contributing it in code rather than shipping a directory of markdown buys one property worth the
+trade: the skill appears exactly while the tools it names are registered, and goes when they do. A file on
+disk cannot promise that — it outlives an unloaded row and stands there instructing a model to call tools
+that are not there, which is the failure a skill registry exists to prevent, arrived at by the route that
+looks most like documentation. The harness's own docs are clear that a project skill outranks a runtime
+one, so a person who wants their own triage notes wins by writing them.
+
+**What keeps it honest.** The suite fails if the text stops naming a tool the plugin publishes, and if it
+names one it does not: the published names come from `voiceToolDefinitions`, so adding a tool without
+updating the triage text is a red test rather than a silent gap — which is how the first draft of this text
+was caught omitting `voice_start` and `voice_stop`. The same guard covers the journal kinds it teaches a
+model to read, checked against the kinds the running app actually writes. The built-composition smoke reads
+the contributed skill back out of the **built artifact** and checks it still names `voice_diagnose`.
 

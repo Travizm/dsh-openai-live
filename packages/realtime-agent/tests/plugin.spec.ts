@@ -3,7 +3,9 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { RealtimeAdapter, RealtimeRuntime, REALTIME_ERROR_CODES, RealtimeError, type Journal, type RealtimeDelegationProgress, type RealtimeSession, type RealtimeSessionHandlers, type RealtimeSessionOptions } from 'dsh-realtime'
 import * as agent from '../src/index.ts'
+import type { SkillRegistration } from '@deepseek-ai/dsh-skill'
 import type { ConfigureAnswer, DiagnoseAnswer, JournalToolAnswer, ProbeAnswer } from '../src/tools.ts'
+import { VOICE_SKILL_NAME } from '../src/skill.ts'
 import { Config, createHandlers, apply } from '../src/index.ts'
 import { TranscriptBuffer } from '../src/transcript.ts'
 import type { DelegationRequest, RealtimeAgentConfig } from '../src/types.ts'
@@ -105,15 +107,36 @@ class FakeTools extends Service {
   }
 }
 
-/** A context with the real seam, one recording adapter on the `fake` route, and a tools service. */
-function harness(): { ctx: Context; adapter: RecordingAdapter; tools: FakeTools; journal: Journal } {
+/** A skills service that records what was contributed and what was withdrawn. */
+class FakeSkills extends Service {
+  readonly registered: SkillRegistration[] = []
+  readonly withdrawn: string[] = []
+
+  constructor(context: Context) {
+    super(context, 'skills')
+  }
+
+  register(skill: SkillRegistration): () => void {
+    this.registered.push(skill)
+    return () => { this.withdrawn.push(skill.name) }
+  }
+}
+
+/**
+ * A context with the real seam, one recording adapter on the `fake` route, a tools service and a skills one.
+ *
+ * Both services are mounted because the plugin injects both, and a substitute that omits one makes `apply`
+ * throw in every test rather than in the one that cares.
+ */
+function harness(): { ctx: Context; adapter: RecordingAdapter; tools: FakeTools; skills: FakeSkills; journal: Journal } {
   const context = new Context()
   const seam = new RealtimeRuntime(context)
   const tools = new FakeTools(context)
+  const skills = new FakeSkills(context)
   const adapter = new RecordingAdapter()
   context.realtime.registerAdapter(['fake'], adapter)
   ctx = context
-  return { ctx: context, adapter, tools, journal: seam.journal }
+  return { ctx: context, adapter, tools, skills, journal: seam.journal }
 }
 
 /** The plugin applied and a session already open: the state most journal entries need. */
@@ -132,6 +155,34 @@ async function started(): Promise<ReturnType<typeof harness>> {
  */
 const SENTINEL_KEY = ['sk', 'agent', 'sentinelmustneverappear'].join('-')
 const SENTINEL_TEXT = 'sentinelmustneverappear'
+
+describe('the skill the agent contributes', () => {
+  it('is contributed while the row is loaded, from the code rather than from a directory', async () => {
+    const { ctx: context, skills } = harness()
+    apply(context, Config({ provider: 'fake' }) as RealtimeAgentConfig)
+    await tick()
+
+    expect(skills.registered.map(skill => skill.name)).toEqual([VOICE_SKILL_NAME])
+    expect(skills.registered[0]?.source).toBe('runtime')
+  })
+
+  it('is withdrawn when the row is disposed, rather than left standing', async () => {
+    // The property that makes contributing it in code worth doing at all: text that outlives the tools it
+    // names is an instruction to call something that is not there. That the registry *hands back* a disposer
+    // is only half of it — what matters is that this plugin's own effect runs it.
+    const { ctx: context, skills } = harness()
+    apply(context, Config({ provider: 'fake' }) as RealtimeAgentConfig)
+    await tick()
+
+    expect(skills.registered.map(skill => skill.name)).toEqual([VOICE_SKILL_NAME])
+    expect(skills.withdrawn).toEqual([])
+
+    await context.fiber.dispose()
+    await tick()
+
+    expect(skills.withdrawn).toEqual([VOICE_SKILL_NAME])
+  })
+})
 
 describe('the journal the agent writes', () => {
   it('records the session it opened and closed, because it owns that lifecycle', async () => {
@@ -312,7 +363,10 @@ describe('plugin shape', () => {
     // A default export makes the Loader discard a function plugin's namespace: it loads and
     // contributes nothing, which is the quietest possible failure.
     expect(agent.name).toBe('realtime-agent')
-    expect(agent.inject).toEqual(['realtime', 'tools'])
+    // Three now: the seam it drives, the registry it publishes its tools on, and the one it contributes its
+    // triage skill to. All three are hard injections because the skill is not decoration — a harness without
+    // the skills registry is a harness whose model does not know these tools exist.
+    expect(agent.inject).toEqual(['realtime', 'tools', 'skills'])
     expect('default' in agent).toBe(false)
     expect(typeof apply).toBe('function')
   })

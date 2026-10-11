@@ -35,6 +35,7 @@ import type {
 import { REALTIME_ERROR_CODES, RealtimeError } from 'dsh-realtime'
 import { answerDelegation, type DelegationAppend, type DelegationAsker } from './bridge.ts'
 import { voiceToolDefinitions } from './tools.ts'
+import { VOICE_SKILL } from './skill.ts'
 import { TranscriptBuffer } from './transcript.ts'
 import type { DelegationAnswer, DelegationRequest, RealtimeAgentConfig, RealtimeSessionRefusal, RealtimeSessionRequestOutcome, RealtimeVoiceStatus } from './types.ts'
 
@@ -126,12 +127,13 @@ export * from './types.ts'
 export { answerDelegation, boundAppend, toSpeech, UNANSWERED_NOTICE, type DelegationAsker } from './bridge.ts'
 export { TranscriptBuffer } from './transcript.ts'
 export { voiceToolDefinitions, type VoiceToolDeps } from './tools.ts'
+export { VOICE_SKILL, VOICE_SKILL_NAME } from './skill.ts'
 
 /** Plugin name, as it appears in Loader diagnostics. */
 export const name = 'realtime-agent'
 
 /** This plugin drives the realtime seam and publishes tools, so it waits for both. */
-export const inject = ['realtime', 'tools']
+export const inject = ['realtime', 'tools', 'skills']
 
 /**
  * Validated configuration.
@@ -631,6 +633,12 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
       .map(definition => ctx.tools.register(definition))
     yield () => { for (const dispose of disposers) dispose() }
   }, 'realtime-agent.tools')
+
+  // The triage text, contributed while this row is loaded rather than read from a directory, so it cannot
+  // outlive the tools it names. A skill is exactly the kind of thing that looks harmless when it drifts —
+  // text on a surface nobody re-reads — so it is tied to the same lifecycle as the tools it describes, and
+  // the registry hands back the disposer that withdraws it.
+  ctx.effect(() => ctx.skills.register(VOICE_SKILL), 'realtime-agent.skill')
 
   // The microphone seam. Output audio leaves through a handler the adapter already calls; input had no
   // such route, because the object that captures it — a client half — cannot reach this context. So the

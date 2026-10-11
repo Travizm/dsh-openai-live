@@ -122,6 +122,20 @@ class FakeTools extends Service {
   }
 }
 
+/** The skills service, mounted only because the agent contributes its triage skill during `apply`. */
+class FakeSkills extends Service {
+  readonly contributed: Array<{ name: string }> = []
+
+  constructor(context: Context) {
+    super(context, 'skills')
+  }
+
+  register(skill: { name: string }): () => void {
+    this.contributed.push(skill)
+    return () => undefined
+  }
+}
+
 /** The web server, with the two registration doors the audio route uses. */
 class FakeWebServer extends Service {
   readonly upgrades = new Map<string, (req: unknown, socket: unknown, head: unknown) => unknown>()
@@ -220,6 +234,8 @@ async function harness(
   const seam = new RealtimeRuntime(context)
   const controller = new FakeController(context)
   const tools = new FakeTools(context)
+  // Mounted because the agent injects it and contributes to it during `apply`.
+  new FakeSkills(context)
   const web = new FakeWebServer(context)
   const connection = new FakeConnection(context)
   const provider = new FakeProvider()

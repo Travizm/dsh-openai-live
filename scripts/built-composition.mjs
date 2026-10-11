@@ -45,6 +45,26 @@ class Tools extends Service {
   }
 }
 
+/**
+ * The skills service, which the harness supplies in the app.
+ *
+ * Mounted for the same reason as `Tools`, and with the same shape: the agent contributes its triage skill
+ * during `apply`, so an injection with nothing to receive it leaves the row unresolved — which this script
+ * would report as "did not mount", pointing at the loader instead of at the missing service.
+ */
+class Skills extends Service {
+  registered = []
+
+  constructor(context) {
+    super(context, 'skills')
+  }
+
+  register(skill) {
+    this.registered.push(skill)
+    return () => {}
+  }
+}
+
 const failures = []
 const check = (ok, message) => {
   if (!ok) failures.push(message)
@@ -69,6 +89,7 @@ await writeFile(configPath, [
 const context = new Context()
 // Before the Loader runs, so the service the agent injects is there when its row is applied.
 const tools = new Tools(context)
+const skills = new Skills(context)
 context.baseUrl = pathToFileURL(here).href + '/'
 await context.plugin(Loader)
 context.loader.builtins.include = Include
@@ -121,6 +142,16 @@ check(published.includes('voice_journal'), `voice_journal was not published: [${
 // process — a second one never establishes, and the timer it leaves behind takes this script down after the
 // context is disposed. What can be checked here for free is that the surface exists.
 check(published.includes('voice_probe_provider'), `voice_probe_provider was not published: [${published.join(', ')}]`)
+
+// The triage text, contributed by the row that publishes the tools it names, read back from the built
+// artifact. The second check is the one that matters: a skill that no longer names the tools is worse than no
+// skill, because a model reads it, trusts it, and reaches for something that is not there.
+const skillNames = skills.registered.map(skill => skill.name)
+check(skillNames.includes('dsh-realtime-voice'), `the agent contributed skills [${skillNames.join(', ')}]`)
+check(
+  skills.registered.some(skill => typeof skill.content === 'string' && skill.content.includes('voice_diagnose')),
+  'the contributed skill does not name the tools it exists to route to',
+)
 
 const configureTool = tools.registered.find(definition => definition.name === 'voice_configure')
 if (configureTool !== undefined) {

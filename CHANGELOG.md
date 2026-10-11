@@ -4,6 +4,101 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.11] — 2026-10-12
+
+### Added
+
+- **The voice can be asked about itself, in the conversation.** `dsh-realtime-agent` 0.2.13 ·
+  `dsh-openai-live` 0.6.11. Five tools, each wrapping something that already existed, so an installer can
+  troubleshoot the plugin from chat instead of from a shell:
+  - `voice_journal` — the record, in order. Output frames are left out by default and reported as a count:
+    in the live journal `speech.sent` was 7,412 of 8,011 rows, so "the last N entries" unfiltered would
+    answer a question about the voice with N copies of `{"bytes":"4800"}`. The count is clamped where the
+    whole value is emitted, with a floor of one — `slice(-0)` is `slice(0)`, so a naive clamp at zero
+    answers a request for nothing with the entire record.
+  - `voice_status` — whether a session is open, on what, and **which conversation it steers**.
+  - `voice_diagnose` — the path from inside the process: session, steering, and how the last relayed turn
+    actually ended, read from the record rather than from anybody's recollection.
+  - `voice_configure` — reads the settings registry, and changes one **live** field. A session- or
+    restart-bound field is refused with the registry's own reason, relayed verbatim, and a write-only
+    setting reports *no value* rather than a null. A key with no value is refused rather than defaulted to
+    the empty string.
+  - `voice_probe_provider` — opens a real session and closes it. A bare handshake is the one thing about a
+    provider that is not metered, which is why it cannot tell a refused credential from an account with no
+    credit; the attempt costs a little credit on purpose and says so in its own description. It goes
+    through the seam rather than `open()`, so it cannot displace the session it was asked about.
+- **A runtime skill, `dsh-realtime-voice`.** Contributed by `dsh-realtime-agent` through
+  `ctx.skills.register()`, so it exists exactly while the tools it names are registered and is withdrawn
+  with the fiber that contributed it — a markdown directory cannot promise that, and would stand there
+  instructing a model to call tools that are not there. The suite checks the text in both directions
+  against `voiceToolDefinitions`: every published tool named, no unpublished tool named.
+- **The seam can say who is steering, and what carries the audio.** `dsh-realtime` 0.2.9 ·
+  `dsh-realtime-audio-ws` 0.2.8 · `dsh-realtime-openai` 0.2.3. `ctx.realtime.steering` and
+  `ctx.realtime.transports` are registries the seam owns, so a surface can render which plugin steers which
+  session and which route is live without knowing another plugin's key string. Claims are ordered by
+  declaration, read when asked rather than captured, and a token is never reused — so a disposer held from
+  an earlier claim cannot withdraw the claim that took its slot. `RealtimeProviderInfo` gains
+  `configured?: boolean`, filled by the adapter from the **same rule the request path uses**; a boolean, and
+  never the value, a length, or a fingerprint of it.
+
+### Fixed
+
+- **A relayed request was built from an in-flight prefix of the utterance.** `dsh-realtime-agent` 0.2.13 ·
+  `dsh-realtime-responder` 0.2.9. Measured on a running app: the delegation landed at 07:16:55.301 and the
+  next fragment of that same utterance at 07:16:55.463, so the prompt went out cut mid-sentence with no
+  closing quote — and the session answered it. There is no boundary event to wait for: the wire carries
+  deltas only (`final: false` on every fragment in `translate.ts`, and no boundary of any kind in twenty
+  recorded sessions), which made `transcript.input`'s `final` a constant in 429 of 429 rows. The request is
+  now built from a settled transcript — 500 ms of quiet, capped at 1.5 s.
+- **The journal can be read without the profile beside it.** `dsh-realtime` 0.2.9 ·
+  `dsh-realtime-responder` 0.2.9. Entries carry `runId`, because `seq` restarts at every boot and the eight
+  instances sitting in one file were eight anonymous runs. `config.changed` records the value the owner
+  **now holds** — a setter that clamped reads differently from one that landed as asked — and a setting
+  declared `secret` records neither its size nor its fingerprint, the digest being taken *after* the
+  journal's own redaction because a fingerprint of a secret is a leak in its own right. `prompt.admitted`
+  and `answer.received` name the session they were about, and `prompt.refused` carries the prompt it built,
+  so a lost delegation can be told from a delegation that was never raised.
+
+### Versions
+
+Patch bumps throughout, and that is a decision rather than a default. A 0.x caret **minor-locks**, so the
+published `^0.2.12` is `>=0.2.12 <0.3.0`: a minor bump would fall outside the range every published
+consumer declares and install a **second copy** of the package, which for a package exporting a
+`unique symbol` breaks the host silently. Everything here is inside those ranges, so every existing
+consumer receives it with no bundle change. `dsh-realtime-replay` 0.2.0 is unchanged and is deliberately
+not republished — its packed ranges would be rewritten against a version it never shipped with.
+`dsh-openai-live` 0.6.11 changes only its version and its dependency ranges: the bundle is the thing that
+names a release, and a profile asking for `^0.6.9` cannot reach the new leaves without it.
+`dsh-realtime-agent` also gains `@deepseek-ai/dsh-skill` as a **peer** dependency — the harness supplies
+it, and a dependency would install a second copy of a package the host already has.
+
+### Not in this release
+
+- **The profile's budget row.** 0.6.10 ships both budgets at 180 s, so the profile's own
+  `dsh-realtime-agent` row can go — but removing it is a profile change, done deliberately and *after*
+  0.6.10 is installed, not by this release. See `docs/refresh-the-app-profile.md`.
+- **The refusal half of the route check.** `voice_diagnose` reports the three checks reachable from inside
+  the process; an unauthorised client being refused is only visible from outside, and remains
+  `pnpm self-test`.
+
+Gate: 714 tests, 100% statements/branches/functions/lines (1,583/953/430/1,392), leak scan 181 tracked
+files, declared dependencies, built composition smoke, client artefact guard.
+
+## [0.6.10] — 2026-10-11
+
+### Changed
+
+- **Both voice budgets ship as defaults, at 180 s.** `dsh-openai-live` 0.6.10. The bundle shipped 45 s while
+  one profile's own patch row raised them, which meant that row had to restate all four fields of the
+  agent's row to change one of them. Measured: a relayed turn that looked across sessions ran 87 s, so both
+  45 s budgets expired before the session had answered. Both halves move into the shipped row, because the
+  smaller of the two is what decides what is actually heard. No behaviour change for a profile that sets
+  neither; the profile that raised them keeps its own row until that row is deleted on purpose — delete it
+  first and the budget reverts to 45 s for however long the install takes.
+
+Gate, as recorded in its release commit: 620 tests, 100% coverage on all four axes, leak scan 171 tracked
+files.
+
 ## [0.6.9] — 2026-10-10
 
 ### Fixed

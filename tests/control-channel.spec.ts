@@ -67,6 +67,20 @@ class FakeTools extends Service {
   }
 }
 
+/** The skills service, mounted only because the agent contributes its triage skill during `apply`. */
+class FakeSkills extends Service {
+  readonly contributed: Array<{ name: string }> = []
+
+  constructor(context: Context) {
+    super(context, 'skills')
+  }
+
+  register(skill: { name: string }): () => void {
+    this.contributed.push(skill)
+    return () => undefined
+  }
+}
+
 /** The two registration doors the audio route claims. */
 class FakeWebServer extends Service {
   readonly upgrades = new Map<string, (req: unknown, socket: unknown, head: unknown) => unknown>()
@@ -163,6 +177,9 @@ async function mount(): Promise<Mounted> {
   const controller = new FakeController(context)
   const web = new FakeWebServer(context)
   const tools = new FakeTools(context)
+  // Mounted because the agent injects it and contributes to it during `apply`: a context without it makes
+  // every test in this file fail at the same line, which is how this stub came to exist.
+  new FakeSkills(context)
   new FakeConnection(context)
   const provider = new FakeProvider()
   context.realtime.registerAdapter(['fake'], provider)

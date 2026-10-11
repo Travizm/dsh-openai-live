@@ -117,6 +117,11 @@ if (context.realtime !== undefined) {
 const published = tools.registered.map(definition => definition.name)
 check(published.includes('voice_journal'), `voice_journal was not published: [${published.join(', ')}]`)
 
+// Published but deliberately not called: a probe opens a session, and the replay transport serves one per
+// process — a second one never establishes, and the timer it leaves behind takes this script down after the
+// context is disposed. What can be checked here for free is that the surface exists.
+check(published.includes('voice_probe_provider'), `voice_probe_provider was not published: [${published.join(', ')}]`)
+
 const configureTool = tools.registered.find(definition => definition.name === 'voice_configure')
 if (configureTool !== undefined) {
   const listed = await configureTool.execute({}, {})

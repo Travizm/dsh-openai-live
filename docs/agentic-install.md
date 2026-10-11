@@ -82,3 +82,41 @@ part that turns a plugin into something a stranger can install.
 4. **The skill**, before the remaining two tools: it is what makes any of them get called at the right moment.
 5. **`voice_probe_provider` and `voice_configure`** last, because they are the two that act on the outside
    world — one spends a little provider credit, one changes a running system.
+
+## What landed
+
+Built: `voice_journal`, `voice_status`, `voice_diagnose`, then `voice_configure` and
+`voice_probe_provider` — order 5 taken before order 4, for the reason in the section below. Each is
+registered by `dsh-realtime-agent`'s own plugin and answered from the seam, so no tool reads another
+plugin's key string: the settings registry, the steering claims and the transport reports are capabilities
+`ctx.realtime` owns, and every one of them is read when the tool is *called* rather than at registration.
+
+Two of the five act on the outside world, and both say so in their own description rather than leaving a
+caller to find out:
+
+- **`voice_probe_provider` opens a throwaway session and closes it.** A bare handshake is not metered and
+  succeeds while every real session is refused, so only a real attempt separates a refused credential from
+  an account with no credit from a model it is not entitled to. It goes through the seam directly rather
+  than through `open()`, so it cannot displace the live session it was asked about, and both paths ask for
+  the *same* options through one builder — a probe that tested a configuration nobody uses would answer,
+  confidently, about the wrong thing.
+- **`voice_configure` reaches only `live` fields.** A session-bound or restart-bound field is refused by
+  the registry, with its own reason relayed verbatim, because those reasons are written to be relayed. No
+  credential is reachable through it at all: `apiKey` is config, not a registered setting.
+
+Both are deliberately last in the list *and* in the description a model reads. A tool that spends credit
+or changes a running system should be the one a caller reaches for after the cheap checks have failed, not
+before.
+
+### Still open: the skill
+
+Order 4 is the one piece not built, and it is the one that makes the other four get *called*. The tools
+answer questions; nothing yet tells a model which question to ask first, so a session that is merely quiet
+still looks, from the outside, like a session that is broken.
+
+There is also a question this document had skipped: it says the skill is rendered by `dsh-realtime`, but
+that package is a **service** — it default-exports its class and has no `apply`, by the export-form
+contract — so something with an `apply` has to render it. The candidates are the agent (which is already a
+row and already holds the session), a new small plugin, or the responder. Whichever it is decides where
+the triage text lives, and it should be decided before the text is written rather than after.
+

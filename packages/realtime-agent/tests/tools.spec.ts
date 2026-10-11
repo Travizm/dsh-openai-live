@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { JournalEntry, RealtimeSession } from 'dsh-realtime'
-import { voiceToolDefinitions, type JournalToolAnswer, type VoiceToolDeps } from '../src/tools.ts'
+import { voiceToolDefinitions, type DiagnoseAnswer, type JournalToolAnswer, type VoiceToolDeps } from '../src/tools.ts'
 import type { RealtimeVoiceStatus } from '../src/types.ts'
 
 /** The execute bodies under test never touch the execution context, so a placeholder is honest here. */
@@ -51,10 +51,10 @@ const tool = (tools: ReturnType<typeof voiceToolDefinitions>, name: string) => {
 }
 
 describe('voiceToolDefinitions', () => {
-  it('publishes the two session controls, the status, and the one that reads the record', () => {
+  it('publishes the two session controls, the two that read the app, and the diagnosis', () => {
     const { tools } = build()
     expect(tools.map(definition => definition.name))
-      .toEqual(['voice_start', 'voice_stop', 'voice_status', 'voice_journal'])
+      .toEqual(['voice_start', 'voice_stop', 'voice_status', 'voice_diagnose', 'voice_journal'])
     for (const definition of tools) {
       expect(definition.description.length).toBeGreaterThan(0)
       expect(definition.output.schema).toBeDefined()
@@ -127,6 +127,76 @@ describe('voiceToolDefinitions', () => {
       const second = await tool(tools, 'voice_status').execute({}, EXEC)
       expect(first).toMatchObject({ open: false })
       expect(second).toMatchObject({ open: true })
+    })
+  })
+
+  describe('voice_diagnose', () => {
+    const at = (seq: number, kind: JournalEntry['kind']): JournalEntry => ({ seq, at: 1_000 + seq, kind, detail: {} })
+    const OPEN: RealtimeVoiceStatus = { open: true, provider: 'openai-live', model: 'gpt-live-1' }
+    const CLAIM = [{ owner: 'realtime-responder', sessionId: 'session-a' }]
+    const judge = async (over: Partial<VoiceToolDeps> = {}): Promise<DiagnoseAnswer> =>
+      await tool(build({ status: () => OPEN, steering: () => CLAIM, ...over }).tools, 'voice_diagnose')
+        .execute({}, EXEC) as DiagnoseAnswer
+
+    it('passes when a session is open, something steers, and the last turn was answered', async () => {
+      const answer = await judge({ journal: () => [at(1, 'delegation.seen'), at(2, 'prompt.admitted'), at(3, 'answer.received')] })
+      expect(answer.verdict).toBe('pass')
+      expect(answer.checks.map(check => check.state)).toEqual(['pass', 'pass', 'pass'])
+    })
+
+    it('fails on the closed session that has no responder behind it', async () => {
+      // The two faults a caller can act on without reading anything else, reported together rather than one
+      // at a time: a closed session and an unsteered delegation are independent, and fixing one leaves the
+      // other.
+      const answer = await judge({ status: () => CLOSED, steering: () => [] })
+      expect(answer.verdict).toBe('fail')
+      expect(answer.checks.find(check => check.name === 'session')?.detail).toContain('no session is open')
+      expect(answer.checks.find(check => check.name === 'delegation')?.detail).toContain('answered by nobody')
+    })
+
+    it('says nothing has been delegated yet rather than judging a turn that never happened', async () => {
+      // The distinction a two-valued check would lose: not a pass, because the path is unproven; not a
+      // failure, because the user may simply not have asked anything.
+      const answer = await judge()
+      expect(answer.verdict).toBe('partial')
+      expect(answer.checks.find(check => check.name === 'turn')).toMatchObject({ state: 'waiting' })
+    })
+
+    it('names the session that is quiet when a turn was admitted and never answered', async () => {
+      // The fault that reads as a broken voice and is really a busy session — the detail has to say which.
+      const answer = await judge({ journal: () => [at(1, 'delegation.seen'), at(2, 'prompt.admitted'), at(3, 'window.elapsed')] })
+      expect(answer.checks.find(check => check.name === 'turn')).toMatchObject({ state: 'fail' })
+      expect(answer.checks.find(check => check.name === 'turn')?.detail).toContain('the session that is quiet')
+    })
+
+    it('distinguishes a refused delegation from an unanswered one', async () => {
+      const answer = await judge({ journal: () => [at(1, 'delegation.seen'), at(2, 'prompt.refused')] })
+      expect(answer.checks.find(check => check.name === 'turn')?.detail).toContain('refused')
+    })
+
+    it('waits on a delegation nothing has come of yet, and differs from one that is running', async () => {
+      // Two ways to be waiting, and the detail tells them apart: a turn the responder never touched is a
+      // different thing from one it admitted and is still working on.
+      const answer = await judge({ journal: () => [at(1, 'delegation.seen')] })
+      expect(answer.checks.find(check => check.name === 'turn')).toMatchObject({ state: 'waiting' })
+      expect(answer.checks.find(check => check.name === 'turn')?.detail).toContain('nothing has come of it')
+    })
+
+    it('waits while an admitted turn is still running', async () => {
+      const answer = await judge({ journal: () => [at(1, 'delegation.seen'), at(2, 'prompt.admitted')] })
+      expect(answer.checks.find(check => check.name === 'turn')).toMatchObject({ state: 'waiting' })
+    })
+
+    it('judges the last delegation, not the first one that failed', async () => {
+      // A turn that went wrong an hour ago is history. The question is what happened to the last one, so a
+      // failure before the most recent delegation must not decide the verdict.
+      const answer = await judge({
+        journal: () => [
+          at(1, 'delegation.seen'), at(2, 'window.elapsed'),
+          at(3, 'delegation.seen'), at(4, 'prompt.admitted'), at(5, 'answer.received'),
+        ],
+      })
+      expect(answer.verdict).toBe('pass')
     })
   })
 

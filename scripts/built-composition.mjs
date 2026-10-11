@@ -117,6 +117,17 @@ if (context.realtime !== undefined) {
 const published = tools.registered.map(definition => definition.name)
 check(published.includes('voice_journal'), `voice_journal was not published: [${published.join(', ')}]`)
 
+const diagnoseTool = tools.registered.find(definition => definition.name === 'voice_diagnose')
+if (diagnoseTool !== undefined) {
+  const reported = await diagnoseTool.execute({}, {})
+  // Nothing is open and nothing steers in this composition, so the honest verdict is a failure that names
+  // both — read back through the built artifact rather than asserted about the source.
+  check(reported.verdict === 'fail', `voice_diagnose reported ${reported.verdict} with no session and no responder`)
+  const failing = reported.checks.filter(entry => entry.state === 'fail').map(entry => entry.name)
+  check(failing.includes('session') && failing.includes('delegation'),
+    `voice_diagnose failed [${failing.join(', ')}] rather than the session and the delegation`)
+}
+
 const statusTool = tools.registered.find(definition => definition.name === 'voice_status')
 if (statusTool !== undefined) {
   const reported = await statusTool.execute({}, {})

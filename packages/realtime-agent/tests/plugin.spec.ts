@@ -685,7 +685,7 @@ describe('the voice tools a session exposes', () => {
     const { ctx: context, tools } = harness()
     apply(context, Config({ provider: 'fake' }) as RealtimeAgentConfig)
     expect(tools.registered.map(definition => definition.name))
-      .toEqual(['voice_start', 'voice_stop', 'voice_status', 'voice_journal'])
+      .toEqual(['voice_start', 'voice_stop', 'voice_status', 'voice_diagnose', 'voice_journal'])
   })
 
   it('releases them with the fiber that registered them', async () => {
@@ -695,7 +695,7 @@ describe('the voice tools a session exposes', () => {
     ctx = undefined
     // Registrations are effects. If this ever needs a separate teardown path, that path is what will
     // be forgotten on the day it matters.
-    expect(tools.released).toEqual(['voice_start', 'voice_stop', 'voice_status', 'voice_journal'])
+    expect(tools.released).toEqual(['voice_start', 'voice_stop', 'voice_status', 'voice_diagnose', 'voice_journal'])
   })
 
   it('reports the session it opened, through the tool a model would call', async () => {

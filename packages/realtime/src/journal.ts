@@ -68,6 +68,17 @@ export type JournalKind =
   | 'prompt.admitted' | 'prompt.refused' | 'prompt.declined' | 'window.elapsed'
   /** A turn produced an answer. */
   | 'answer.received'
+  /**
+   * The gate's verdict on a delegated utterance, recorded **before** the write decision is acted on.
+   *
+   * The verdict is a separate entry from its consequence, because the two facts differ: a reader asking
+   * *why did nothing happen* needs the verdict (the gate resolved to a question), while a reader asking
+   * *what did the voice put in my session* needs the delivery. Collapsing them would make "it answered"
+   * and "it declined to write" the same silence.
+   */
+  | 'intent.classified'
+  /** What became of a verdict that authorised a write, one entry per outcome. */
+  | 'delivery.noted' | 'delivery.said' | 'delivery.unsent' | 'delivery.undurable'
   /** A context append was acknowledged on the wire. Not delivery — see invariant 6. */
   | 'append.acknowledged'
   /** A narrated step the provider did not take. Not an answer failure — a step nobody will hear. */

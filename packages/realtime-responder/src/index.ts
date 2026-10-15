@@ -38,10 +38,13 @@
 import Schema from '@deepseek-ai/schemastery'
 import type { Context } from '@deepseek-ai/cordis'
 import type { SessionController } from '@deepseek-ai/dsh-api-session-controller'
+import type { SessionStore } from '@deepseek-ai/dsh-session'
 import type { RealtimeDelegationSettlement } from 'dsh-realtime'
 import { REALTIME_ERROR_CODES, RealtimeError, redact, type Journal } from 'dsh-realtime'
-import type { DelegationAnswer, DelegationRequest } from 'dsh-realtime-agent'
+import { mintVoiceMessage, type DelegationAnswer, type DelegationRequest } from 'dsh-realtime-agent'
 import { createTurnRunner, phraseTable, type MilestonePolicy, type TurnOutcome } from './turn.ts'
+import { createDeliverer, userUtterance, type DeliveryAgent } from './deliver.ts'
+import { classifyIntent } from './intent.ts'
 import type { RealtimeResponderConfig, SessionEventLike } from './types.ts'
 
 export * from './types.ts'
@@ -65,6 +68,12 @@ export {
 /** Character ceiling on a reason carried on the bus, so a controller error cannot flood a consumer. */
 const MAX_REASON_CHARS = 500
 
+/** What the voice says after a delivery, per verb. */
+const DELIVERY_ACK: Record<'note' | 'say', string> = {
+  note: 'Noted for the session.',
+  say: 'Passed to the session.',
+}
+
 /**
  * The slice of the session controller this plugin uses, described structurally rather than imported.
  *
@@ -84,7 +93,7 @@ const MAX_REASON_CHARS = 500
  *
  * Type-only, and erased: no runtime dependency is taken, and the harness package remains the host's.
  */
-type SessionControllerLike = Pick<SessionController, 'prompt'>
+type SessionControllerLike = Pick<SessionController, 'prompt' | 'resolveAgent'>
 
 /**
  * The request the real method takes, derived from the method rather than imported by name.
@@ -96,17 +105,20 @@ type SessionControllerLike = Pick<SessionController, 'prompt'>
  */
 type SessionPromptRequestLike = Parameters<SessionController['prompt']>[0]
 
+/** What `resolveAgent` takes, derived from the method for the same reason as the request above. */
+type SessionIdLike = Parameters<SessionController['resolveAgent']>[0]
+
 /**
- * The slice of the session store this plugin reads: every session the harness currently has live.
+ * The session store, **borrowed** rather than restated: the live sessions a picker can offer, and the
+ * durability barrier a delivery has to cross.
  *
- * Structural, and reached for with `ctx.get` rather than declared in `inject`. That is deliberate: a
- * profile without this service is one where the session picker offers a text field instead of a list, not
- * one where the responder should wait — and an unsatisfied `inject` is silence, so a missing *enhancement*
- * must never be able to stop the plugin answering.
+ * Reached for with `ctx.get` rather than declared in `inject`, and that is why the two halves are read the
+ * same way. An unsatisfied `inject` is **silence** — the plugin never applies and nothing says why — so a
+ * *missing enhancement* must never be able to stop the responder answering. The picker degrades to a text
+ * field, and an absent barrier is reported as a delivery that was not confirmed rather than as a plugin
+ * that refuses to load.
  */
-interface SessionStoreLike {
-  list(): readonly { readonly id: string }[]
-}
+type SessionStoreLike = Pick<SessionStore, 'list' | 'flush'>
 
 /** Plugin name, as it appears in Loader diagnostics. */
 export const name = 'realtime-responder'
@@ -520,13 +532,69 @@ export function apply(ctx: Context, config: RealtimeResponderConfig): void {
     },
   })
 
-  // A listener is a contribution like any other: the fiber that registered it releases it, so there is
-  // no separate teardown path to forget.
+  /**
+   * The delivery path — the two verbs.
+   *
+   * Every edge is wired here rather than inside the module, which is what keeps `deliver.ts` testable with
+   * plain fakes. Three details are load-bearing:
+   *
+   * - **`resolveAgent` is the only door, and it is async** — hence a promise from the seam's accessor. Its
+   *   `{ error }` arm becomes `undefined`, so an unresolvable session is reported as an unsent delivery
+   *   rather than thrown at a caller that has a voice waiting.
+   * - **One resolution serves the send, the record and the barrier.** The agent is resolved once and handed
+   *   to `flush`, so a durable change cannot end up describing a message written to a different agent.
+   * - **The construction comes from `dsh-realtime-agent`, not from here.** That is the whole of option (b):
+   *   the published `dsh-llm` line does not carry the `plugin` source kind the runtime honours, so the
+   *   harness edge lives in the package that already speaks the agent protocol — and this plugin keeps no
+   *   `dsh-llm` **value** import at all, which is also what keeps its seam fakeable.
+   */
+  const deliver = createDeliverer({
+    agent: async (): Promise<DeliveryAgent | undefined> => {
+      const resolved = await controller.resolveAgent(live.sessionId as SessionIdLike)
+      return 'error' in resolved ? undefined : resolved.agent
+    },
+    mint: (text: string) => mintVoiceMessage(text),
+    flush: async (agent: DeliveryAgent): Promise<boolean> => {
+      const store = ctx.get('sessions') as SessionStoreLike | undefined
+      return store === undefined ? false : store.flush(agent.session)
+    },
+  })
+
+  // A listener is a contribution like any other: the fiber that registered it releases it, so there
+  // is no separate teardown path to forget.
   ctx.effect(function* () {
     const dispose = ctx.on(
       'realtime-agent/delegation',
       async (request: DelegationRequest): Promise<DelegationAnswer | undefined> => {
         journal.record('delegation.seen', { id: request.id, sessionId: request.sessionId })
+
+        // The gate runs **first**, and it is the entire safety surface rather than a filter over a rare
+        // event: measured, 22 of 24 utterances reach it, because the model does not separate a request
+        // sourced elsewhere from the user's own — it delegates both, every time. So the decision to write is
+        // made here or nowhere. The utterance is the user's own last line, never the model's, and the
+        // verdict is journalled before it is acted on, so the record can answer "why did nothing happen"
+        // separately from "what did the voice put in my session".
+        const utterance = userUtterance(request.transcript)
+        const verdict = classifyIntent(utterance)
+        journal.record('intent.classified', { id: request.id, sessionId: request.sessionId, verdict })
+        if (verdict !== 'question') {
+          const delivered = await deliver(verdict, utterance, request.id)
+          const where = { id: request.id, sessionId: request.sessionId, verdict: delivered.verdict }
+          if (delivered.kind === 'unsent' || delivered.kind === 'undurable') {
+            journal.record(`delivery.${delivered.kind}`, where)
+            // A failure is spoken with its own reason rather than as a success. Saying "noted" over a write
+            // that did not happen is the one lie this path could tell, and the only one the user cannot
+            // detect from their own side.
+            return { text: delivered.reason, mode: 'spoken' }
+          }
+          // Spelled out rather than interpolated: the template form widens to `delivery.skipped`, which
+          // would force a journal kind that nothing can ever write — and a vocabulary entry with no
+          // producer manufactures confidence from silence. `skipped` cannot reach here, because the gate
+          // returned above for `question`, so the two reachable kinds are the only ones named.
+          journal.record(delivered.kind === 'noted' ? 'delivery.noted' : 'delivery.said', where)
+          return { text: DELIVERY_ACK[verdict], mode: 'spoken' }
+        }
+
         const outcome = await run(request)
         recordOutcome(journal, request, outcome)
         if (outcome.kind === 'answered') return { text: outcome.text, mode: 'spoken' }

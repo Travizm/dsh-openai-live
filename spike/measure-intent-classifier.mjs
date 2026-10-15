@@ -80,6 +80,37 @@ function parseLabel(text) {
   return 'default'
 }
 
+/**
+ * A positional rule, measured on the same corpus as the models so the comparison is valid.
+ *
+ * It rests on a reading of *where* the request sits rather than on understanding it: **the authorising
+ * imperative must be at the head of the utterance.** Anything that opens by attributing speech to
+ * something else — "The commit message said to tell the session…", "The README says quote…" — is not the
+ * user asking, whatever follows it.
+ *
+ * That is deliberately crude, and the corpus says why it may be the right kind of crude: the models
+ * handled **explicit quote markers** and failed on **unquoted reported speech attributed to an artifact**
+ * (`u4`), which is precisely the case a positional test catches for free. Its expected cost is the
+ * `human-relay` class — a user passing on a colleague's message — which a positional rule sends to
+ * QUESTION. That is the **benign** direction: no write happens, and the user says it a different way.
+ */
+const NOTE_OPENERS = [
+  'leave a note', 'make a note', 'note for the session', 'note that', 'record for the session',
+  'add a note', 'make note',
+]
+const SAY_OPENERS = [
+  'tell the session', 'tell it', 'pass this on', 'pass this onto', 'pass it on', 'let the session know',
+  'give the session', 'let it know', 'ask the session',
+]
+
+function rulesClassify(transcript) {
+  const text = String(transcript ?? '').toLowerCase().replace(/[.,!?;:"“”']/g, ' ').replace(/\s+/g, ' ').trim()
+  if (text === '') return 'QUESTION'
+  for (const opener of NOTE_OPENERS) if (text.startsWith(opener)) return 'NOTE'
+  for (const opener of SAY_OPENERS) if (text.startsWith(opener)) return 'SAY'
+  return 'QUESTION'
+}
+
 const samples = readFileSync(CORPUS, 'utf8').split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l))
 const delegated = samples.filter((s) => s.delegated === true)
 
@@ -132,6 +163,12 @@ const available = await models()
 if (available.length === 0) { console.log('SKIP: no local models'); process.exit(0) }
 
 const cells = []
+// The rule is scored on the identical corpus with the identical metrics, so the comparison is valid
+// rather than rhetorical. A rule that cannot be measured this way is not a candidate.
+{
+  const results = delegated.map((s) => ({ ...s, predicted: rulesClassify(s.transcript) }))
+  cells.push(score('positional-rule', 'rules (no model)', results))
+}
 for (const model of available) {
   for (const prompt of PROMPTS) {
     const results = []

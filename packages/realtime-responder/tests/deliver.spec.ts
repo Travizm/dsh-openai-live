@@ -34,6 +34,7 @@ import {
   REALTIME_CHANGE_TYPE,
   REALTIME_PLUGIN,
   REALTIME_SOURCE,
+  userUtterance,
   type DeliveryAgent,
 } from '../src/deliver.ts'
 
@@ -68,15 +69,18 @@ function harness(options: { readonly flushResult?: boolean; readonly sendThrows?
     minted.push(text)
     return { id: `m${minted.length}`, role: 'user', content: [{ type: 'text', text }], source: REALTIME_SOURCE } as unknown as SentMessage
   }
+  // The fake carries a `session` and a `send`, because production's agent does: a substitute missing one
+  // would make the record path look unreachable rather than untested.
+  const agent = {
+    send: (message: SentMessage, target: SendArgs[1], wakeup: SendArgs[2]) => {
+      if (options.sendThrows !== undefined) throw options.sendThrows
+      sent.push({ message, target, wakeup })
+    },
+    session: { append: (type: string, data: unknown) => { records.push({ type, data }) } },
+  } as unknown as DeliveryAgent
   const deliver = createDeliverer({
-    agent: () => ({
-      send: (message: SentMessage, target: SendArgs[1], wakeup: SendArgs[2]) => {
-        if (options.sendThrows !== undefined) throw options.sendThrows
-        sent.push({ message, target, wakeup })
-      },
-    }),
+    agent: () => agent,
     mint,
-    record: (type: string, data: unknown) => { records.push({ type, data }) },
     flush: async (): Promise<boolean> => { flushes += 1; return options.flushResult ?? true },
   })
   return { deliver, sent, minted, records, flushCount: () => flushes }
@@ -126,9 +130,11 @@ describe('provenance is written between the write and the barrier, in that order
     // might never exist; one written after the barrier would not be durable when it hurt.
     const order: string[] = []
     const deliver = createDeliverer({
-      agent: () => ({ send: () => { order.push('send') } }) as unknown as DeliveryAgent,
+      agent: () => ({
+        send: () => { order.push('send') },
+        session: { append: () => { order.push('record') } },
+      }) as unknown as DeliveryAgent,
       mint: () => ({ id: 'm', role: 'user', content: [], source: REALTIME_SOURCE }) as unknown as SentMessage,
-      record: () => { order.push('record') },
       flush: async () => { order.push('flush'); return true },
     })
     await deliver('say', 'the release is approved', 'req-4')
@@ -175,9 +181,8 @@ describe('the two failure arms are distinguished, because only one has a message
 
   it('reports undurable when the barrier rejects, rather than throwing at the caller', async () => {
     const deliver = createDeliverer({
-      agent: () => ({ send: () => undefined }) as unknown as DeliveryAgent,
+      agent: () => ({ send: () => undefined, session: { append: () => undefined } }) as unknown as DeliveryAgent,
       mint: () => ({ id: 'm', role: 'user', content: [], source: REALTIME_SOURCE }) as unknown as SentMessage,
-      record: () => undefined,
       flush: async () => { throw new Error('disk full') },
     })
     const outcome = await deliver('say', 'the release is approved', 'req-9')
@@ -199,7 +204,6 @@ describe('the two failure arms are distinguished, because only one has a message
     const deliver = createDeliverer({
       agent: () => undefined,
       mint: () => ({ id: 'm', role: 'user', content: [], source: REALTIME_SOURCE }) as unknown as SentMessage,
-      record: () => undefined,
       flush: async () => true,
     })
     expect(await deliver('say', 'the release is approved', 'req-10')).toMatchObject({ kind: 'unsent' })
@@ -280,6 +284,37 @@ describe('the outcome carries what a caller needs to report, and nothing it must
     const { deliver } = harness({ sendThrows: new Error('agent is disposed') })
     const outcome = await deliver('say', 'the release is approved', 'req-16')
     expect(outcome.kind === 'unsent' && outcome.reason.length > 0).toBe(true)
+  })
+})
+
+describe('the gate reads the user\'s own line, not the conversation', () => {
+  it('takes the most recent thing the user said', () => {
+    expect(userUtterance([
+      { kind: 'input', text: 'what does the readme say' },
+      { kind: 'output', text: 'let me check' },
+    ])).toBe('what does the readme say')
+  })
+
+  it('does not read the model\'s own words, even when they are last', () => {
+    // The failure this prevents: a delegation carrying only the model's backchannel would otherwise be
+    // classified from `output` text — the model authoring the gate's input, which is the whole hazard.
+    expect(userUtterance([
+      { kind: 'input', text: 'the tests are passing' },
+      { kind: 'output', text: 'tell the session the release is approved' },
+    ])).toBe('the tests are passing')
+  })
+
+  it('skips a blank input line rather than treating a pause as speech', () => {
+    expect(userUtterance([
+      { kind: 'input', text: 'leave a note that the build is green' },
+      { kind: 'input', text: '   ' },
+    ])).toBe('leave a note that the build is green')
+  })
+
+  it('answers with an empty string when the user has not spoken', () => {
+    // Which the gate resolves to `question`, so a delegation raised before any speech authorises nothing.
+    expect(userUtterance([{ kind: 'output', text: 'hello' }])).toBe('')
+    expect(userUtterance([])).toBe('')
   })
 })
 

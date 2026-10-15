@@ -35,6 +35,14 @@
  * @module dsh-realtime-responder/deliver
  */
 
+import type { Session } from '@deepseek-ai/dsh-session'
+import type { UserMessage } from '@deepseek-ai/dsh-llm'
+import type { AgentTranscriptLine } from 'dsh-realtime-agent'
+// Side-effect import: the module augmentation that puts `realtime/change` on `SessionEventMap`, without
+// which the `session.append` below does not compile. Imported here because this is the file that makes the
+// call, so the declaration and its one consumer sit together.
+import './change.ts'
+
 /**
  * The name this plugin writes under.
  *
@@ -81,17 +89,15 @@ export const REALTIME_SOURCE: RealtimeSource = Object.freeze({ kind: 'plugin', p
 export type InboxTarget = 'next-step' | 'next-turn'
 
 /**
- * The slice of a user message this module reads, narrowed to what it writes.
+ * A user message, **borrowed** rather than restated.
  *
- * `content` and `source` are the two required fields of the harness's `Message`; the deliverer authors the
- * content itself and owns the source, so it never inspects either.
+ * `createUserMessage` returns the harness's own `UserMessage`, so an alias makes the mint site and the seam
+ * the same type by construction. A structural restatement was tried first and rejected at the wiring site:
+ * `MessageSource` is a union of every producer's source shape, so a narrowed `{ kind: 'plugin'; … }` is not
+ * assignable from it — the restatement would have needed a cast to hide a mismatch that the real type
+ * simply does not have.
  */
-export interface DeliveredMessage {
-  readonly id: string
-  readonly role: 'user'
-  readonly content: readonly { readonly type: string; readonly text?: string }[]
-  readonly source: RealtimeSource
-}
+export type DeliveredMessage = UserMessage
 
 /**
  * The one method this module needs from an Agent.
@@ -103,6 +109,34 @@ export interface DeliveredMessage {
  */
 export interface DeliveryAgent {
   send(message: DeliveredMessage, target: InboxTarget, wakeup: boolean): void
+  /**
+   * The agent's session, **borrowed from the harness rather than restated**.
+   *
+   * The **whole** `Session`, not a `Pick`, and the reason is the barrier: `flush` takes a `Session`, so a
+   * narrowed `{ append }` would typecheck at the append and then fail at the flush — two halves of one
+   * delivery disagreeing about what a session is. Borrowing the full type makes the resolve site, the
+   * record and the barrier one type throughout, and makes the `realtime/change` declaration in
+   * `./change.ts` **load-bearing**: delete it and `append` stops compiling, rather than quietly writing an
+   * event type nothing declares.
+   */
+  readonly session: Session
+}
+
+/**
+ * The payload of {@link REALTIME_CHANGE_TYPE}.
+ *
+ * Versioned like `dsh-schedule`'s own change (`{ version: 1, operation, id }`), because this value is
+ * durable: a later reader has to be able to tell which shape of record it is holding without guessing from
+ * which fields happen to be present.
+ */
+export interface RealtimeChange {
+  readonly version: 1
+  readonly operation: 'deliver'
+  /** The delegation this delivery answers. */
+  readonly id: string
+  readonly verdict: 'note' | 'say'
+  /** Characters written, so a truncation upstream is visible in the durable record rather than only in a log. */
+  readonly chars: number
 }
 
 /** What a delegated utterance authorises. Mirrors the gate's verdict, plus the no-write default. */
@@ -171,19 +205,51 @@ function reasonOf(error: unknown): string {
   return 'the delivery was refused'
 }
 
+/**
+ * The user's own words from a delegation's transcript.
+ *
+ * The delegation carries **no text** — the protocol sends metadata only — so this is the gate's entire
+ * input, and it has to be the *user's* line rather than the joined conversation. `AgentTranscriptLine`
+ * carries `kind: 'input' | 'output'`, and taking the last `input` line is what makes the gate read the live
+ * request rather than something the model said back.
+ *
+ * Backwards, because the last input line is the request and the earlier ones are context. Returns an empty
+ * string when the user has not spoken, which the gate resolves to `question` — so a delegation raised
+ * before any speech authorises nothing rather than keying off the model's own words.
+ * @param transcript - the conversation so far, oldest first.
+ * @returns the most recent thing the user said, or an empty string.
+ */
+export function userUtterance(transcript: readonly AgentTranscriptLine[]): string {
+  // Reversed copy rather than an index loop: indexing under `noUncheckedIndexedAccess` yields
+  // `AgentTranscriptLine | undefined`, and a guard for that would be **dead defensive code** — an index
+  // inside the array's own bounds is never undefined, so the condition could not be covered and the
+  // per-file bar would rightly refuse to let it exist.
+  for (const line of [...transcript].reverse()) {
+    if (line.kind === 'input' && line.text.trim().length > 0) return line.text
+  }
+  return ''
+}
+
 /** What {@link createDeliverer} needs from its caller. Functions, so a test needs no harness. */
 export interface DeliveryDeps {
-  /** The session to write to, read at the moment of use. `undefined` when none is attached. */
-  readonly agent: () => DeliveryAgent | undefined
+  /**
+   * The session to write to, resolved at the moment of use. `undefined` when none is attached.
+   *
+   * **Asynchronous, and that is a measurement rather than a preference.** The only way to reach an `Agent`
+   * from out of tree is `resolveAgent(sessionId)` on the session controller, which returns
+   * `Promise<ApiSessionAgentResult>` — `{ agent } | { error }`. A synchronous accessor could not express it.
+   */
+  readonly agent: () => DeliveryAgent | undefined | Promise<DeliveryAgent | undefined>
   /** Mint a user message from producer-authored text. The source is the minter's, and is ours. */
   readonly mint: (text: string) => DeliveredMessage
-  /** Append the durable change record for the session. Called **after** the send, before the barrier. */
-  readonly record: (type: string, data: unknown) => void
   /**
-   * The durability barrier. Resolves `false` when the change is not durable — a distinct outcome from a
-   * rejection, and a distinct outcome from never having written at all.
+   * The durability barrier, for the agent that was resolved.
+   *
+   * Takes the agent rather than closing over one, so **one** resolution serves the send, the record and the
+   * barrier. Three separate lookups could resolve three different agents — or none on the last of them —
+   * and the record would then describe a message written somewhere else.
    */
-  readonly flush: () => Promise<boolean>
+  readonly flush: (agent: DeliveryAgent) => Promise<boolean>
 }
 
 /**
@@ -202,7 +268,7 @@ export function createDeliverer(deps: DeliveryDeps) {
     // read, so a question cannot be turned into a write by a session appearing between two calls.
     if (verdict === 'question') return { kind: 'skipped', id, verdict }
 
-    const agent = deps.agent()
+    const agent = await deps.agent()
     if (agent === undefined) return { kind: 'unsent', id, verdict, reason: NO_AGENT }
 
     // The frame is ours and goes above the user's words; both are authored here, and neither the text nor
@@ -225,16 +291,13 @@ export function createDeliverer(deps: DeliveryDeps) {
     // something the inbox already records, and the two could disagree.
     if (verdict === 'note') return { kind: 'noted', id, verdict, chars: body.length }
 
-    deps.record(REALTIME_CHANGE_TYPE, {
-      version: 1,
-      operation: 'deliver',
-      id,
-      verdict,
-      chars: body.length,
-    })
+    // Through the session's own log, not a plugin-owned store: the change record is durable state, and a
+    // second store would be a second memory that could disagree with the log about what was written.
+    const change: RealtimeChange = { version: 1, operation: 'deliver', id, verdict, chars: body.length }
+    agent.session.append(REALTIME_CHANGE_TYPE, change)
 
     try {
-      if (!(await deps.flush())) return { kind: 'undurable', id, verdict, reason: NOT_DURABLE }
+      if (!(await deps.flush(agent))) return { kind: 'undurable', id, verdict, reason: NOT_DURABLE }
     } catch (error) {
       return { kind: 'undurable', id, verdict, reason: reasonOf(error) }
     }

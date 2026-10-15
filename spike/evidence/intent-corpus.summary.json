@@ -1,0 +1,35 @@
+{
+  "generatedAt": "2026-10-15T03:15:37.930Z",
+  "runs": 3,
+  "samples": 63,
+  "byClass": {
+    "question": {
+      "samples": 9,
+      "delegated": 9
+    },
+    "note": {
+      "samples": 9,
+      "delegated": 9
+    },
+    "say": {
+      "samples": 9,
+      "delegated": 9
+    },
+    "ambiguous": {
+      "samples": 6,
+      "delegated": 3
+    },
+    "untrusted-source": {
+      "samples": 12,
+      "delegated": 12
+    },
+    "human-relay": {
+      "samples": 9,
+      "delegated": 9
+    },
+    "legit-sourced": {
+      "samples": 9,
+      "delegated": 9
+    }
+  }
+}

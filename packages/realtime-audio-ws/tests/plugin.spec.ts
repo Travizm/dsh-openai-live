@@ -484,12 +484,14 @@ describe('the audio route', () => {
   it('publishes the strip after the settings it reads', async () => {
     const { context } = await mount()
     const rows = injectionRows(context)
-    // Markup, then the bootstrap that mounts the panel on it: the table's ordering guarantee is what makes
-    // a two-row panel safe, and the settings row has to come first because the bundle reads it while
-    // rendering.
-    expect(rows.map(row => row.kind)).toEqual(['global', 'html', 'script'])
-    expect(rows[1]?.html).toContain(`id="${STRIP_ELEMENT_ID}"`)
-    expect(rows[2]?.text).toContain('__dshRealtimeAudio')
+    // The stylesheet, then the markup, then the bootstrap that mounts the panel on it: the table's ordering
+    // guarantee within a placement is what makes a multi-row panel safe, and the settings row has to come
+    // first because the bundle reads it while rendering. A `style` row is a `head` row whatever its position
+    // in the table, which is why it precedes the markup it styles without any ordering trick.
+    expect(rows.map(row => row.kind)).toEqual(['global', 'style', 'html', 'script'])
+    expect(rows[1]?.text).toContain('#dsh-realtime-strip')
+    expect(rows[2]?.html).toContain(`id="${STRIP_ELEMENT_ID}"`)
+    expect(rows[3]?.text).toContain('__dshRealtimeAudio')
   })
 
   it('accepts the injected token from a caller that cannot carry the cookie', async () => {

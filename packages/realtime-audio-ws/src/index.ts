@@ -69,7 +69,7 @@ export {
 } from './control.ts'
 export { createUpgradeAcceptor, rejectUpgrade, type UpgradeAcceptor } from './upgrade.ts'
 export { diagnosticsRoute, type DiagnosticsDeps, type DiagnosticsJournal, type DiagnosticsRoute } from './diagnostics.ts'
-export { STRIP_ELEMENT_ID, stripBootstrap, stripMarkup, stripRows } from './strip.ts'
+export { STRIP_ELEMENT_ID, stripBootstrap, stripMarkup, stripRows, stripStyles } from './strip.ts'
 export type { InjectedGlobalRow, InjectedRow } from './injection.ts'
 
 import { createJournalFileSink } from './journal-file.ts'

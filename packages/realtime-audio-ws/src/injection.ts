@@ -39,16 +39,21 @@ export interface InjectedGlobalRow {
 /**
  * Any row this package contributes.
  *
- * The host's table takes six kinds; this package uses three, and describes only those — `html` for the
- * panel's markup and `script` for the bootstrap that mounts it, beside the `global` row carrying the
- * route's own settings. The payload contract is the host's and is stated where it is enforced: a `script`
- * row's text or a `style` row's text must not contain the closing tag of its own element, because the row
- * is spliced into the document's text.
+ * The host's table takes six kinds; this package uses four, and describes only those — `style` for the
+ * panel's own stylesheet, `html` for the markup and `script` for the bootstrap that mounts on it, beside
+ * the `global` row carrying the route's own settings. The payload contract is the host's and is stated
+ * where it is enforced: a `script` row's text or a `style` row's text must not contain the closing tag of
+ * its own element, because the row is spliced into the document's text.
+ *
+ * **A `style` row carries no `placement`.** The host renders it into `head` unconditionally — the other
+ * five kinds are the ones that read `placement` — so a row declaring one would be declaring a field
+ * nothing reads. Leaving it out is what makes this type agree with the renderer.
  */
 export type InjectedRow =
   | InjectedGlobalRow
   | { readonly kind: 'html'; readonly placement: 'head' | 'body'; readonly html: string }
   | { readonly kind: 'script'; readonly placement: 'head' | 'body'; readonly text: string }
+  | { readonly kind: 'style'; readonly text: string }
 
 /**
  * Where the client should open its socket, or undefined when the host is not listening yet.

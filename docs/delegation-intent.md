@@ -106,9 +106,10 @@ microphone ─▶ ASR/provider ─▶ delegation (id, offset_ms — NO TEXT) ─
 | **a network attacker on the local WS route** | frame injection into the plugin's own transport | the existing capability token + connection-service verdict; **unchanged by this plan, and it must be re-asserted for the write path** |
 | **the model itself, as author of its own provenance** | it can try to name its actor, its session, or its verb | **attribution is stamped by the bridge at delivery, from code** — no model-supplied field may name any of them |
 
-**The trust decision is a single point, and that is the point.** The classifier decides *whether* a
-write happens. It cannot decide *what kind of write it is credited with* — that is the delivery path
-(`inject()` ⇒ note/untrusted; `followup()` ⇒ say/attributed). One place to get right, one place to test.
+**The trust decision is a single point, and that is the point.** The gate decides *whether* a write
+happens — and per **ADR-010** that gate is a positional rule in code, not a model (see §6). It cannot
+decide *what kind of write it is credited with* — that is the delivery path (`inject()` ⇒ note/untrusted;
+`followup()` ⇒ say/attributed). One place to get right, one place to test.
 
 **A boundary that must be stated because the note sits on it:** `agent.inject` places content on the
 **user role** — the highest-authority channel in the transcript — and a note that lands immediately
@@ -121,26 +122,41 @@ content-only rule and the untrusted framing line; both are load-bearing, neither
 
 A **decision procedure**, not a heuristic description. Three outcomes; the third is the default.
 
-### The rule
+### The rule — ADR-010, as implemented
 
 ```
-1. If the delegation has no content-bearing transcript span        → QUESTION   (answer it — today's behaviour)
-2. If the write request sits INSIDE quoted or reported material    → QUESTION   ← ATTRIBUTION (§4)
-3. If it matches the WRITE-NOTE shape unambiguously                → NOTE
-4. If it matches the WRITE-SAY shape unambiguously                 → SAY
-5. Otherwise                                                       → QUESTION   ← FAIL CLOSED
+1. Normalise               lowercase, punctuation and whitespace removed   ← the transcript drifts
+2. If the utterance BEGINS with a note opener      → NOTE
+3. If the utterance BEGINS with a say opener       → SAY
+4. Otherwise                                       → QUESTION   ← FAIL CLOSED
 ```
 
-**Rule 5 is the safety argument. Rule 2 was added because measurement demanded it** — see §4's attribution
-corpus, where a request attributed to another source delegated 6/6 and passed through as a write shape.
-There is no "probably a write" outcome and no confidence threshold that admits a write: ambiguity resolves
-*downward*, to the behaviour that exists today.
+**The test is position, not vocabulary.** The authorising imperative must be at the **head** of the
+utterance; anything that opens by attributing speech elsewhere is a question, whatever follows it.
+Implemented in `packages/realtime-responder/src/intent.ts`; the corpus in
+`packages/realtime-responder/tests/fixtures/intent-corpus.json` is its **test set**, and
+`tests/intent.spec.ts` asserts the rule's output *and* that its cost set is exactly one class.
 
-**Rule 2 is a scope test, not a vocabulary test.** It asks *where the request-to-write sits*: outside the
-quote is the user's own request (SAY); inside a quote or a reported clause it belongs to someone else
-(QUESTION). Rules keyed on *"mentions a source"* or *"contains a quote"* are **known to be wrong** — they
-destroy the legitimate cases *"tell the session that the README says X"* and *"the ticket says X — let the
-session know"*. The full four-row specification is in §4, and it is also the classifier's test set.
+**This supersedes the classifier.** The 1–5 procedure this section carried through v2 — rules 1, 2, 3, 4
+and the fail-closed 5 — described the *right* semantics and the *wrong* mechanism. Measurement separated
+them: the semantics survive as the corpus's `verdict` column, and the mechanism is now the rule above,
+because **nine of nine measured model cells produced a false write and the rule produced none**. See §6
+and [ADR-010](intent-gate-decision.md).
+
+Rule 5's fail-closed default is unchanged and is still the safety argument. What changed is who enforces
+it: a total function in code that can be read, tested and failed, rather than a model asked nicely. There
+is no "probably a write" outcome and no confidence threshold that admits a write: ambiguity resolves
+*downward*, to the behaviour that exists today. A `human-relay` utterance (*"Marcus said to tell the
+session…"*) resolves downward too — that is the rule's accepted cost, and the direction ADR-010 chose
+deliberately because the user can rephrase out of it and cannot un-write a false record.
+
+**A scope test, not a vocabulary test** — and the measurement is now specific about why. Every model cell
+handled **explicit quote markers** and failed on **unquoted reported speech attributed to an artifact**,
+which is the case a positional test catches for free. Rules keyed on *"mentions a source"* or *"contains a
+quote"* are **known to be wrong**: they destroy the legitimate cases *"tell the session that the README says
+X"* and *"leave a note that the ticket says X"*. **Source trust is not a usable signal either** — it was
+tested directly with the isolating pair (*"Marcus said…"* vs *"The commit message said…"*, structurally
+identical) and refuted: the models wrote on both.
 
 ### The two failure axes are asymmetric, and the contract says so
 
@@ -319,3 +335,83 @@ P1 story 1's open item, recorded here so it is not lost: using a harness package
 **not** `devDependencies`. `dsh-api-session-controller` is currently a *devDependency* of
 `realtime-responder`. **The manifest change is required for P2a, and `pnpm declared-deps` is the gate
 that will demand it** — so it is a named consequence, not a surprise.
+
+---
+
+## 6. Producer identity and the write path — measured at the runtime tree
+
+*P2a story 1's decision, plus the four facts the delivery module is built on. All read from
+`~/.dsh/profiles/node_modules/@deepseek-ai/` at **0.1.5-rc.2**, the tree the plugin actually resolves
+from — not from the app's merged typert catalogue, which is a different harness line and has already
+misled this project once.*
+
+### The source kind is `plugin`, and no augmentation is needed
+
+`dsh-llm` 0.1.5-rc.2 declares the map at `lib/types/message.d.ts:94` with **four** keys:
+
+```ts
+export interface MessageSourceMap {
+  user: { kind: 'user' };
+  plugin: { kind: 'plugin'; plugin: string } & ContextFormed;   // ← general-purpose, takes any name
+  model: ModelMessageSource;
+  tool: ToolMessageSource;
+}
+```
+
+`plugin` is a **string**, so a producer names itself without touching the type. And the shipped in-tree
+write path does exactly that — `dsh-schedule/lib/index.js:930`:
+
+```js
+const message = createUserMessage({
+  content: [{ type: "text", text: … }],
+  source: { kind: "plugin", plugin: "schedule" },
+});
+this.agent.followup(message);
+if (decision.kind === "one-shot") this.agent.session.append("schedule/change", { … });
+```
+
+**Decision: `{ kind: 'plugin', plugin: 'realtime' }`.** Zero type augmentation, so nothing depends on
+declaration merging across a package boundary (the failure the plugin skill records as making types wrong
+while the runtime works); identical in shape to the one in-tree producer that already writes into a
+session; and it survives the upstream move toward per-producer kinds, because `plugin` is the general key
+on both harness lines.
+
+### The verb is not a field. It is the path
+
+The plan called for the verb in a kind-scoped field (`source.verb`). **It is not added, and the reason is
+structural rather than aesthetic:** the two verbs do not share a provenance surface to put a field on.
+
+| verb | surface | carries a `source`? |
+|---|---|---|
+| `say` | `createUserMessage({source})` → `followup()` — a user-role message | **yes** — `plugin: 'realtime'` |
+| `note` | `inject()` → the agent's inbox | **no** — it is not a message, and never appears in the log as one |
+
+So a `verb` field would be redundant for the say (`plugin: 'realtime'` on the followup path already says
+it) and impossible for the note. Worse, it would be a **second statement of the verb**, one of which could
+disagree with the delivery path that P2a story 2 makes authoritative — the same defect as a second memory.
+The verb is derived from the path, and the source kind only names the producer. **`tests/` asserts this: no
+field on the message may be branched on for authorisation.**
+
+### The Agent surface, borrowed rather than restated
+
+`dsh-agent` 0.1.5-rc.2 `lib/types/runtime-types.d.ts`:
+
+```ts
+send(message: UserMessage, target: InboxTarget, wakeup: boolean): void;
+followup(message: UserMessage): void;
+steer(message: UserMessage): void;
+inject(message: UserMessage): void;
+```
+
+**Eight's assumption is confirmed**: the two verbs are the extremes of one primitive —
+`send(msg, 'next-turn', true)` and `send(msg, 'next-step', false)`. The module calls `send` directly, so
+the fail-closed default and the wake decision are visible at one call site and a reader cannot find
+`followup`'s behaviour hidden inside a helper.
+
+### The write ordering, taken from schedule rather than invented
+
+`followup` → `session.append('realtime/change', …)` → flush. Both halves are in the excerpt above, in that
+order, which is why P2a story 4's "between the write and the flush" is a description of shipped behaviour
+and not a design choice. The two failure arms stay distinct as planned: a **throw from `send`** means
+nothing was written (safe to retry), while a **false barrier** means written-but-not-durable — and only the
+second needs the `realtime/change` record consulted, because only the second has a message that exists.

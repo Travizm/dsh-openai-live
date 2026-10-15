@@ -824,6 +824,22 @@ describe('the panel — everything the registry holds, one level down', () => {
     expect(controls).toContain('class="dvr-tab" data-action="level" data-level="all">ALL SETTINGS')
   })
 
+  it('keeps the speak-steps switch off the deepest level, where the setting has its own row', () => {
+    // The deepest level gives every setting its own control, so the switch there as well would put one
+    // setting behind two toggles on one screen — two rows that read identically, in miniature.
+    const all = renderStrip(panelState({
+      level: 'all',
+      reply: statusReply({ settings: [setting({ key: 'realtime-responder.speakMilestones', kind: 'boolean', field: 'speakMilestones', value: true })] }),
+    }))
+    expect(all.match(/data-action="toggle"/gu)).toHaveLength(1)
+    // The controls level has no row for it, so there the switch is the only control it gets.
+    const controls = renderStrip(panelState({
+      level: 'controls',
+      reply: statusReply({ settings: [setting({ key: 'realtime-responder.speakMilestones', kind: 'boolean', field: 'speakMilestones', value: true })] }),
+    }))
+    expect(controls.match(/data-action="toggle"/gu)).toHaveLength(1)
+  })
+
   it('gives a live field a control, a session-bound field a note, and a restart-bound field nothing', () => {
     const markup = renderStrip(panelState({
       level: 'all',

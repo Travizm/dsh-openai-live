@@ -1,0 +1,8 @@
+{"step":"baseline session.start","outcome":"no-verdict-in-window","code":null,"message":null,"frames":["session.started"]}
+{"step":"session.update","outcome":"accepted","code":null,"message":null,"frames":["session.started","session.updated"]}
+{"step":"input_audio.mute","outcome":"accepted","code":null,"message":null,"frames":["session.started","session.input_audio.muted"]}
+{"step":"input_audio.unmute","outcome":"accepted","code":null,"message":null,"frames":["session.started","session.input_audio.unmuted"]}
+{"step":"session.close","outcome":"accepted","code":null,"message":null,"frames":["session.started","session.closed"]}
+{"step":"unknown event type","outcome":"error","code":"invalid_value","message":"Invalid value: '__probe_unknown_event__'. Supported values are: 'session.start', 'session.update', 'session.input_audio.append', 'session.input_audio.mute', 'session.input_audio.unmute', 'session.output_audio.fixture.play', 'session.instructions.append', 'session.thinking.append', 'session.commentary.append', 'response.item.create', 'response.create', and 'session.close'.","frames":["session.started","error"]}
+{"step":"responses route","outcome":"error","code":"unknown_parameter","message":"Unknown parameter: 'response'.","frames":["session.started","error"]}
+{"step":"input_audio.commit","outcome":"error","code":"invalid_value","message":"Invalid value: 'ses...mit'. Supported values are: 'session.start', 'session.update', 'session.input_audio.append', 'session.input_audio.mute', 'session.input_audio.unmute', 'session.output_audio.fixture.play', 'session.instructions.append', 'session.thinking.append', 'session.commentary.append', 'response.item.create', 'response.create', and 'session.close'.","frames":["session.started","error"]}

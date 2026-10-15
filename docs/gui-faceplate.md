@@ -1,7 +1,9 @@
 # The faceplate — the panel, specified
 
-**Status:** specified, not built. Written 2026-10-15 from a screenshot of the running app and four rulings from
-the owner. Build from this rather than from the current markup.
+**Status:** built 2026-10-15 from this spec (§4–§5), one commit after it. Still unverified *in the app*: §6
+says a screenshot of the running app is the only detector for appearance, and the pass so far is a render of
+the built artefacts (`scripts/faceplate-preview.mjs`, which loads the shipped stylesheet and the shipped
+client face through the module table's own contract) — not the app. The in-app run in §7 has not happened.
 
 **Supersedes:** the "remove the fixed-position overlay" item in `sprint-plan-voice-presence.md`. That fix
 landed on **2026-10-09** (`f818904`, PR #57) and predates the complaint, so it is not the problem.
@@ -158,3 +160,26 @@ project note. Its open clauses, which only a real session settles: whether a rea
   eventually say "make the voice wait longer" in the chat, the panel's job shrinks to **state plus the few
   things worth a knob**. That is the argument against ever putting all eight settings on the faceplate.
 - **Story 5's inbox assertions, story 7, P2b, P3** — unrelated to the GUI.
+
+## 9. What the build added, and the one judgement call
+
+Written after the build, so the deltas below are recorded rather than left to be discovered by reading the
+diff. Everything in §4 is as specified except these four.
+
+1. **A `style` row, and a stylesheet that lives in the host half.** §5 named `strip.ts` as "the container",
+   which needed a mechanism: the host's injection table has six row kinds and `style` is one of them, so the
+   plate's CSS is a third row from `stripRows()` and lands in `head` (the host fixes a `style` row's
+   placement — it reads no `placement` field). The class names are the seam between the two files, so a test
+   reads the stylesheet's defined names and the markup's worn names and refuses to let them drift.
+2. **The collapsed plate carries the on-switch.** §4's level-1 row lists readouts and `SETTINGS ⌃`; the
+   build also puts `MIC` on it. The argument: S2 story 3 exists because the on-switch was in a devtools
+   console, and a collapsed default that hides the on-switch one level down undoes that. Everything else
+   stays behind the drill.
+3. **The input meter reports capture *state*, not a level.** A level needs a repaint loop, and repainting the
+   element's `innerHTML` on a timer destroys whatever is half-typed in it — the list editor is the case that
+   matters. So the bar is dark, filled, or faulted, and says so on the element.
+4. **The knob is a readout, not a draggable control — the one thing to rule on.** The pointer encodes the
+   value's position on the panel's own scale (the registry declares a kind, not a range, which is why a
+   draggable knob would claim knowledge the panel does not have) and the labelled field directly beneath it
+   is what writes. If it should be draggable, that is a small follow-up: drag → value → the same `set`.
+

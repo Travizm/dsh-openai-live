@@ -43,3 +43,6 @@ package-lock.json
 
 # The provenance record a gate run emits; regenerated every run, never committed.
 .provenance/
+
+# The faceplate preview's pages: rendered on demand from the built artefacts, never committed.
+.faceplate-preview/

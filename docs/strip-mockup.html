@@ -1,0 +1,219 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  /* ── MOCKUP ONLY: the page behind the panel, to judge placement ───────────────────────── */
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #14161a; color: #d7dce3;
+    display: flex; flex-direction: column;
+  }
+  .chat { flex: 1; padding: 18px 22px; overflow: hidden; }
+  .turn { max-width: 46ch; margin-bottom: 16px; }
+  .who { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #6f7885; margin-bottom: 3px; }
+  .user { color: #e6eaf0; }
+  .bot  { color: #a8b2c0; }
+  .hint { color: #6f7885; font-size: 11px; margin-top: 4px; }
+
+  /* ── THE PANEL: retro valve outboard. Brushed dark plate, cream engraved legend,
+        brass markers, jewel pilot lamp. Opaque by construction — a faceplate is solid. ── */
+  .rack {
+    flex: 0 0 auto;
+    background:
+      repeating-linear-gradient(90deg, rgba(255,255,255,.014) 0 1px, transparent 1px 3px),
+      linear-gradient(180deg, #26282c 0%, #1b1d20 42%, #141619 100%);
+    border-top: 1px solid #3a3d42;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 -8px 24px rgba(0,0,0,.45);
+    color: #e9e2ce;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    user-select: none;
+  }
+  .row { display: flex; align-items: center; gap: 16px; padding: 0 14px; height: 58px; }
+  .screw {
+    width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto;
+    background: radial-gradient(circle at 35% 30%, #6b6f76, #2a2d31 70%);
+    box-shadow: inset 0 1px 1px rgba(255,255,255,.25), 0 1px 1px rgba(0,0,0,.6);
+  }
+  .brand { line-height: 1.15; }
+  .brand .name { font-size: 12px; letter-spacing: .34em; font-weight: 700; color: #efe7d2;
+                 text-shadow: 0 1px 0 #000, 0 -1px 0 rgba(255,255,255,.09); }
+  .brand .model { font-size: 8.5px; letter-spacing: .2em; color: #9a8f75; margin-top: 2px; }
+  .rule { width: 1px; height: 30px; background: linear-gradient(180deg, transparent, #c9a227 20%, #c9a227 80%, transparent); opacity: .55; }
+
+  /* jewel pilot lamp */
+  .jewel { display: flex; align-items: center; gap: 8px; }
+  .lamp {
+    width: 13px; height: 13px; border-radius: 50%;
+    background: radial-gradient(circle at 38% 32%, #d8ffe2, #33d06a 45%, #106b34 100%);
+    box-shadow: 0 0 10px rgba(51,208,106,.65), inset 0 0 3px rgba(255,255,255,.7);
+  }
+  .lamp.off { background: radial-gradient(circle at 38% 32%, #6a6f76, #33383d 60%); box-shadow: inset 0 0 3px rgba(0,0,0,.8); }
+  .lamp.amber { background: radial-gradient(circle at 38% 32%, #ffeec4, #e8a72a 45%, #7a5407 100%); box-shadow: 0 0 10px rgba(232,167,42,.6), inset 0 0 3px rgba(255,255,255,.7); }
+  .lamp-label { font-size: 8.5px; letter-spacing: .16em; color: #9a8f75; }
+
+  /* level meter */
+  .meter { flex: 1 1 140px; max-width: 240px; }
+  .meter .track {
+    height: 8px; border-radius: 2px; background: #0d0f11;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,.9), inset 0 -1px 0 rgba(255,255,255,.04);
+    overflow: hidden; display: flex; gap: 1px; padding: 1px;
+  }
+  .seg { flex: 1; border-radius: 1px; background: #23262a; }
+  .seg.on { background: linear-gradient(180deg, #7de29b, #2f9c56); }
+  .seg.on.warm { background: linear-gradient(180deg, #ffd98a, #d99b18); }
+  .seg.on.hot { background: linear-gradient(180deg, #ff9b8a, #cf3a26); }
+  .meter .cap { display: flex; justify-content: space-between; font-size: 8px; letter-spacing: .14em; color: #8a8270; margin-bottom: 3px; }
+
+  .engraved {
+    font-size: 9px; letter-spacing: .14em; color: #9a8f75;
+    padding: 2px 7px; border-radius: 3px;
+    background: linear-gradient(180deg, #101214, #17191c);
+    box-shadow: inset 0 1px 0 rgba(0,0,0,.9), 0 1px 0 rgba(255,255,255,.05);
+    white-space: nowrap;
+  }
+  .spacer { flex: 1; }
+  .toggle {
+    cursor: pointer; font-family: inherit; font-size: 10px; letter-spacing: .18em;
+    color: #efe7d2; background: linear-gradient(180deg, #33373c, #212427);
+    border: 1px solid #45484e; border-radius: 4px; padding: 7px 11px;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.1), 0 1px 2px rgba(0,0,0,.5);
+  }
+  .toggle:active { background: linear-gradient(180deg, #212427, #33373c); }
+
+  /* ── expanded: one level of drill-through, knobs and switches ── */
+  .panel { display: none; padding: 4px 14px 16px; border-top: 1px solid #2c2f34; }
+  .panel.open { display: block; }
+  .knobs { display: flex; gap: 26px; align-items: flex-start; margin-top: 12px; }
+  .knob-unit { text-align: center; }
+  .knob {
+    width: 46px; height: 46px; border-radius: 50%; position: relative; margin: 0 auto 7px;
+    background:
+      conic-gradient(from 0deg, #2b2e33, #3a3e44 12%, #2b2e33 25%, #3a3e44 37%, #2b2e33 50%,
+                     #3a3e44 62%, #2b2e33 75%, #3a3e44 87%, #2b2e33),
+      radial-gradient(circle at 40% 34%, #43474d, #1c1f22 72%);
+    box-shadow: 0 3px 7px rgba(0,0,0,.65), inset 0 1px 1px rgba(255,255,255,.14);
+  }
+  .knob::after {
+    content: ""; position: absolute; left: 50%; top: 4px; width: 2px; height: 15px;
+    margin-left: -1px; border-radius: 1px;
+    background: linear-gradient(180deg, #f2e9d2, #b9ad8c);
+    box-shadow: 0 0 3px rgba(0,0,0,.8);
+    transform-origin: 50% 19px;
+  }
+  .knob.k1::after { transform: rotate(-38deg); }
+  .knob.k2::after { transform: rotate(14deg); }
+  .knob.k3::after { transform: rotate(52deg); }
+  .knob-label { font-size: 8.5px; letter-spacing: .15em; color: #9a8f75; }
+  .knob-value { font-size: 10px; color: #e9e2ce; margin-top: 2px; }
+
+  .switches { display: flex; gap: 22px; margin-top: 18px; align-items: center; }
+  .switch { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+  .led { width: 8px; height: 8px; border-radius: 50%; background: #0f1113; box-shadow: inset 0 0 2px rgba(0,0,0,.9); }
+  .led.on { background: radial-gradient(circle at 40% 35%, #fff6d5, #e8a72a 55%, #8a5f08 100%); box-shadow: 0 0 7px rgba(232,167,42,.75); }
+  .led.on.green { background: radial-gradient(circle at 40% 35%, #dcffe6, #33d06a 55%, #0f6b34 100%); box-shadow: 0 0 7px rgba(51,208,106,.7); }
+  .switch .name { font-size: 8.5px; letter-spacing: .14em; color: #9a8f75; }
+
+  .settings { margin-top: 18px; border-top: 1px dashed #33363b; padding-top: 12px; display: none; }
+  .settings.open { display: block; }
+  .srow { display: flex; align-items: center; gap: 12px; padding: 5px 0; font-size: 10px; }
+  .srow .k { color: #9a8f75; letter-spacing: .1em; min-width: 130px; }
+  .srow .v { color: #e9e2ce; }
+  .tabs { display: flex; gap: 8px; margin-top: 14px; }
+  .tab { cursor: pointer; font-size: 9px; letter-spacing: .16em; color: #8a8270; padding: 5px 9px; border-radius: 3px; }
+  .tab.active { color: #efe7d2; background: #1c1f22; box-shadow: inset 0 1px 0 rgba(255,255,255,.07); }
+  .note { color: #6f7885; font-size: 10px; padding: 0 14px 12px; font-family: -apple-system, sans-serif; }
+</style>
+</head>
+<body>
+  <div class="chat">
+    <div class="turn"><div class="who user">You</div><div class="user">Tell the session the release is approved.</div></div>
+    <div class="turn"><div class="who bot">Voice</div><div class="bot">Passed to the session.</div>
+      <div class="hint">↑ the panel no longer covers this — it is docked, not floating</div></div>
+    <div class="turn"><div class="who user">You</div><div class="user">What does the README say about installation?</div></div>
+    <div class="turn"><div class="who bot">Voice</div><div class="bot">It's staged in two parts — engine first, then the app wiring…</div></div>
+  </div>
+
+  <div class="rack">
+    <div class="row">
+      <span class="screw"></span>
+      <div class="brand">
+        <div class="name">REALTIME&nbsp;VOICE</div>
+        <div class="model">DVO-1 · DESK VALVE UNIT</div>
+      </div>
+      <div class="rule"></div>
+
+      <div class="jewel">
+        <span class="lamp" id="lamp"></span>
+        <div>
+          <div class="lamp-label" id="lampLabel">SESSION</div>
+        </div>
+      </div>
+
+      <div class="meter">
+        <div class="cap"><span>INPUT</span><span>−12&nbsp;&nbsp;−6&nbsp;&nbsp;0</span></div>
+        <div class="track" id="track"></div>
+      </div>
+
+      <span class="engraved" id="where">replay / gpt-live-1</span>
+      <span class="spacer"></span>
+      <button class="toggle" id="expand">SETTINGS ⌃</button>
+      <span class="screw"></span>
+    </div>
+
+    <div class="panel" id="panel">
+      <div class="knobs">
+        <div class="knob-unit"><div class="knob k1"></div><div class="knob-label">WAIT</div><div class="knob-value">45 s</div></div>
+        <div class="knob-unit"><div class="knob k2"></div><div class="knob-label">PROMPT</div><div class="knob-value">4000 ch</div></div>
+        <div class="knob-unit"><div class="knob k3"></div><div class="knob-label">MILESTONES</div><div class="knob-value">3</div></div>
+      </div>
+      <div class="switches">
+        <div class="switch" data-t="a"><span class="led on green"></span><span class="name">MIC</span></div>
+        <div class="switch" data-t="b"><span class="led on"></span><span class="name">SPEAK STEPS</span></div>
+        <div class="switch" data-t="c"><span class="led"></span><span class="name">NARRATE TOOLS</span></div>
+      </div>
+      <div class="tabs">
+        <span class="tab active" id="tabQuick">CONTROLS</span>
+        <span class="tab" id="tabAll">ALL SETTINGS</span>
+      </div>
+      <div class="settings" id="settings">
+        <div class="srow"><span class="k">sessionId</span><span class="v">session-ee033ab7…</span></div>
+        <div class="srow"><span class="k">answerTimeoutMs</span><span class="v">45000</span></div>
+        <div class="srow"><span class="k">maxPromptChars</span><span class="v">4000</span></div>
+        <div class="srow"><span class="k">speakMilestones</span><span class="v">true</span></div>
+        <div class="srow"><span class="k">milestoneIntervalMs</span><span class="v">4000</span></div>
+      </div>
+      <div class="note">Prototype — click SETTINGS, then <b>ALL SETTINGS</b> for the drill-through. The jewel, meter and knob positions are illustrative.</div>
+    </div>
+  </div>
+
+<script>
+  // meter
+  const track = document.getElementById('track');
+  for (let i = 0; i < 22; i++) {
+    const s = document.createElement('span');
+    s.className = 'seg' + (i < 15 ? ' on' + (i > 13 ? ' hot' : i > 9 ? ' warm' : '') : '');
+    track.appendChild(s);
+  }
+  // drill-through: collapsed → controls → all settings
+  const panel = document.getElementById('panel'), btn = document.getElementById('expand');
+  const settings = document.getElementById('settings');
+  const tabQuick = document.getElementById('tabQuick'), tabAll = document.getElementById('tabAll');
+  btn.onclick = () => {
+    panel.classList.toggle('open');
+    btn.textContent = panel.classList.contains('open') ? 'SETTINGS ⌄' : 'SETTINGS ⌃';
+  };
+  tabAll.onclick = () => { settings.classList.add('open'); tabAll.classList.add('active'); tabQuick.classList.remove('active'); };
+  tabQuick.onclick = () => { settings.classList.remove('open'); tabQuick.classList.add('active'); tabAll.classList.remove('active'); };
+  // switches
+  document.querySelectorAll('.switch').forEach(el => el.onclick = () => el.querySelector('.led').classList.toggle('on'));
+  // lamp states
+  const lamp = document.getElementById('lamp'), label = document.getElementById('lampLabel');
+  const states = [['', 'SESSION'], ['amber', 'CONNECTING'], ['off', 'CLOSED']];
+  let s = 0;
+  lamp.onclick = () => { s = (s + 1) % 3; lamp.className = 'lamp ' + states[s][0]; label.textContent = states[s][1]; };
+</script>
+</body>
+</html>

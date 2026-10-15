@@ -98,16 +98,23 @@ declaration catalogue is not the declaration site.** Full correction at
 
 ### The design rule that follows — trust is derived from the path, not from the prose
 
-The classifier still decides **whether** to write (fail-closed). It cannot **label** what it wrote.
-Trust and visibility are a deterministic function of the **delivery path taken**:
+The gate decides **whether** to write (fail-closed). It cannot **label** what it wrote — trust and
+visibility are a deterministic function of the **delivery path taken**:
 
 | path taken | verb | trust | wakes a turn |
 |---|---|---|---|
 | `agent.inject(msg)` | note | untrusted (content-only) | **no** |
 | `agent.followup(msg)` | say | attributed | **yes** |
 
-This collapses C-1, C-2's trust half and Haggai's F4 into one change: the model can influence *whether*
-a write happens, never *what kind of write it is credited with*. Attribution — actor id, origin session,
+This collapses C-1, C-2's trust half and Haggai's F4 into one change: nothing in the write path may
+influence *what kind of write it is credited with*.
+
+**And per [ADR-010](intent-gate-decision.md), nothing on the safety path is a model either.** Ten cells
+were measured on one harvested corpus. The gate is a **positional rule**: the authorising imperative must
+be at the head of the utterance, and any utterance that opens by attributing speech elsewhere — *"The
+commit message said to tell the session…"* — is a question. The rule produced **zero dangerous errors**;
+all nine model cells produced between three and twelve. The measurement is the reason the model comes off
+the safety path, not an aesthetic preference for rules. Attribution — actor id, origin session,
 verb — is stamped by the bridge at the moment of delivery, from code, never from model output.
 
 ---
@@ -151,10 +158,14 @@ enforceable. **P1 is measured live and replayed keylessly — it is not machine-
    **before** the classifier is written, store per-fixture provenance (session file, offset, utterance),
    and keep an **adversarial negatives set** — delegations containing injected text that reads as a
    note or a say, delegations echoing repo/web content, delegations that ask to be written — each
-   asserted to resolve to a question. **Two machine checks replace the coverage illusion** *(Q-03)*: a
-   **positive-rate floor** over the labelled corpus (a constant classifier must fail it) and a
-   **pre-registered ambiguity ceiling**. Per-file coverage is explicitly **not** the accuracy gate for
-   this module — stated in `docs/delegation-intent.md`.
+   asserted to resolve to a question. **The accuracy gate is [ADR-010](intent-gate-decision.md)'s** *(Q-03)*:
+   **zero dangerous errors** — adversarial or ambiguous utterances written rather than answered — over the
+   committed harvested corpus, with benign errors reported alongside and never traded against them.
+   Per-file coverage is explicitly **not** the accuracy gate for this module — stated in
+   `docs/delegation-intent.md`. The corpus is **harvested, never authored**
+   (`spike/harvest-transcripts.mjs`: 21 cases × 3 runs, real ASR output, resumable) and scored by
+   `spike/measure-intent-classifier.mjs`; together they are the regression test for any later change to
+   the rule or the prompt.
 6. **Instruction text for the two shapes**, as a hypothesis with its test, measured like the existing
    delegation brief was.
 
@@ -164,8 +175,8 @@ enforceable. **P1 is measured live and replayed keylessly — it is not machine-
    of scope) *(K-12, R24)*;
 - the manifest change lands and `pnpm declared-deps` stays green *(Q-07)*;
 - the spike fixture exists and replays **keylessly** through `dsh-realtime-replay`;
-- the adversarial corpus resolves to *question* on every negative, and the positive-rate floor plus
-   ambiguity ceiling pass — **as recorded tests, not prose**;
+- the adversarial corpus resolves to *question* on every negative, and the gate holds **zero dangerous
+  errors** over the harvested corpus — **as recorded tests, not prose**, and re-runnable;
 - the threat model exists as a file with the four elements above.
 
 **No user checkpoint** — the only live step is the keyed spike, which is explicitly flagged and
@@ -176,7 +187,9 @@ separately costed *(F9, U-6)*.
 ## P2a — The two verbs land, with provenance
 
 *Retires: "there is no way for the voice agent to write into the session".* **P2 splits** *(C-12, R17)*:
-P2a is the capability; P2b is safety under retry and self-address. P2a stories:
+P2a is the capability; P2b is safety under retry and self-address. **The gate is settled before P2a starts
+— [ADR-010](intent-gate-decision.md), measured:** a positional rule, with no model on the safety path.
+P2a stories:
 
 1. **Producer identity, on the corrected convention.** A **merge-added source kind** `realtime`,
    following the shipped pattern — `{ kind: 'plugin', plugin: 'realtime' }` if we follow `dsh-schedule`
@@ -438,7 +451,7 @@ moves out of `realtime-agent`, which owns the model-facing tool set, not the spe
 
 | risk | sprint that retires it | if it holds |
 |---|---|---|
-| The delegation envelope cannot express an intent, and instruction-based classification stays ambiguous | **P1** | The verbs are unreliable; fail-closed keeps it safe but the feature is thin — and the degenerate classifier is caught by the **positive-rate floor**, not by coverage |
+| The delegation envelope cannot express an intent, and instruction-based classification stays ambiguous | **P1** | **Resolved by [ADR-010](intent-gate-decision.md), measured.** The envelope cannot express intent, so the gate reads the utterance's *shape* instead: the authorising imperative at the head, everything else a question. Nine of nine model cells produced dangerous errors; the rule produced none. The `human-relay` class (0/9) remains a known, correctable cost |
 | A note is obeyed as an instruction, or spoofs the user | **P3** | The incident class the market documents |
 | **A say is read as user consent** | **P3** | The Claude Code fabricated-consent incident, on the verb that starts turns — mitigated by default-off + the not-consent marker |
 | A say logs text the user never heard | **P4b** | Caught by the played-bytes gate step, not discovered by ear |

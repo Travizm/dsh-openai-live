@@ -9,6 +9,8 @@ import type { RealtimeResponderConfig } from '../src/types.ts'
 /** A session controller that records what was admitted, and can be told to refuse — with any message. */
 class FakeSessionController extends Service {
   readonly prompted: unknown[] = []
+  /** Whether a session can be resolved at all — the arm that must report, not throw. */
+  resolvable = true
   /** The signals the responder passed, so a test can assert the one the harness requires is actually sent. */
   readonly signals: (AbortSignal | undefined)[] = []
   refusal: string | undefined
@@ -24,6 +26,58 @@ class FakeSessionController extends Service {
     if (refusal !== undefined) return Promise.reject(new Error(refusal))
     return Promise.resolve({ accepted: true as const })
   }
+
+  /**
+   * The door to an Agent. `resolvable: false` stands for a session that cannot be resolved, which is the
+   * arm that has to be reported as an unsent delivery rather than thrown at a caller with a voice waiting.
+   */
+  resolveAgent(): Promise<{ agent: typeof fakeAgent } | { error: { kind: string } }> {
+    return Promise.resolve(this.resolvable ? { agent: fakeAgent } : { error: { kind: 'not-found' } })
+  }
+}
+
+/** What the voice wrote, captured where the session would have accepted it. */
+interface SentVoiceMessage {
+  readonly text: string
+  readonly target: unknown
+  readonly wakeup: unknown
+}
+
+const sent: SentVoiceMessage[] = []
+/** The durable change records a say appended, so the ordering and the payload are both assertable. */
+const changes: { readonly type: string; readonly data: unknown }[] = []
+
+/**
+ * The agent the responder resolves, wired as production wires it: a `send` that records, and a `session`
+ * that appends. A substitute missing either would make one of the two write paths look untested.
+ */
+const fakeAgent = {
+  send: (message: { readonly content: readonly { readonly text?: string }[] }, target: unknown, wakeup: unknown): void => {
+    sent.push({ text: message.content.map((block) => block.text ?? '').join(''), target, wakeup })
+  },
+  session: { append: (type: string, data: unknown): void => { changes.push({ type, data }) } },
+}
+
+/** The durability barrier. Counted, because "was it confirmed?" is the difference between said and undurable. */
+class FakeSessionStore extends Service {
+  flushed = 0
+  /** What the barrier answers. `false` is the written-but-not-durable arm. */
+  durable = true
+  /** The live sessions a picker offers. Mutable, so a test can prove the list is read when asked. */
+  ids: readonly string[] = []
+
+  constructor(context: Context) {
+    super(context, 'sessions')
+  }
+
+  list(): readonly { readonly id: string }[] {
+    return this.ids.map(id => ({ id }))
+  }
+
+  flush(): Promise<boolean> {
+    this.flushed += 1
+    return Promise.resolve(this.durable)
+  }
 }
 
 let ctx: Context | undefined
@@ -31,6 +85,10 @@ let ctx: Context | undefined
 afterEach(async () => {
   await ctx?.fiber.dispose()
   ctx = undefined
+  // The capture arrays are module-level, so a test that forgot to assert them would otherwise leak into
+  // the next one and make an unrelated failure look like the write path.
+  sent.length = 0
+  changes.length = 0
 })
 
 /**
@@ -42,6 +100,8 @@ afterEach(async () => {
 function harness(): {
   context: Context
   controller: FakeSessionController
+  /** The durability barrier, so a test can assert it was crossed exactly as often as it should be. */
+  store: FakeSessionStore
   settled: RealtimeDelegationSettlement[]
   /** The narrated steps the responder put on the bus, in order. */
   progress: RealtimeDelegationProgress[]
@@ -52,6 +112,7 @@ function harness(): {
 } {
   const context = new Context()
   const controller = new FakeSessionController(context)
+  const store = new FakeSessionStore(context)
   const service = new RealtimeRuntime(context)
   const settled: RealtimeDelegationSettlement[] = []
   const progress: RealtimeDelegationProgress[] = []
@@ -59,7 +120,7 @@ function harness(): {
   context.on('realtime-agent/delegation-settled', (settlement) => { settled.push(settlement) })
   context.on('realtime-agent/delegation-progress', (step) => { progress.push(step) })
   ctx = context
-  return { context, controller, settled, progress, journal: service.journal }
+  return { context, controller, store, settled, progress, journal: service.journal }
 }
 
 /** Planted in the controller's rejection. Assembled, not written — see `redact.spec.ts`. */
@@ -144,6 +205,122 @@ describe('plugin shape', () => {
  * Production has the same shape: nothing can arrive at the runner before the controller holds the prompt.
  */
 const admitted = async (): Promise<void> => { await new Promise(resolve => { setTimeout(resolve, 0) }) }
+
+describe('the two verbs — writing into the session instead of answering it', () => {
+  const delegation = (id: string, text: string): DelegationRequest => ({
+    id,
+    offsetMs: 0,
+    sessionId: 'sess-1',
+    transcript: [{ kind: 'input', text }],
+  }) as unknown as DelegationRequest
+
+  it('writes a note to the inbox, and starts no turn', async () => {
+    const { context, controller, store } = harness()
+    apply(context, Config({ sessionId: 'sess-1' }) as RealtimeResponderConfig)
+
+    const answer = await context.serial('realtime-agent/delegation', delegation('item_note', 'leave a note that the build is green'))
+
+    expect(answer).toMatchObject({ text: 'Noted for the session.', mode: 'spoken' })
+    // The whole point of the note verb: context placed in the session, and **no turn**. A note that admitted
+    // one would be the incident this sprint exists to prevent.
+    expect(controller.prompted).toHaveLength(0)
+    expect(sent).toHaveLength(1)
+    expect(sent[0]?.target).toBe('next-step')
+    expect(sent[0]?.wakeup).toBe(false)
+    // No change record and no barrier: the inbox is a note's audit surface, and the log would be a second,
+    // weaker account of the same thing.
+    expect(changes).toHaveLength(0)
+    expect(store.flushed).toBe(0)
+  })
+
+  it('writes a say to the next turn, records the change, then confirms the barrier', async () => {
+    const { context, controller, store } = harness()
+    apply(context, Config({ sessionId: 'sess-1' }) as RealtimeResponderConfig)
+
+    const answer = await context.serial('realtime-agent/delegation', delegation('item_say', 'tell the session the release is approved'))
+
+    expect(answer).toMatchObject({ text: 'Passed to the session.', mode: 'spoken' })
+    expect(controller.prompted).toHaveLength(0)
+    expect(sent[0]?.target).toBe('next-turn')
+    expect(sent[0]?.wakeup).toBe(true)
+    expect(changes[0]?.type).toBe('realtime/change')
+    expect(changes[0]?.data).toMatchObject({ version: 1, operation: 'deliver', verdict: 'say' })
+    expect(store.flushed).toBe(1)
+  })
+
+  it('carries its own framing into what the session receives', async () => {
+    // Not decoration: the frame is what tells the session the text came from a spoken conversation and, for
+    // a say, that it is a message rather than consent. Asserted on the bytes the session actually got.
+    const { context } = harness()
+    apply(context, Config({ sessionId: 'sess-1' }) as RealtimeResponderConfig)
+
+    await context.serial('realtime-agent/delegation', delegation('item_framed', 'tell the session the release is approved'))
+
+    expect(sent[0]?.text).toContain('the release is approved')
+    expect(sent[0]?.text).toMatch(/not user consent/i)
+  })
+
+  it('speaks the reason when the session cannot be resolved, rather than reporting success', async () => {
+    // The one lie this path could tell, and the only one the user cannot catch from their own side: saying
+    // "noted" over a write that never happened.
+    const { context, controller } = harness()
+    controller.resolvable = false
+    apply(context, Config({ sessionId: 'sess-1' }) as RealtimeResponderConfig)
+
+    const answer = await context.serial('realtime-agent/delegation', delegation('item_lost', 'tell the session the release is approved')) as { text: string }
+
+    expect(answer.text).not.toBe('Passed to the session.')
+    expect(answer.text.length).toBeGreaterThan(0)
+    expect(sent).toHaveLength(0)
+    expect(controller.prompted).toHaveLength(0)
+  })
+
+  it('speaks the reason when the barrier does not confirm, and the message is already written', async () => {
+    // Written-but-not-durable. Distinct from a failed send: a message exists, so this is the arm a retry
+    // must consult the change record for rather than re-issuing blindly.
+    const { context, store } = harness()
+    store.durable = false
+    apply(context, Config({ sessionId: 'sess-1' }) as RealtimeResponderConfig)
+
+    const answer = await context.serial('realtime-agent/delegation', delegation('item_undurable', 'tell the session the release is approved')) as { text: string }
+
+    expect(sent).toHaveLength(1)
+    expect(changes).toHaveLength(1)
+    expect(answer.text).not.toBe('Passed to the session.')
+  })
+
+  it('reports a delivery it could not confirm when the session store is absent', async () => {
+    // The barrier is **read, not injected**, and this is the test that makes that a fact rather than a
+    // claim: with no session store at all the message still goes, and the delivery is reported as
+    // unconfirmed rather than the plugin refusing to load. Built bare rather than through `harness()`,
+    // because the whole point is the service that is *not* there.
+    const context = new Context()
+    const controller = new FakeSessionController(context)
+    new RealtimeRuntime(context)
+    ctx = context
+    apply(context, Config({ sessionId: 'sess-1' }) as RealtimeResponderConfig)
+
+    const answer = await context.serial('realtime-agent/delegation', delegation('item_nostore', 'tell the session the release is approved')) as { text: string }
+
+    expect(sent).toHaveLength(1)
+    expect(changes).toHaveLength(1)
+    expect(answer.text).not.toBe('Passed to the session.')
+    expect(controller.prompted).toHaveLength(0)
+  })
+
+  it('answers a question exactly as before, so the gate cannot swallow the existing path', async () => {
+    // The regression guard for the whole change: adding a write path must not stop the plugin answering.
+    const { context, controller } = harness()
+    apply(context, Config({ sessionId: 'sess-1', answerTimeoutMs: 1_000 }) as RealtimeResponderConfig)
+
+    void context.serial('realtime-agent/delegation', delegation('item_q', 'is staging ok?'))
+    await admitted()
+
+    expect(controller.prompted).toHaveLength(1)
+    expect(sent).toHaveLength(0)
+    expect(changes).toHaveLength(0)
+  })
+})
 
 describe('answering a delegation', () => {
   it('admits a turn to the configured session and speaks the reply', async () => {
@@ -332,6 +509,9 @@ describe('answering a delegation', () => {
     expect(journal.snapshot().map(entry => entry.kind)).toEqual([
       'config.resolved',
       'delegation.seen',
+      // The gate records its verdict on **every** delegation, before acting on it — so the sequence shows
+      // not just what the turn did but what it was authorised to do.
+      'intent.classified',
       'prompt.admitted',
       'window.elapsed',
     ])
@@ -386,7 +566,14 @@ describe('answering a delegation', () => {
 
     await context.serial('realtime-agent/delegation', silent)
 
-    expect(journal.snapshot().map(entry => entry.kind)).toEqual(['config.resolved', 'delegation.seen', 'prompt.declined'])
+    // The verdict is recorded even for a silent delegation: an empty utterance classifies to a question,
+    // so the record shows the gate ran and resolved downward, rather than showing nothing at all.
+    expect(journal.snapshot().map(entry => entry.kind)).toEqual([
+      'config.resolved',
+      'delegation.seen',
+      'intent.classified',
+      'prompt.declined',
+    ])
   })
 
   it('records what it resolved at boot, including the session it will steer', async () => {
@@ -749,19 +936,14 @@ describe('the settings it declares', () => {
     // The headline control. The candidates come from the harness's own session store, which this plugin
     // reaches for *optionally*: a missing enhancement must never stop the responder answering, which is
     // why it is `ctx.get` rather than an `inject`.
-    const { context } = harness()
-    let ids = ['session-a', 'session-b']
-    class FakeSessions extends Service {
-      constructor(context: Context) { super(context, 'sessions') }
-      list(): readonly { readonly id: string }[] { return ids.map(id => ({ id })) }
-    }
-    new FakeSessions(context)
+    const { context, store } = harness()
+    store.ids = ['session-a', 'session-b']
     apply(context, Config({ sessionId: 'sess-1' }) as RealtimeResponderConfig)
 
     expect(context.realtime.settings.get('realtime-responder.sessionId')?.choices).toEqual(['session-a', 'session-b'])
     // Read at the moment it is asked, like every other live value here: a session created a second ago is
     // in the list, and no copy of it was taken when the plugin applied.
-    ids = ['session-c']
+    store.ids = ['session-c']
     expect(context.realtime.settings.get('realtime-responder.sessionId')?.choices).toEqual(['session-c'])
   })
 })

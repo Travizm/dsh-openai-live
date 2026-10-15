@@ -1131,8 +1131,14 @@ describe('the settings it declares', () => {
 
     // 80 ms of quiet was asked for with the fragment already in the buffer, so the wait cannot have been the
     // 25 this suite mounted with: the registry's change reached the delegation, not the next boot.
+    //
+    // The bound is 60 rather than 80 because the wait is *polled*: `SETTLE_POLL_MS` samples `now` to decide
+    // whether the quiet window has elapsed, so the measured wait can land a millisecond under the number that
+    // was asked for (measured: 79 against a requested 80, intermittently and more often under load). What this
+    // asserts is that the change reached the delegation at all, and 60 splits that from the 25 the suite
+    // mounted with by a margin no scheduling noise can cross.
     const settled = journal.snapshot().find(entry => entry.kind === 'transcript.settled')
-    expect(Number((settled?.detail as { waitedMs?: string }).waitedMs)).toBeGreaterThanOrEqual(80)
+    expect(Number((settled?.detail as { waitedMs?: string }).waitedMs)).toBeGreaterThan(60)
     expect(context.realtime.settings.apply('realtime-agent.transcriptQuietMs', '0'))
       .toMatchObject({ code: 'INVALID_SETTING', reason: /transcriptQuietMs must be a positive whole number/ })
   })

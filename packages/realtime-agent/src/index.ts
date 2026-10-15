@@ -750,3 +750,5 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
     void requestSession(() => open(), 'autostart')
   }
 }
+export * from './source.ts'
+export * from './message.ts'

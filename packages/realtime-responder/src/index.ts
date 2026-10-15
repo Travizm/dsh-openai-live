@@ -47,6 +47,20 @@ import type { RealtimeResponderConfig, SessionEventLike } from './types.ts'
 export * from './types.ts'
 export { answerText, createTurnRunner, promptFrom, type TurnDeps, type TurnOutcome } from './turn.ts'
 export { classifyIntent, type IntentVerdict } from './intent.ts'
+export {
+  createDeliverer,
+  frameFor,
+  REALTIME_CHANGE_TYPE,
+  REALTIME_PLUGIN,
+  REALTIME_SOURCE,
+  type DeliveredMessage,
+  type DeliveryAgent,
+  type DeliveryDeps,
+  type DeliveryOutcome,
+  type DeliveryVerdict,
+  type InboxTarget,
+  type RealtimeSource,
+} from './deliver.ts'
 
 /** Character ceiling on a reason carried on the bus, so a controller error cannot flood a consumer. */
 const MAX_REASON_CHARS = 500

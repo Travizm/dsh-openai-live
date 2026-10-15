@@ -40,3 +40,6 @@ package-lock.json
 # npm writes a token into a project-level .npmrc when one is used, and a credential must never be
 # committable — not even by accident, and not even briefly.
 .npmrc
+
+# The provenance record a gate run emits; regenerated every run, never committed.
+.provenance/

@@ -1,0 +1,6 @@
+{"step":"bogus-event-type","outcome":"error","code":"invalid_value","message":"The first Live event must be session.start.","frames":["error"]}
+{"step":"baseline-session.start","outcome":"timeout","code":null,"message":"session.started","frames":["session.started"]}
+{"step":"session.update","outcome":"timeout","code":null,"message":"session.started, session.updated","frames":["session.started","session.updated"]}
+{"step":"input_audio.mute","outcome":"timeout","code":null,"message":"session.started, session.input_audio.muted","frames":["session.started","session.input_audio.muted"]}
+{"step":"input_audio.unmute","outcome":"timeout","code":null,"message":"session.started, session.input_audio.unmuted","frames":["session.started","session.input_audio.unmuted"]}
+{"step":"session.close","outcome":"error","code":"invalid_value","message":"The first Live event must be session.start.","frames":["error"]}

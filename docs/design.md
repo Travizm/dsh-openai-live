@@ -112,7 +112,11 @@ inspection before publish — the two irreversible acts.
 | | Milestone | State |
 |---|---|---|
 | W1 | Protocol spike — handshake, audio, transcripts, delegation | ✅ **passed 2026-10-07** |
-| W2 | Plugin skeleton — two rows, contract v9, fail-closed delegation | in progress |
-| W3 | Conformance harness + keyless replay CI | not started |
-| W4 | Secret-scan + provenance gates, drift canary | not started |
-| W5 | Publication — GitHub → npm → marketplace | not started |
+| W2 | Plugin skeleton — two rows, contract v9, fail-closed delegation | ✅ **shipped — 0.2.0→0.6.x arc; superseded by the shipped sprint plan** (`sprint-plan.md`) |
+| W3 | Conformance harness + keyless replay CI | ✅ **shipped — `dsh-realtime-replay`, keyless CI (ADR-003)** |
+| W4 | Secret-scan + provenance gates, drift canary | ✅ **shipped — `leak-scan.mjs` in the gate; canary scheduled in CI** |
+| W5 | Publication — GitHub → npm → marketplace | ✅ **npm published (0.6.11); GitHub public; marketplace listing open** |
+
+> *(Table refreshed 2026-10-15 — it still read "W2 in progress" while the repo was at 0.6.11, which
+> made the invariants above indeterminable in test status. Flagged by the voice-presence chamber,
+> finding K-10.)*

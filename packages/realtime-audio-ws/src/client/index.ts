@@ -921,6 +921,11 @@ function booleanSwitch(entry: SettingLike): string {
 
 /**
  * The switches row: the microphone, the session, and every live boolean.
+ *
+ * The microphone and the session switches are controls in their own right, so they appear at both levels.
+ * A *setting* boolean does not: the deepest level gives every setting its own control, so carrying the
+ * switch there as well would put one setting behind two toggles on one screen — the same defect as two rows
+ * that read identically, in miniature.
  * @param state - what the panel is showing.
  * @param settings - every setting the status reported.
  * @returns the row's markup.
@@ -928,7 +933,7 @@ function booleanSwitch(entry: SettingLike): string {
 function switchesMarkup(state: StripState, settings: readonly SettingLike[]): string {
   const voice = state.reply?.voice
   const open = voice !== null && voice !== undefined && voice.open
-  const boolean = liveField(settings, 'speakMilestones', 'boolean')
+  const boolean = state.level === 'controls' ? liveField(settings, 'speakMilestones', 'boolean') : undefined
   return '<div class="dvr-switches">'
     + lampSwitch(state.audio.kind === 'live' ? 'disconnect' : 'connect', state.audio.kind === 'live', 'MIC', 'green')
     + lampSwitch(open ? 'voice-stop' : 'voice-start', open, 'VOICE', 'green')

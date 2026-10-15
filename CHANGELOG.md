@@ -4,6 +4,42 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.9] — 2026-10-16
+
+### Changed
+
+- **The plugin's panel is a faceplate, not a floating box.** `dsh-realtime-audio-ws` 0.2.9. The panel sat
+  over the bottom right of the app with every setting it has always expanded, as default form controls on a
+  dark box. It is now a 1U plate docked across the bottom, collapsed by default, and the page's own body
+  gives up that band (`padding-bottom: 58px`) so the app's column sits above it rather than under it.
+  Three drill levels replace the single expanded list: state → the few controls worth a knob → the raw
+  registry rows. The plate's stylesheet is a third `index-inject` row (`style`, which the host renders into
+  `head`); `strip.ts` still mints rows and the client bundle still decides what to render, and a test reads
+  both files' class names so the two cannot drift.
+- **Controls match their value's kind.** A boolean is a toggle carrying the value it will write; a
+  `string-list` is a real editor — entries visible, each removable, JSON on the wire — and it holds a draft
+  for a value the plugin refuses to report (`redactSecrets` is write-only), because a list you cannot read
+  cannot be edited in place: each add would start from nothing and silently replace the one before it.
+- **The two wait budgets become one control.** Measured, not assumed: `realtime-agent.delegationTimeoutMs`
+  and `realtime-responder.answerTimeoutMs` are both `live`, and the responder's own docstring says *the
+  smaller bound decides what is heard*. One primary writes both, the binding value is shown, the capping
+  layer is named only when the pair diverges, and the raw pair is reachable one level down — re-read and
+  reported **as a pair**, with a refusal stopping the write rather than writing past it.
+- **Developer telemetry left the panel.** No journal size, socket count or last-event name: those belong to
+  `voice_journal` and `voice_diagnose`. The test for what belongs is which of these a reader would *act* on.
+- **A switch no longer repeats where the setting has its own row.** At the deepest level `speakMilestones`
+  was behind two toggles on one screen — the "one knob described twice" defect, in miniature. Found by
+  driving the real page, not by the suite.
+
+### Notes for the app profile
+
+This leaf is held at `0.2.7` in the desktop profile by an `overrides` entry, and `0.2.8` is what the
+registry serves, so an install will resolve the **older** version unless the override is raised. The
+version it must move with is `dsh-realtime` **0.2.9** — this leaf calls `ctx.realtime.transports`, which
+`dsh-realtime` 0.2.8 does not have, so a leaf installed alone throws inside `apply` **before** its row
+listener registers and the panel, the stylesheet *and* the route row all vanish. Measured: nothing renders,
+with no error anywhere. Install the pair, or install the bundle (whose range admits both).
+
 ## [0.6.11] — 2026-10-12
 
 ### Added

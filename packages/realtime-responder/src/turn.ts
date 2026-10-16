@@ -319,6 +319,8 @@ export function createTurnRunner(deps: TurnDeps): (request: DelegationRequest) =
     const onStep = deps.onStep
     let spoken = 0
     let lastSpokenAt = 0
+    /** The words last spoken aloud, so the same sentence is not said twice in a row. */
+    let lastSpokenPhrase: string | undefined
     /**
      * The turn this admission started, latched from the session's own `turn/start`.
      *
@@ -360,15 +362,26 @@ export function createTurnRunner(deps: TurnDeps): (request: DelegationRequest) =
         const tool = stepTool(event)
         if (tool !== undefined) {
           const now = Date.now()
+          const text = milestone.phrase(tool)
           // The first milestone is never held back by the interval: a turn that has said nothing yet has
           // nothing to be paced against, and "I am on it" is the one update worth having immediately.
-          const speaks = milestone.speak && spoken < milestone.maxSpoken
+          //
+          // A repeat of the words just spoken is held back whatever the clock says. Two runs of one tool a
+          // moment apart are two announcements of the same fact, and the second tells the listener nothing
+          // the first did not — and pacing cannot catch it, because any interval long enough to swallow a
+          // repeated sentence would also swallow a genuinely different step. Heard live, one reply read out
+          // as "Let me check for you. Running a command. Running a command.", which is where this comes from.
+          const repeats = text === lastSpokenPhrase
+          const speaks = milestone.speak && !repeats && spoken < milestone.maxSpoken
             && (spoken === 0 || now - lastSpokenAt >= milestone.intervalMs)
           if (speaks) {
             spoken += 1
             lastSpokenAt = now
+            lastSpokenPhrase = text
           }
-          onStep({ id: request.id, channel: speaks ? 'commentary' : 'thinking', text: milestone.phrase(tool) })
+          // Reported either way, so a reader can still see the step happened. A repeat that was never
+          // spoken spends none of the turn's budget, so a later, different step still gets the slot.
+          onStep({ id: request.id, channel: speaks ? 'commentary' : 'thinking', text })
         }
       }
       const text = answerText(event)

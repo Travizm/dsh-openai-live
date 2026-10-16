@@ -310,6 +310,43 @@ describe('narration', () => {
     expect(steps).toHaveLength(4)
   })
 
+  it('does not say the same words twice in a row', async () => {
+    // The interval cannot catch this one: two runs of one tool a moment apart are two announcements of the
+    // same fact, and the second tells the listener nothing the first did not. Heard live, one reply read
+    // out as "Let me check for you. Running a command. Running a command."
+    vi.useFakeTimers()
+    try {
+      const { listeners, steps, run } = narrating({ milestone: policy({ intervalMs: 4_000 }) })
+      void run(request([{ kind: 'input', text: 'q' }]))
+      await Promise.resolve()
+      listeners[0]!(turnStart(), SESSION)
+
+      listeners[0]!(call('terminal'), SESSION)
+      // Clears the pacing floor, so what holds the second back is the repetition and not the clock.
+      vi.advanceTimersByTime(4_000)
+      listeners[0]!(call('terminal'), SESSION)
+
+      expect(steps.map(step => step.channel)).toEqual(['commentary', 'thinking'])
+      // Still carried: a reader can see the step happened, it is just not said.
+      expect(steps[1]!.text).toBe('Starting terminal.')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('spends no budget on a step it did not say, and speaks again once the words change', async () => {
+    const { listeners, steps, run } = narrating({ milestone: policy({ intervalMs: 0, maxSpoken: 2 }) })
+    void run(request([{ kind: 'input', text: 'q' }]))
+    await Promise.resolve()
+    listeners[0]!(turnStart(), SESSION)
+
+    for (const name of ['terminal', 'terminal', 'read_file']) listeners[0]!(call(name), SESSION)
+
+    // The held-back repeat cost nothing, so the third step is genuinely the second thing said.
+    expect(steps.map(step => step.channel)).toEqual(['commentary', 'thinking', 'commentary'])
+    expect(steps.map(step => step.text)).toEqual(['Starting terminal.', 'Starting terminal.', 'Starting read_file.'])
+  })
+
   it('says nothing aloud when narration is switched off', async () => {
     const { listeners, steps, run } = narrating({ milestone: policy({ speak: false }) })
     void run(request([{ kind: 'input', text: 'q' }]))

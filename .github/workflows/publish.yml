@@ -1,0 +1,146 @@
+name: Publish
+
+# Manual only, on purpose. A publish is a deliberate act with a version number attached, and a workflow that
+# fired on a push or a tag would publish whatever happened to be in the tree at that moment.
+#
+# Authentication is **trusted publishing (OIDC)**: GitHub proves this workflow's identity to npm per run, so
+# there is no npm token anywhere — not in a secret, not in a developer's ~/.npmrc, and nothing to rotate. That
+# matters beyond convenience: bypass-2FA tokens lose direct publish in January 2027, so a token-based workflow
+# here would be born obsolete.
+#
+# Before this can succeed, a trusted publisher must be registered on npmjs.com for each package:
+#   package → Settings → Trusted Publisher → GitHub Actions
+#     organization/user : Travizm                  (must match this repo's owner exactly)
+#     repository        : dsh-openai-live
+#     workflow filename : publish.yml
+#     environment       : (blank)
+#     allowed actions   : npm stage publish (always) + npm publish (choose it, this workflow publishes directly)
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: 'Workspace directory name, e.g. realtime-audio-ws'
+        required: true
+        type: string
+      dry_run:
+        description: 'Dry run — pack and verify, publish nothing'
+        required: true
+        default: true
+        type: boolean
+
+# `id-token: write` is what makes OIDC possible; `contents: read` is all the rest of the job needs. Nothing here
+# can write to the repository.
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: publish-${{ inputs.package }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Trusted publishing requires npm >= 11.5.1 and node >= 22.14. Both are asserted below rather than
+      # assumed, because the failure mode is an opaque 401 from the registry.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.3'
+
+      - name: Assert the toolchain npm can actually use OIDC
+        run: |
+          node -e "const [a,b]=process.versions.node.split('.').map(Number); if(!(a>22||(a===22&&b>=14))) { console.error('node >= 22.14 required'); process.exit(1) }"
+          npm install -g npm@^11.5.1
+          npm --version
+
+      # No `version:` here on purpose — `pnpm/action-setup` fails when a version is given in both places; the
+      # packageManager field in package.json is the single source of truth.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.3'
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Resolve the package and refuse the ones that must not be published
+        id: pkg
+        env:
+          PKG_DIR: packages/${{ inputs.package }}
+        run: |
+          test -f "$PKG_DIR/package.json" || { echo "::error::no package at $PKG_DIR"; exit 1; }
+          NAME=$(node -p "require('./$PKG_DIR/package.json').name")
+          VERSION=$(node -p "require('./$PKG_DIR/package.json').version")
+          PRIVATE=$(node -p "String(require('./$PKG_DIR/package.json').private === true)")
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "dir=$PKG_DIR" >> "$GITHUB_OUTPUT"
+          if [ "$PRIVATE" = "true" ]; then
+            # dsh-delegate, realtime-deepgram and realtime-panel are private for reasons recorded in their docs:
+            # an unpublished shim is a decision, and publishing it by accident would be a decision nobody made.
+            echo "::error::$NAME is marked private — refusing to publish it"
+            exit 1
+          fi
+
+      - name: Refuse to publish a version that already exists
+        env:
+          NAME: ${{ steps.pkg.outputs.name }}
+          VERSION: ${{ steps.pkg.outputs.version }}
+        run: |
+          CODE=$(curl -sS -o /dev/null -w '%{http_code}' "https://registry.npmjs.org/$NAME/$VERSION")
+          if [ "$CODE" = "200" ]; then
+            echo "::error::$NAME@$VERSION is already published — bump the version first"
+            exit 1
+          fi
+          echo "$NAME@$VERSION is not yet published (HTTP $CODE)"
+
+      # The gate runs here too: a publish is the one moment a broken artefact escapes irreversibly.
+      - run: pnpm gate
+
+      # `npm publish` does NOT rewrite the `workspace:^` protocol, so publishing the directory would ship a
+      # manifest that cannot install. `pnpm pack` rewrites it; the resulting tarball is what gets published.
+      - name: Pack the rewritten tarball
+        id: pack
+        env:
+          DIR: ${{ steps.pkg.outputs.dir }}
+        run: |
+          mkdir -p dist
+          ( cd "$DIR" && pnpm pack --pack-destination "$GITHUB_WORKSPACE/dist" )
+          TARBALL=$(ls dist/*.tgz | head -1)
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+          echo "packed: $TARBALL"
+          # Prove the rewrite happened rather than trusting it.
+          tar -xzf "$TARBALL" -O package/package.json | node -e "
+            const d = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+            const bad = Object.entries({...d.dependencies, ...d.peerDependencies, ...d.devDependencies})
+              .filter(([, v]) => String(v).startsWith('workspace:'));
+            if (bad.length) { console.error('workspace protocol survived packing:', bad); process.exit(1) }
+            console.log('manifest clean:', d.name + '@' + d.version);
+          "
+
+      - name: Publish
+        env:
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          # `--provenance` attaches a signed statement of what built this tarball, from this commit, in this
+          # workflow — which is the whole point of paying for OIDC instead of a token.
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "dry run — would publish $TARBALL"
+            npm publish "$TARBALL" --provenance --access public --dry-run
+          else
+            npm publish "$TARBALL" --provenance --access public
+          fi
+
+      - name: Report what landed
+        if: always()
+        env:
+          NAME: ${{ steps.pkg.outputs.name }}
+          VERSION: ${{ steps.pkg.outputs.version }}
+        run: |
+          CODE=$(curl -sS -o /dev/null -w '%{http_code}' "https://registry.npmjs.org/$NAME/$VERSION")
+          echo "$NAME@$VERSION → registry HTTP $CODE (404 here is expected on a dry run)"

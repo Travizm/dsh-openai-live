@@ -1,0 +1,30 @@
+{
+  "name": "dsh-delegate",
+  "version": "0.1.0",
+  "private": true,
+  "description": "P4a — OpenAI-compatible completion translation for the DSH delegate shim: messages in, SessionPromptRequest out.",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./protocol": {
+      "types": "./lib/protocol.d.ts",
+      "default": "./lib/protocol.js"
+    },
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "peerDependencies": {
+    "dsh": ">=0.2.0"
+  }
+}

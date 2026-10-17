@@ -43,12 +43,12 @@ describe('buildSettings', () => {
 
   it('omits the think endpoint when none is given, rather than sending an empty one', () => {
     // An empty `endpoint.url` is rejected; absent means "use Deepgram's managed LLM".
-    expect('endpoint' in buildSettings(config()).agent.think.provider).toBe(false)
+    expect('endpoint' in buildSettings(config()).agent.think).toBe(false)
   })
 
   it('includes a bring-your-own endpoint when given, normalised to an absolute URL', () => {
     const settings = buildSettings(config({ think: { model: 'm', prompt: 'p', endpoint: 'https://llm.example.com/v1/chat/completions' } }))
-    expect(settings.agent.think.provider.endpoint).toEqual({ url: 'https://llm.example.com/v1/chat/completions' })
+    expect(settings.agent.think.endpoint).toEqual({ url: 'https://llm.example.com/v1/chat/completions' })
   })
 
   it('refuses a loopback endpoint, because the provider cannot reach the caller\'s machine', () => {

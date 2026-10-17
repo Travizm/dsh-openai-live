@@ -62,14 +62,19 @@ const DOCS = 'developers.deepgram.com — Configure the Voice Agent / Voice Agen
  * Deepgram credit. An empty `endpoint.url` is not the same as absent, and the Settings are rejected.
  */
 const settings = endpoint => {
-  const think = { type: 'open_ai', model: 'gpt-4o-mini' }
-  if (endpoint) think.endpoint = { url: endpoint }
+  const provider = { type: 'open_ai', model: 'gpt-4o-mini' }
   return {
     type: 'Settings',
     audio: { input: { encoding: 'linear16', sample_rate: 16000 }, output: { encoding: 'linear16', sample_rate: 24000 } },
     agent: {
       listen: { provider: { type: 'deepgram', model: 'flux-general-en', version: 'v2' } },
-      think: { provider: think, prompt: 'You are a probe. Reply with exactly: probe one.' },
+      // `endpoint` sits on `think`, NOT on `think.provider`: the live provider rejects the nested form with
+      // "Check the agent.think field against the API spec" — which is how this was found.
+      think: {
+        provider,
+        ...(endpoint === undefined ? {} : { endpoint: { url: endpoint } }),
+        prompt: 'You are a probe. Reply with exactly: probe one.',
+      },
       speak: { provider: { type: 'deepgram', model: 'aura-2-thalia-en' } },
     },
   }
@@ -273,7 +278,19 @@ ws.on('message', raw => {
         // can: if the answer still carries the original instruction AND the new token, the update was
         // appended; if the original is gone, it replaced.
         if (USE_UPDATETHINK) {
-          send({ type: 'UpdateThink', think: { provider: { type: 'open_ai', model: 'gpt-4o-mini' }, prompt: UPDATE_PROMPT } })
+          // `UpdateThink` replaces the WHOLE think config — endpoint included. Omitting it here silently moves the
+          // agent back to Deepgram's managed LLM, which is what the first UpdateThink run did (captures stopped,
+          // and the answer came from a model that was not ours).
+          send({
+            type: 'UpdateThink',
+            think: {
+              provider: { type: 'open_ai', model: 'gpt-4o-mini' },
+              ...(process.env.DEEPGRAM_PROBE_ENDPOINT === undefined || process.env.DEEPGRAM_PROBE_ENDPOINT === ''
+                ? {}
+                : { endpoint: { url: process.env.DEEPGRAM_PROBE_ENDPOINT } }),
+              prompt: UPDATE_PROMPT,
+            },
+          })
         } else {
           send({ type: 'UpdatePrompt', prompt: UPDATE_PROMPT })
         }

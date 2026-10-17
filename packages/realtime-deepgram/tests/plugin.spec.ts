@@ -69,7 +69,7 @@ describe('apply', () => {
     apply(ctx, { provider: 'deepgram' })
     const adapter = registered[0]?.adapter as DeepgramAdapter
     expect(adapter).toBeInstanceOf(DeepgramAdapter)
-    expect(adapter.providerInfo('deepgram').capabilities?.promptUpdate).toBe('unknown')
+    expect(adapter.providerInfo('deepgram').capabilities?.promptUpdate).toBe('append')
   })
 
   it('carries configured models and an establish budget into the adapter', async () => {

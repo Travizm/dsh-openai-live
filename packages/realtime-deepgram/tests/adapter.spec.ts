@@ -52,7 +52,7 @@ describe('DeepgramAdapter', () => {
     const info = new DeepgramAdapter(config(), factory().open).providerInfo('deepgram')
     expect(info.id).toBe('deepgram')
     expect(info.capabilities?.appendThinking).toBe(false)
-    expect(info.capabilities?.promptUpdate).toBe('unknown')
+    expect(info.capabilities?.promptUpdate).toBe('append')
   })
 
   it('advertises listening models, and treats the list as advisory', async () => {

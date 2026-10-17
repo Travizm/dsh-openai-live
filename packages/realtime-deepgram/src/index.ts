@@ -1,3 +1,5 @@
 export * from './wire.ts'
 export * from './settings.ts'
 export * from './events.ts'
+export * from './transport.ts'
+export * from './session.ts'

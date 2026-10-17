@@ -68,7 +68,10 @@ export interface RealtimeCapabilities {
  * - `usageReporting: false` — **probed, not assumed**: no usage-like event in 160–181 frames across runs.
  *   This closes the ❓ that stood in the chamber's §6.2 table.
  * - `transcriptDeltas: false` — **probed**: `ConversationText` carries `role` and a complete utterance.
- * - `inputMute: false` — muting is adapter-local; the provider has no mute and the session must stay open.
+ * - `inputMute: true` — **corrected during P5b.** The provider has no mute frame, but the adapter implements one by
+ *   stopping its own audio writes, so the seam's `muteInput()` does exactly what it says. It was declared `false`
+ *   here first, which would have made `requireCapability(..., 'inputMute')` refuse a call that works — the
+ *   capability matrix has to describe the seam's method, not the provider's vocabulary.
  * - `promptUpdate: 'unknown'` — four tests, four confounds; the docs contradict each other. See the results
  *   file. Callers must budget as if it appends, which is safe under either semantics.
  */
@@ -78,7 +81,7 @@ export const DEEPGRAM_CAPABILITIES: RealtimeCapabilities = Object.freeze({
   functionCalls: false,
   usageReporting: false,
   transcriptDeltas: false,
-  inputMute: false,
+  inputMute: true,
   promptUpdate: 'unknown',
 })
 

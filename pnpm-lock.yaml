@@ -60,6 +60,9 @@ importers:
 
   packages/dsh-delegate:
     dependencies:
+      '@deepseek-ai/schemastery':
+        specifier: ^3.18.3
+        version: 3.18.4
       dsh:
         specifier: '>=0.2.0'
         version: 1.0.1

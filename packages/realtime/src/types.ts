@@ -5,6 +5,8 @@
  * @module dsh-realtime/types
  */
 
+import type { RealtimeCapabilities } from './capabilities.ts'
+
 /** A model route a realtime adapter can serve. */
 export interface RealtimeProviderInfo {
   /** Route id a caller passes as `RealtimeSessionOptions.provider`. Must equal the registered route. */
@@ -25,6 +27,16 @@ export interface RealtimeProviderInfo {
    * the self-test checks it before anything else.
    */
   configured?: boolean
+
+  /**
+   * What this route can do — when the adapter has declared it.
+   *
+   * Absent means **no claim was made**, which is not the same as "cannot": a caller may then attempt anything
+   * and an adapter that cannot will fail its own way. Declared means a call into an unsupported capability
+   * throws `CAPABILITY_UNSUPPORTED` before anything is sent, so a wiring mistake surfaces at the call site
+   * rather than as silence in a live session.
+   */
+  capabilities?: RealtimeCapabilities
 }
 
 /** One voice model advertised by an adapter. Catalog membership is advisory: it never gates a session. */

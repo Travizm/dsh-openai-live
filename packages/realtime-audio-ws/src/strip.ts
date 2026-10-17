@@ -251,8 +251,12 @@ html body {
   padding: 12px 14px 14px;
   border-top: 1px solid #2c2f34;
 }
-.dvr-knobs { display: flex; gap: 30px; align-items: flex-start; }
-.dvr-knob-unit { text-align: center; min-width: 96px; }
+/* The dials wrap: a knob unit is 96px minimum and the gaps are 30px, so three of them need 348px — more
+   than a narrow pane gives. Without wrapping the last unit (label, value and its Set button) prints past
+   the plate's border: measured at a 327px plate as MILESTONES +52px, its value +52px and Set +76px, and
+   at 427px as Set +3px. Found by the fixture gate, not by eye — the knobs only exist when settings do. */
+.dvr-knobs { display: flex; gap: 30px; row-gap: 14px; align-items: flex-start; flex-wrap: wrap; }
+.dvr-knob-unit { text-align: center; min-width: 96px; flex-shrink: 0; }
 .dvr-knob {
   /* Block, not inline: a span's width and height are ignored, so the dial would paint as a line box and
      only its pointer would be visible. */

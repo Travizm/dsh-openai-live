@@ -1,34 +1,37 @@
 #!/usr/bin/env node
 /**
- * The plate's containment sweep — where does its content escape its own border?
+ * The plate's layout sweep — TWO predicates, THREE drill levels, a list of window sizes.
  *
- * Measures the RENDERER (CDP + getBoundingClientRect over a live page), never a transcribed guess, and
- * checks every text leaf against the plate's own box at several viewport widths. A single width proves
- * nothing: the row was built for the docked strip's full width and only overflows once the pane narrows.
+ * Measures the RENDERER (CDP + getBoundingClientRect over a live page), never a transcribed guess.
  *
- * Why this exists, in numbers: clean at 1600 and 1400px, then `SETTINGS ⌃` 82px past the right edge at
- * 1200, 58px at 1000, and at 900 both `MIC` (42px) and `SETTINGS ⌃` (158px) escaped the border.
+ *   1. CONTAINMENT — every text leaf must lie inside the plate's own box. This is the `SETTINGS ⌃` spill:
+ *      the row was built for the docked strip's full width and escaped once the pane narrowed (82px past
+ *      the right edge at 1200, 58px at 1000, and at 900 both MIC at 42px and SETTINGS at 158px).
+ *   2. OVERLAP — no two text leaves may intersect by ≥2px on BOTH axes, the predicate the text-overlap
+ *      gate uses. A different predicate: two labels can be perfectly contained and still printed on top of
+ *      each other. Neither implies the other, so both run here.
  *
- * It is NOT the text-overlap check. Overlap is a different predicate and this sweep would call two labels
- * stacked on each other "contained". See `plate-containment-gate.py` for the kernel proof and the limits.
+ * Levels: `collapsed` (the default row), `controls` (`SETTINGS ⌃`), `all` (the deepest — every setting row,
+ * the knobs and the list editor). Only the collapsed row has ever been reviewed by eye, and the deeper
+ * levels carry more content in the same width.
  *
- * usage: node scripts/plate-containment-sweep.mjs <page-url> [out-dir]
- *        CDP_PORT=9223 WIDTHS=1600,1400,1200,1000,900 node scripts/plate-containment-sweep.mjs "$DSH_URL"
+ * usage:
+ *   CDP_PORT=9223 node scripts/plate-containment-sweep.mjs <url> [out-dir]
+ *   SIZES=1600x1000,1290x860,900x760 LEVELS=collapsed,controls,all node scripts/plate-containment-sweep.mjs <url>
  *
- * Requires a Chromium started with --remote-debugging-port and pointed at the page (the CLI-served
- * instance or the app). Exit 0 = every leaf inside the box at every width; exit 2 = something escaped.
+ * Exit 0 = both predicates clean at every size and level; 2 = something escaped or overlapped; 3 = the
+ * plate never mounted or a level would not open — a harness failure must never read as a pass.
  */
 import WebSocket from 'ws'
 import { writeFileSync, mkdirSync } from 'node:fs'
 
 const url = process.argv[2] || process.env.DSH_URL
-if (!url) {
-  console.error('usage: node scripts/plate-containment-sweep.mjs <page-url> [out-dir]')
-  process.exit(64)
-}
+if (!url) { console.error('usage: node scripts/plate-containment-sweep.mjs <url> [out-dir]'); process.exit(64) }
 const OUT = process.argv[3] || process.env.BBOX_OUT || '/tmp/plate-boxes'
 const CDP = Number(process.env.CDP_PORT || 9223)
-const WIDTHS = (process.env.WIDTHS || '1600,1400,1200,1000,900').split(',').map(Number)
+const SIZES = (process.env.SIZES || '1600x1000,1290x860,1200x1000,1000x1000,900x760,800x760,700x760,600x760')
+  .split(',').map(s => s.split('x').map(Number))
+const LEVELS = (process.env.LEVELS || 'collapsed,controls,all').split(',')
 mkdirSync(OUT, { recursive: true })
 
 const target = (await (await fetch(`http://127.0.0.1:${CDP}/json/list`)).json()).find(t => t.type === 'page')
@@ -43,13 +46,30 @@ const send = (method, params = {}) => new Promise((resolve, reject) => {
   ws.send(JSON.stringify({ id, method, params }))
 })
 const evaluate = async e => (await send('Runtime.evaluate', { expression: e, returnByValue: true, awaitPromise: true })).result.value
+const sleep = ms => new Promise(r => setTimeout(r, ms))
 
 await send('Runtime.enable')
 await send('Emulation.clearDeviceMetricsOverride').catch(() => {})
 await send('Page.navigate', { url })
-await new Promise(r => setTimeout(r, 9000))
-await evaluate(`(() => { const p = globalThis.__realtimePanel; if (p && p.open) p.open(); return !!p })()`)
-await new Promise(r => setTimeout(r, 1500))
+await sleep(9000)
+const mounted = await evaluate(`(() => { const p = globalThis.__realtimePanel; if (p && p.open) p.open(); return !!(p && p.open) })()`)
+if (!mounted) { console.error('plate never mounted — harness failure, not a pass'); process.exit(3) }
+await sleep(1500)
+
+/** Drive the plate to a level through the controls the plate itself provides. */
+const setLevel = level => `(() => {
+  const click = want => {
+    const b = document.querySelector('[data-action="level"][data-level="' + want + '"]')
+    if (b) { b.click(); return true }
+    return false
+  }
+  if ('${level}' === 'collapsed') { return click('collapsed') ? 'collapsed' : 'already-collapsed' }
+  if ('${level}' === 'controls') { return click('controls') ? 'controls' : 'no-controls-button' }
+  click('controls')
+  const tab = document.querySelector('.dvr-tab[data-level="all"]')
+  if (tab) { tab.click(); return 'all' }
+  return 'no-tab-all:' + [...document.querySelectorAll('.dvr-tab')].map(t => t.dataset.level).join('|')
+})()`
 
 const MEASURE = `(() => {
   const host = document.querySelector('[data-voice-plate-host]')
@@ -69,33 +89,50 @@ const MEASURE = `(() => {
       x0: Math.round(r.left), y0: Math.round(r.top), x1: Math.round(r.right), y1: Math.round(r.bottom),
     })
   }
-  const over = leaves.map(l => ({
-    ...l,
-    right: l.x1 - box.x1,
-    bottom: l.y1 - box.y1,
-    left: box.x0 - l.x0,
-  })).filter(l => l.right > 0 || l.bottom > 0 || l.left > 0)
-  return { viewport: [innerWidth, innerHeight], box, leafCount: leaves.length, leafRects: leaves, overflowing: over }
+  const escaping = leaves
+    .filter(l => l.x0 < box.x0 || l.y0 < box.y0 || l.x1 > box.x1 || l.y1 > box.y1)
+    .map(l => ({ ...l,
+      right: Math.max(0, l.x1 - box.x1), left: Math.max(0, box.x0 - l.x0),
+      bottom: Math.max(0, l.y1 - box.y1), top: Math.max(0, box.y0 - l.y0) }))
+  const overlaps = []
+  for (let i = 0; i < leaves.length; i++) for (let j = i + 1; j < leaves.length; j++) {
+    const a = leaves[i], b = leaves[j]
+    const iw = Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0)
+    const ih = Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0)
+    if (iw >= 2 && ih >= 2) overlaps.push({ a: a.text, b: b.text, iw, ih })
+  }
+  return { viewport: [innerWidth, innerHeight], box, boxHeight: box.y1 - box.y0, leafCount: leaves.length,
+           leaves, escaping, overlaps }
 })()`
 
-let dirty = false
-for (const w of WIDTHS) {
-  await send('Emulation.setDeviceMetricsOverride', { width: w, height: 1000, deviceScaleFactor: 1, mobile: false })
-  await new Promise(r => setTimeout(r, 1200))
-  const m = await evaluate(MEASURE)
-  console.log(`\n=== viewport ${w} ===`)
-  if (m.error) { console.log('  ', m.error); dirty = true; continue }
-  writeFileSync(`${OUT}/plate-${w}.json`, JSON.stringify({ viewport: m.viewport, box: m.box, leaves: m.leafRects }, null, 1))
-  console.log(`  plate box: x ${m.box.x0}→${m.box.x1} (w ${m.box.x1 - m.box.x0}) · ${m.leafCount} leaves`)
-  if (!m.overflowing.length) { console.log('  no element escapes the box'); continue }
-  dirty = true
-  for (const o of m.overflowing) {
-    const bits = []
-    if (o.right > 0) bits.push(`past right by ${o.right}px`)
-    if (o.left > 0) bits.push(`past left by ${o.left}px`)
-    if (o.bottom > 0) bits.push(`past bottom by ${o.bottom}px`)
-    console.log(`  "${o.text}" (${o.cls}): ${bits.join(', ')}`)
+let dirty = false, harnessBroken = false
+for (const level of LEVELS) {
+  const got = await evaluate(setLevel(level))
+  await sleep(500)
+  if (level === 'all' && String(got).startsWith('no-tab-all')) {
+    console.log(`\n## level ${level}: could not open (${got})`)
+    harnessBroken = true
+  }
+  for (const [w, h] of SIZES) {
+    await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false })
+    await sleep(1100)
+    const m = await evaluate(MEASURE)
+    const tag = `${w}x${h}-${level}`
+    console.log(`\n=== ${tag} ===`)
+    if (m.error) { console.log('  ', m.error); harnessBroken = true; continue }
+    writeFileSync(`${OUT}/plate-${tag}.json`, JSON.stringify(m, null, 1))
+    console.log(`  box ${m.box.x1 - m.box.x0}x${m.boxHeight} · ${m.leafCount} leaves · escaping ${m.escaping.length} · overlaps ${m.overlaps.length}`)
+    for (const e of m.escaping) {
+      const bits = []
+      if (e.right) bits.push(`right +${e.right}`)
+      if (e.left) bits.push(`left +${e.left}`)
+      if (e.bottom) bits.push(`bottom +${e.bottom}`)
+      if (e.top) bits.push(`top +${e.top}`)
+      console.log(`   ESCAPES "${e.text}" (${e.cls}): ${bits.join(', ')}px`)
+      dirty = true
+    }
+    for (const o of m.overlaps) { console.log(`   OVERLAP "${o.a}" × "${o.b}": ${o.iw}×${o.ih}px`); dirty = true }
   }
 }
-console.log(`\nboxes written to ${OUT} — feed them to scripts/plate-containment-gate.py`)
-process.exit(dirty ? 2 : 0)
+console.log(`\ndumps in ${OUT} — one per size and level, for the gate`)
+process.exit(harnessBroken ? 3 : dirty ? 2 : 0)

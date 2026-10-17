@@ -58,6 +58,12 @@ importers:
         specifier: ^2.9.1
         version: 2.9.1
 
+  packages/dsh-delegate:
+    dependencies:
+      dsh:
+        specifier: '>=0.2.0'
+        version: 1.0.1
+
   packages/realtime:
     devDependencies:
       '@deepseek-ai/cordis':
@@ -973,6 +979,9 @@ packages:
     resolution: {integrity: sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==}
     engines: {node: '>=8'}
 
+  dsh@1.0.1:
+    resolution: {integrity: sha512-gaCZCCRxMsDq2HX4F371AO4SKucUqqiOXzn7aFEvu4Ps2d0gbscniWiiPldvRo1E1afnJ4M2cVs0/ksEbhGI9w==}
+
   es-module-lexer@2.3.2:
     resolution: {integrity: sha512-poHGpORABojJJucnV9KbOavETW8lBVnphkW77ER5/BQ5Fz7oXSoCNek7IH3vR5nRjdsEz926ibFYX8KtLQmdyw==}
 
@@ -1003,6 +1012,9 @@ packages:
   js-yaml@4.3.2:
     resolution: {integrity: sha512-SFNOvSJ+Dgf/9An904Yx+CgSlIPCkIpao4qo51lpee25TIRejdH3rhR4EZMGoNx3/TP3O+wzWuiTFl4sqbltzA==}
     hasBin: true
+
+  keypress@0.2.1:
+    resolution: {integrity: sha512-HjorDJFNhnM4SicvaUXac0X77NiskggxJdesG72+O5zBKpSqKFCrqmndKVqpu3pFqkla0St6uGk8Ju0sCurrmg==}
 
   lightningcss-android-arm64@1.33.0:
     resolution: {integrity: sha512-gEpRTalKdosp4Bb8qWtc2iOgE5SeIHlpS1up9bFq2wAyYhl1UdTObYiHe98zEM9SQvSoqQZ1IQD0JNpg3Ml5pg==}
@@ -1077,6 +1089,10 @@ packages:
   lightningcss@1.33.0:
     resolution: {integrity: sha512-WkUDrojuJs0xkgGf2udWxa3yGBRxPtxUkB79i6aCZLRgc7PM8fZe9TosfPDcvEpQZbuFASnHYmRLBLUbmLOIIA==}
     engines: {node: '>= 12.0.0'}
+
+  line-by-line@0.1.6:
+    resolution: {integrity: sha512-MmwVPfOyp0lWnEZ3fBA8Ah4pMFvxO6WgWovqZNu7Y4J0TNnGcsV4S1LzECHbdgqk1hoHc2mFP1Axc37YUqwafg==}
+    engines: {node: '>=4.0.0'}
 
   magic-string@1.4.3:
     resolution: {integrity: sha512-z12OxmaPGE0F4xlpGdjuAUckipLpQlTAuAmyGhNoD7ODpYUzvDfvtxUbjM/jwznyP178oju/KDdyi220wNJ0RQ==}
@@ -1975,6 +1991,11 @@ snapshots:
 
   detect-libc@2.1.2: {}
 
+  dsh@1.0.1:
+    dependencies:
+      keypress: 0.2.1
+      line-by-line: 0.1.6
+
   es-module-lexer@2.3.2: {}
 
   estree-walker@3.0.3:
@@ -1995,6 +2016,8 @@ snapshots:
   js-yaml@4.3.2:
     dependencies:
       argparse: 2.0.1
+
+  keypress@0.2.1: {}
 
   lightningcss-android-arm64@1.33.0:
     optional: true
@@ -2044,6 +2067,8 @@ snapshots:
       lightningcss-linux-x64-musl: 1.33.0
       lightningcss-win32-arm64-msvc: 1.33.0
       lightningcss-win32-x64-msvc: 1.33.0
+
+  line-by-line@0.1.6: {}
 
   magic-string@1.4.3:
     dependencies:

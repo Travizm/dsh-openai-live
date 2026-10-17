@@ -1,0 +1,35 @@
+{
+  "name": "dsh-realtime-panel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The always-on half of the voice faceplate: a lamp, a meter and the microphone switch, in the sidebar footer.",
+  "main": "lib/index.js",
+  "files": [
+    "lib"
+  ],
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client/bundle.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-renderer"
+      ]
+    }
+  },
+  "dependencies": {
+    "dsh-realtime-audio-ws": "workspace:^"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0"
+  }
+}

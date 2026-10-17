@@ -145,6 +145,9 @@ describe('the declarations themselves', () => {
     expect(DEEPGRAM_CAPABILITIES.usageReporting).toBe(false)
     expect(DEEPGRAM_CAPABILITIES.transcriptDeltas).toBe(false)
     expect(DEEPGRAM_CAPABILITIES.promptUpdate).toBe('unknown')
+    // Muting is implemented adapter-side (the session stops writing audio). Declaring it false would refuse a
+    // call that works — the declaration describes the seam's method, not the provider's vocabulary.
+    expect(DEEPGRAM_CAPABILITIES.inputMute).toBe(true)
   })
 
   it('is frozen, because a capability declaration that a caller can mutate is not a declaration', () => {

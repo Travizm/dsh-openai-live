@@ -12,12 +12,12 @@ class FakeSocket implements SocketLike {
 
   send(data: string | Uint8Array): void { this.sent.push(data) }
   close(): void { this.closes += 1 }
-  on(event: 'message' | 'close' | 'error', listener: Listener): void {
+  on(event: 'open' | 'message' | 'close' | 'error', listener: Listener): void {
     const list = this.listeners.get(event) ?? []
     list.push(listener)
     this.listeners.set(event, list)
   }
-  emit(event: 'message' | 'close' | 'error', ...args: unknown[]): void {
+  emit(event: 'open' | 'message' | 'close' | 'error', ...args: unknown[]): void {
     for (const listener of this.listeners.get(event) ?? []) (listener as (...a: unknown[]) => void)(...args)
   }
 }
@@ -51,10 +51,39 @@ describe('openTransport', () => {
     const socket = new FakeSocket()
     const handlers = recorder()
     openTransport(socket, handlers)
-    socket.emit('message', new Uint8Array([1, 2, 3]))
+    socket.emit('message', new Uint8Array([1, 2, 3]), true)
     expect(handlers.audio).toHaveLength(1)
     expect(Array.from(handlers.audio[0] ?? [])).toEqual([1, 2, 3])
     expect(handlers.errors).toHaveLength(0)
+  })
+
+  it('parses a text frame that arrived as bytes, because a real socket sends text as a Buffer', () => {
+    // The live smoke caught this: `ws` delivers a text frame as a Buffer, a Buffer is a Uint8Array, and sniffing
+    // the type therefore classified every server frame as audio and parsed none — a session that connects,
+    // receives everything, and waits forever for an acknowledgement it already has.
+    const socket = new FakeSocket()
+    const handlers = recorder()
+    openTransport(socket, handlers)
+    socket.emit('message', new TextEncoder().encode('{"type":"SettingsApplied"}'), false)
+    expect(handlers.frames).toEqual([{ type: 'SettingsApplied' }])
+    expect(handlers.audio).toHaveLength(0)
+  })
+
+  it('parses a text frame delivered as an ArrayBuffer, not just as a typed view', () => {
+    // Both shapes are text on a socket that does not flag binary; only one of them is a Uint8Array.
+    const socket = new FakeSocket()
+    const handlers = recorder()
+    openTransport(socket, handlers)
+    socket.emit('message', new TextEncoder().encode('{"type":"Welcome"}').buffer, false)
+    expect(handlers.frames).toEqual([{ type: 'Welcome' }])
+  })
+
+  it('accepts an ArrayBuffer as audio when the socket flags it binary', () => {
+    const socket = new FakeSocket()
+    const handlers = recorder()
+    openTransport(socket, handlers)
+    socket.emit('message', new Uint8Array([4, 5]).buffer, true)
+    expect(Array.from(handlers.audio[0] ?? [])).toEqual([4, 5])
   })
 
   it('reports a frame that is neither text nor bytes', () => {
@@ -105,10 +134,34 @@ describe('openTransport', () => {
   it('serialises a client frame and sends audio as bytes', () => {
     const socket = new FakeSocket()
     const transport = openTransport(socket, recorder())
+    socket.emit('open')
     transport.send({ type: 'KeepAlive' })
     transport.sendAudio(new Uint8Array([9]))
     expect(socket.sent[0]).toBe('{"type":"KeepAlive"}')
     expect(socket.sent[1]).toBeInstanceOf(Uint8Array)
+  })
+
+  it('holds frames until the socket opens, then flushes them in order', () => {
+    // Found by the live smoke, not by these tests: a real WebSocket is CONNECTING when it is constructed, and
+    // `send` on it throws. The session sends Settings immediately, so without this buffer the first frame of every
+    // real session fails — while a fake that accepts writes whenever asked reports everything fine.
+    const socket = new FakeSocket()
+    const transport = openTransport(socket, recorder())
+    transport.send({ type: 'Settings' } as never)
+    transport.sendAudio(new Uint8Array([7]))
+    expect(socket.sent).toHaveLength(0)
+    socket.emit('open')
+    expect(socket.sent).toHaveLength(2)
+    expect(socket.sent[0]).toBe('{"type":"Settings"}')
+    expect(socket.sent[1]).toBeInstanceOf(Uint8Array)
+  })
+
+  it('sends directly once open, with nothing buffered behind it', () => {
+    const socket = new FakeSocket()
+    const transport = openTransport(socket, recorder())
+    socket.emit('open')
+    transport.send({ type: 'KeepAlive' })
+    expect(socket.sent).toEqual(['{"type":"KeepAlive"}'])
   })
 
   it('refuses to send after it is closed, rather than writing into a dead socket', () => {

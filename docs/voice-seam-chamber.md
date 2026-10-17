@@ -218,7 +218,7 @@ Deepgram's context is a cache. On reconnect the driver **rebuilds** `agent.conte
 | **P0** | Ratify D-PS-001…006 | — | this document |
 | **P1** | **Wire probe** (1 day): confirm the four ❓ assumptions against the live socket — `UpdatePrompt` replace-only, `InjectAgentMessage` mid-turn, no usage event, utterance-level `ConversationText`. Licence to specify. **RUN 2026-10-17 — see `docs/p1-wire-probe-results.md`: three confirmed; `UpdatePrompt` replace-vs-append is UNRESOLVED (four confounded tests), so `promptUpdate` declares `'unknown'` and the adapter must gate every turn on `PromptUpdated`/`ThinkUpdated`.** | ~1d | P0 |
 | **P2** | Journal + per-stage instrumentation (roadmap Layer 1, unchanged scope) | as planned | P0 |
-| **P3** | Capability declaration + `CAPABILITY_UNSUPPORTED` + conformance suite skeleton | ~0.5d | P0 |
+| **P3** | Capability declaration + `CAPABILITY_UNSUPPORTED` + conformance suite skeleton. **DONE 2026-10-17** — `packages/realtime/src/capabilities.ts` (`RealtimeCapabilities`, `requireCapability`, `assertPromptUpdate`, `auditCapabilities`), the new code, and `tests/capabilities.spec.ts`. Deepgram is declared from probe evidence (`DEEPGRAM_CAPABILITIES`); OpenAI's declaration is deferred to a story that audits its adapter rather than guessed now. | ~0.5d | P0 |
 | **P4** | `dsh-delegate` completions shim over `SessionController['prompt']` | ~1d | — |
 | **P5** | `dsh-realtime-deepgram`: transport, `Settings` builder, event translation | ~2–3d | P1, P3, P4 |
 | **P6** | Replay fixture + cost/latency measurement on a fixed workload | ~1.5d | P5 |

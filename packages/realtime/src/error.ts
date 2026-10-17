@@ -32,6 +32,16 @@ export const REALTIME_ERROR_CODES = Object.freeze({
   /** A setting is already registered under that key by another registration. */
   DUPLICATE_SETTING: 'DUPLICATE_SETTING',
 
+  /**
+   * The provider does not do this, and said so in its capability declaration.
+   *
+   * Deliberately **not** a widened {@link REALTIME_ERROR_CODES.PROVIDER_ERROR}: this is a fact about the
+   * provider known *before* the call, not a fault that happened during one. A caller can avoid it by reading
+   * `RealtimeProviderInfo.capabilities`, and — the part that matters — a retry loop that treats a provider
+   * failure as transient must not retry this, because it will fail identically forever.
+   */
+  CAPABILITY_UNSUPPORTED: 'CAPABILITY_UNSUPPORTED',
+
   // ---------------------------------------------------------------------------------------------
   // Failure taxonomy. These exist so a consumer can branch on the *class* of a failure rather than
   // parse prose: a setup state, a rejected credential, an account that cannot pay, and a throttle

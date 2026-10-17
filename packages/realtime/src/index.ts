@@ -32,6 +32,7 @@ export * from './journal.ts'
 export * from './steering.ts'
 export * from './transport.ts'
 export * from './settings.ts'
+export * from './capabilities.ts'
 export * from './metrics.ts'
 export { RealtimeError, REALTIME_ERROR_CODES } from './error.ts'
 

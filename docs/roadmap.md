@@ -166,5 +166,27 @@ state and does not report it. Ordered, smallest first.
 6. **Confirm the narration window in a real turn** — story 3's demo, still owed: a long agent turn, narrated,
    and heard.
 
-Steps 1 and 3 are worth doing before the others: together they make every later bug one reading rather than
-one investigation, which is the whole argument of this document applied to the failures now known to exist.
+Steps 1 and 3 are worth doing before the others: together they make every later bug one reading rather
+than one investigation, which is the whole argument of this document applied to the failures now known to exist.
+
+## The second provider — where it sits, and why it sits there
+
+A second voice route (a cheap cascade: hosted speech recognition and synthesis with DSH as the only
+brain) was ratified on 2026-10-17. It sits **after** steps 1 and 3 above, and the ordering is not a
+preference — it is ADR-012. A second implementation added to a system that cannot say what went wrong
+multiplies unknowns instead of options, and the one thing worse than one unobservable route is two.
+
+The shape is ADR-010: the provider keeps *when* to speak, DSH keeps *what to say*. A provider that
+wants to own both is used as a device driver or not at all. Capability losses are declared and refused
+by code rather than degraded to nothing (ADR-011), and the Python sidecar is deferred behind an actual
+transport requirement (ADR-013).
+
+| Order | Step | Why here |
+|---|---|---|
+| 1 | Speak the failure — steps 1 and 3 above | Without it the swap's own failures are indistinguishable from the old ones |
+| 2 | One-day wire probe of the provider's documented-only behaviour | Four load-bearing assumptions are ❓; a ❌ costs an afternoon here instead of a sprint later |
+| 3 | Capability declaration + refusal codes | The seam must be able to say "not supported" before a second implementation tests whether it is |
+| 4 | Completions shim over `SessionController['prompt']` | The brain already exists; this is the door to it, and the responder's replacement |
+| 5 | The adapter, then a replay fixture | CI must assert the same thing for both routes, or it asserts less while looking like more |
+
+Chamber: `docs/voice-seam-chamber.md`. Decisions: ADR-010 through ADR-013.

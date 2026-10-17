@@ -178,3 +178,96 @@ only as good as the reader's memory of which rows were true.
 `instructions`) are not registered yet. Their class exists in the registry and is exercised by its tests,
 but a value that takes effect at the next session open needs the pending-value behaviour the strip's story
 specifies, and registering them without it would put a frozen control where a reconnect action belongs.
+
+---
+
+## ADR-010 — A hosted harness is demoted to a device driver, or it is not used
+
+**Decision.** DSH is the only brain. A provider that also orchestrates — Deepgram Voice Agent owns
+STT→LLM→TTS, speculative replies and function dispatch — is configured with `agent.think.endpoint`
+pointed at DSH and **no `agent.think.functions` array at all**. GPT-Live-1 stays the default provider;
+a second route ships beside it, never in front of it. (Chamber D-PS-001, D-PS-006.)
+
+**Why.** ADR-001 rejected Responses delegation because it would put a second orchestrator beside DSH
+and make DSH's permissions advisory rather than authoritative. That argument does not stop at the
+protocol boundary — a hosted voice agent that owns its own LLM and its own function dispatch *is* the
+same second orchestrator, wearing a vendor's name. Declaring DSH's tools to it would create a second
+tool registry that drifts from the first, which is the failure ADR-008 names from the other side.
+
+**Consequence, and the reason this is the load-bearing ADR.** `dsh-realtime-responder` has no
+counterpart under such a provider: the app no longer authors the spoken turn, it *answers a completion*.
+Under this decision the responder is replaced by a completions shim over
+`SessionController['prompt']`, and DSH's real tools stay inside DSH's own loop where their schemas are
+already the authority. The provider keeps one decision — *when* to speak — and loses the other —
+*what* to say.
+
+**Cost.** No speculative tool dispatch on the provider's side, so a long DSH tool loop is audible
+silence; narration degrades to an injected canned line rather than a written one. DSH must expose an
+OpenAI-compatible completions surface, which is a new integration door and a new thing to keep
+credential-safe per ADR-005.
+
+**Left undone, deliberately.** No function channel, and a conformance test asserts its absence — an
+architecture document that forbids a thing and does not test the absence is a comment.
+
+---
+
+## ADR-011 — Capability is declared, and an unsupported call is refused by code
+
+**Decision.** `RealtimeProviderInfo` gains `capabilities`: six booleans
+(`appendThinking`, `appAuthoredSpeech`, `functionCalls`, `usageReporting`, `transcriptDeltas`,
+`inputMute`). A call into a capability declared `false` throws a **new**
+`REALTIME_ERROR_CODES.CAPABILITY_UNSUPPORTED`. No existing code is widened to mean it. (D-PS-003.)
+
+**Why.** ADR-008 says a file nothing reads is not a contract; the converse is the one that bites here —
+an affordance the protocol cannot honour is worse than no affordance, because it fails *silently*.
+Five seam capabilities have no equivalent on a hosted voice provider. Degrading them to no-ops passes
+every coverage gate in the repo and is undetectable from outside it, which is precisely the false
+positive the quality lens exists to reject: a suite that is green while the feature is absent.
+
+**Consequence.** The seam does not split into a duplex interface and a cascade interface. One surface,
+honest about its edges, beats two surfaces that each claim to be the real one — and the alternative
+would have doubled every call site to buy a distinction the capability table already carries. Under the
+cheap route, `appendThinking` degrades to `InjectAgentMessage`; the silent narration channel is
+declared missing rather than quietly dropped.
+
+**Cost.** Every capability is declared, and every `false` owes a test asserting the refusal rather than
+the absence. A new provider now costs a table, not just an adapter.
+
+---
+
+## ADR-012 — Instrument before the second provider
+
+**Decision.** The journal (roadmap, *the next cycle*, step 3) and the per-stage metrics (chamber §6.3,
+phase P2) come before the second adapter. A one-day wire probe comes before the adapter too: four
+load-bearing assumptions — an update that replaces rather than appends, an injected line accepted
+mid-turn, the absence of a usage event, utterance-level transcripts — are currently
+documented-only, not observed. (D-PS-002, D-PS-005.)
+
+**Why.** A second implementation added to a system with no sensing mechanism multiplies unknowns rather
+than options: each unobservable swap adds a failure class nobody can attribute, debugging cost rises,
+willingness to swap falls, and the seam ossifies back into the one implementation it already has. This
+repo's own discipline draws the same line at a smaller scale — ✅ observed on the wire, ❓ documented —
+and a specification built on ❓ is a guess with a citation attached.
+
+**Consequence.** The cheap route arrives later than it could. The probe converts four ❓ into ✅ or ❌ in
+a day, and a ❌ found in a probe costs an afternoon rather than a sprint.
+
+**Cost.** Accepted, and stated plainly: this is a deliberate delay on the feature the work was asked
+for, in exchange for being able to tell a working swap from a broken one.
+
+---
+
+## ADR-013 — Pipecat is deferred behind a transport requirement
+
+**Decision.** No Python sidecar. Revisit only when SIP or WebRTC becomes a real requirement, not to
+obtain a cheap cascade. (D-PS-004.)
+
+**Why.** Transport and barge-in are device-driver concerns, and the provider already supplies both. A
+sidecar is a shallow module: it relocates complexity into operations — two runtimes, two lifecycles,
+two logs, both sides of one hand-off instrumented — without reducing any of it. It would also weaken
+ADR-003, because a replay fixture cannot cover the Python half, so CI would assert less while looking
+like it asserts more.
+
+**Cost.** No WebRTC or telephony until it is asked for. If a phone-number product appears, this is the
+ADR to reopen, and the reasoning inside it — *transport is a driver concern* — is what should be
+re-examined first.

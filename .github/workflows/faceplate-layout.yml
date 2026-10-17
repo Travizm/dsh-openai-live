@@ -1,0 +1,52 @@
+name: Faceplate layout
+
+# The plate's layout gate: CONTAINMENT (nothing escapes the plate's border) and OVERLAP (no two labels
+# printed on top of each other) — two predicates, because a green on one says nothing about the other.
+#
+# It runs on a FIXTURE bed, not the live app, for two reasons. CI has no app to drive over CDP; and the
+# live bed cannot be trusted to have content: in a profile whose settings registry is empty, the deepest
+# level renders "no settings to show" and reports zero problems — a pass that proves nothing. The fixture
+# carries four states with eleven seeded settings, so the levels with real content are exercised.
+#
+# That difference was not theoretical. The fixture found, on its first run, MILESTONES +52px, its value
+# +52px and a Set button +76px past the border in the controls level at a 327px plate — knobs that only
+# exist when settings do, which is exactly what the live bed had been rendering empty.
+#
+# What this does NOT gate: host integration. The panel's own container rules are mirrored into the fixture
+# (they cannot be imported into a Node render), so only a live sweep can catch those drifting.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  layout:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # No `version:` here on purpose — see ci.yml: `packageManager` in package.json owns it.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # The fixture renders the BUILT artefacts (stripStyles() and renderStrip() from lib/), so the build
+      # is part of the gate, not a separate concern.
+      - name: Build
+        run: pnpm build
+
+      - name: Layout gate — 4 states × 5 widths, both predicates
+        env:
+          CHROME: google-chrome
+          CHROME_FLAGS: --no-sandbox
+        run: bash scripts/plate-layout-gate.sh .faceplate-preview

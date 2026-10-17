@@ -51,10 +51,15 @@ const sleep = ms => new Promise(r => setTimeout(r, ms))
 await send('Runtime.enable')
 await send('Emulation.clearDeviceMetricsOverride').catch(() => {})
 await send('Page.navigate', { url })
-await sleep(9000)
-const mounted = await evaluate(`(() => { const p = globalThis.__realtimePanel; if (p && p.open) p.open(); return !!(p && p.open) })()`)
-if (!mounted) { console.error('plate never mounted — harness failure, not a pass'); process.exit(3) }
-await sleep(1500)
+// STATIC=1 measures a rendered fixture (scripts/faceplate-preview.mjs): the plate is already in the page,
+// at a fixed level, with no panel to open. Nothing about the predicates changes — only the bed.
+const STATIC = process.env.STATIC === '1'
+await sleep(STATIC ? 2500 : 9000)
+if (!STATIC) {
+  const opened = await evaluate(`(() => { const p = globalThis.__realtimePanel; if (p && p.open) p.open(); return !!(p && p.open) })()`)
+  if (!opened) { console.error('plate never mounted — harness failure, not a pass'); process.exit(3) }
+  await sleep(1500)
+}
 
 /** Drive the plate to a level through the controls the plate itself provides. */
 const setLevel = level => `(() => {
@@ -106,12 +111,15 @@ const MEASURE = `(() => {
 })()`
 
 let dirty = false, harnessBroken = false
-for (const level of LEVELS) {
-  const got = await evaluate(setLevel(level))
-  await sleep(500)
-  if (level === 'all' && String(got).startsWith('no-tab-all')) {
-    console.log(`\n## level ${level}: could not open (${got})`)
-    harnessBroken = true
+const loopLevels = STATIC ? ['fixture'] : LEVELS
+for (const level of loopLevels) {
+  if (!STATIC) {
+    const got = await evaluate(setLevel(level))
+    await sleep(500)
+    if (level === 'all' && String(got).startsWith('no-tab-all')) {
+      console.log(`\n## level ${level}: could not open (${got})`)
+      harnessBroken = true
+    }
   }
   for (const [w, h] of SIZES) {
     await send('Emulation.setDeviceMetricsOverride', { width: w, height: h, deviceScaleFactor: 1, mobile: false })

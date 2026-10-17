@@ -126,6 +126,56 @@ for (const [name, state] of Object.entries(states)) {
   writeFileSync(join(out, `${name}.html`), page(name, state))
 }
 
+/**
+ * Pane variants — the plate as the RIGHT-PANE TAB renders it, at fixed container widths.
+ *
+ * The pages above mount the markup into `#dsh-realtime-strip`, the docked element, at whatever width the
+ * window gives: full width, always. The pane is where the row actually broke (`SETTINGS ⌃` 82px past the
+ * border at a 503px plate), so the sweep needs a bed that can be narrow on purpose.
+ *
+ * The container rules below MIRROR the panel face's own (`[data-voice-plate-host]` …). They are duplicated
+ * here because the panel is a separate client face that cannot be imported into a Node render — the LIVE
+ * sweep over the running page is authoritative for them, and this bed exists for CI and for level content.
+ */
+const PANE_WIDTHS = (process.env.PANE_WIDTHS || '703,593,503,427,327').split(',').map(Number)
+const PANE_CSS = `
+[data-voice-plate-host] { display: flex; flex-direction: column; box-sizing: border-box;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 11px; line-height: 1.35; color: #e9e2ce;
+  background: linear-gradient(180deg, #26282c 0%, #1b1d20 42%, #141619 100%);
+  border: 1px solid #3a3d42; border-radius: 4px; margin: 8px; }
+[data-voice-plate-host] * { box-sizing: border-box; }
+[data-voice-plate-host] .dvr-row { flex-wrap: wrap; height: auto; min-height: 58px; padding: 6px 14px; row-gap: 8px; }
+[data-voice-plate-host] .dvr-row > * { flex-shrink: 0; }
+[data-voice-plate-host] .dvr-panel { max-height: none !important; }
+`
+
+const panePage = (name, state, width) => `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>The faceplate pane — ${name} at ${width}px</title>
+<style>${stripStyles()}</style>
+<style>${PANE_CSS}
+  html, body { margin: 0; background: #0f1114; }
+  .pane { width: ${width}px; padding: 8px 0; }
+</style>
+</head>
+<body>
+<div class="pane"><div data-voice-plate-host></div></div>
+<script>window.__ModuleLoader__ = { load: (entry) => { window.__faceplate = entry } }</script>
+<script src="./bundle.js"></script>
+<script>
+  const face = window.__faceplate.factory((n) => { throw new Error('this face imports nothing: ' + n) })
+  document.querySelector('[data-voice-plate-host]').innerHTML = face.renderStrip(${JSON.stringify(state)})
+</script>
+</body>
+</html>`
+
+for (const [name, state] of Object.entries(states)) {
+  for (const w of PANE_WIDTHS) writeFileSync(join(out, `pane-${name}-${w}.html`), panePage(name, state, w))
+}
+console.log(`rendered ${Object.keys(states).length} docked pages and ${Object.keys(states).length * PANE_WIDTHS.length} pane pages → ${out}`)
+
 // The rows the host actually injects, for the record: the stylesheet is a head row with no placement field,
 // which is a claim about the host's renderer that this prints rather than asserts.
 writeFileSync(join(out, 'rows.json'), `${JSON.stringify([

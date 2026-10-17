@@ -15,12 +15,12 @@ class FakeSocket implements SocketLike {
   constructor(headers: Readonly<Record<string, string>>) { this.headers = headers }
   send(data: string | Uint8Array): void { this.sent.push(data) }
   close(): void { this.closes += 1 }
-  on(event: 'message' | 'close' | 'error', listener: Listener): void {
+  on(event: 'open' | 'message' | 'close' | 'error', listener: Listener): void {
     const list = this.listeners.get(event) ?? []
     list.push(listener)
     this.listeners.set(event, list)
   }
-  emit(event: 'message' | 'close' | 'error', ...args: unknown[]): void {
+  emit(event: 'open' | 'message' | 'close' | 'error', ...args: unknown[]): void {
     for (const listener of this.listeners.get(event) ?? []) (listener as (...a: unknown[]) => void)(...args)
   }
 }
@@ -81,6 +81,8 @@ describe('DeepgramAdapter', () => {
     const adapter = new DeepgramAdapter(config(), sockets.open)
     const pending = adapter.session(request())
     await Promise.resolve()
+    // A real socket is CONNECTING here; frames are held until `open`.
+    sockets.sockets[0]?.emit('open')
     expect(sockets.urls[0]).toBe(AGENT_ENDPOINT)
     expect(sockets.sockets[0]?.headers).toEqual({ Authorization: 'Token test-key' })
     // The transport serialises before writing, so what reaches the socket is the JSON frame itself.
@@ -134,7 +136,7 @@ describe('DeepgramAdapter', () => {
     const adapter = new DeepgramAdapter(config(), sockets.open)
     const pending = adapter.session(request({ handlers: { onAudio: bytes => { received.push(bytes) } } }))
     await Promise.resolve()
-    sockets.sockets[0]?.emit('message', new Uint8Array([1, 2]))
+    sockets.sockets[0]?.emit('message', new Uint8Array([1, 2]), true)
     sockets.sockets[0]?.emit('message', '{"type":"SettingsApplied"}')
     await pending
     expect(received).toHaveLength(1)
@@ -172,6 +174,7 @@ describe('DeepgramAdapter', () => {
     )
     const pending = adapter.session(request())
     await Promise.resolve()
+    sockets.sockets[0]?.emit('open')
     const settings = JSON.parse(String(sockets.sockets[0]?.sent[0]))
     expect(settings.agent.listen.provider).toEqual({ type: 'deepgram', model: 'nova-3', version: 'v1' })
     expect(settings.agent.speak.provider.model).toBe('aura-2-orpheus-en')

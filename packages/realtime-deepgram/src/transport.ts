@@ -20,7 +20,7 @@ export interface SocketLike {
   /** Close the connection. */
   close(): void
   /** Subscribe to transport events. `message` carries either a string or bytes. */
-  on(event: 'message' | 'close' | 'error', listener: (...args: never[]) => void): void
+  on(event: 'open' | 'message' | 'close' | 'error', listener: (...args: never[]) => void): void
 }
 
 /** What the transport reports upward. */
@@ -45,9 +45,11 @@ export interface DeepgramTransport {
   close(): Promise<void>
 }
 
-/** Whether a received payload is audio rather than JSON. */
-function isBinary(data: unknown): data is Uint8Array {
-  return data instanceof Uint8Array || ArrayBuffer.isView(data)
+/** Normalise a binary payload to a plain byte view of exactly its bytes. */
+function toBytes(data: unknown): Uint8Array {
+  if (data instanceof ArrayBuffer) return new Uint8Array(data)
+  const view = data as Uint8Array
+  return new Uint8Array(view.buffer, view.byteOffset, view.byteLength)
 }
 
 /**
@@ -58,20 +60,48 @@ function isBinary(data: unknown): data is Uint8Array {
  */
 export function openTransport(socket: SocketLike, handlers: TransportHandlers): DeepgramTransport {
   let closed = false
-  socket.on('message', ((data: unknown) => {
-    if (isBinary(data)) {
-      handlers.onAudio(new Uint8Array(data.buffer, data.byteOffset, data.byteLength))
-      return
-    }
-    if (typeof data !== 'string') {
-      handlers.onError(new Error('received a frame that was neither text nor bytes'))
-      return
-    }
+  // A real WebSocket is not open when it is constructed, and `send` on a connecting socket **throws**. The session
+  // sends `Settings` immediately, so without this buffer the very first frame fails against the real provider —
+  // which is exactly what the live smoke found (readyState 0) after 86 unit tests passed, because the fake socket
+  // accepted writes whenever it was asked. Frames are held in order and flushed on `open`.
+  let open = false
+  const buffered: (string | Uint8Array)[] = []
+  const write = (data: string | Uint8Array): void => {
+    if (!open) { buffered.push(data); return }
+    socket.send(data)
+  }
+  const parse = (text: string): void => {
     try {
-      handlers.onFrame(JSON.parse(data) as ServerFrame)
+      handlers.onFrame(JSON.parse(text) as ServerFrame)
     } catch {
       handlers.onError(new Error('received a frame that was not JSON'))
     }
+  }
+  socket.on('open', ((..._args: never[]) => {
+    open = true
+    // `splice` drains the queue in place, so order is preserved and nothing is sent twice.
+    for (const data of buffered.splice(0)) socket.send(data)
+  }) as (...args: never[]) => void)
+  socket.on('message', ((data: unknown, isBinary?: unknown) => {
+    // The `ws` socket delivers a **text** frame as a Buffer, and a Buffer is a Uint8Array — so sniffing the type
+    // classifies every server frame as audio and parses nothing. Found by the live smoke, which timed out waiting
+    // for `SettingsApplied` while the frames were arriving all along. The `isBinary` flag is the authority; the
+    // type is only a fallback for sockets that do not pass one.
+    const binary = isBinary === true
+    if (binary) {
+      handlers.onAudio(toBytes(data))
+      return
+    }
+    if (typeof data === 'string') {
+      parse(data)
+      return
+    }
+    if (data instanceof Uint8Array || data instanceof ArrayBuffer) {
+      // A text frame as bytes: decode it rather than treating it as samples.
+      parse(new TextDecoder().decode(data instanceof ArrayBuffer ? new Uint8Array(data) : data))
+      return
+    }
+    handlers.onError(new Error('received a frame that was neither text nor bytes'))
   }) as (...args: never[]) => void)
   socket.on('close', ((...args: unknown[]) => {
     closed = true
@@ -84,11 +114,11 @@ export function openTransport(socket: SocketLike, handlers: TransportHandlers): 
   return {
     send(frame) {
       if (closed) throw new Error('the transport is closed')
-      socket.send(JSON.stringify(frame))
+      write(JSON.stringify(frame))
     },
     sendAudio(pcm16) {
       if (closed) throw new Error('the transport is closed')
-      socket.send(pcm16)
+      write(pcm16)
     },
     async close() {
       if (closed) return

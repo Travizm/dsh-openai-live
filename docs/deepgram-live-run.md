@@ -39,10 +39,29 @@ lesson is not "test more" — it is that a fake socket has to model the two prop
 *not being open yet* and *not telling text from bytes by type*. Both are now pinned by tests written from the
 live failure, and the smoke script exists so the next person can re-run it.
 
-## What this run does not prove
+## The inbound half — real speech in
 
-- **Microphone input.** There is no capture device in this harness, so `sendAudio` was never exercised against
-  the provider. That needs a person at a microphone or a recorded WAV fed through the session.
+`scripts/deepgram-input-smoke.mjs` streams a WAV through `session.sendAudio` in 20 ms frames — the pacing a capture
+device produces, not one burst — with trailing silence so the provider's end-of-turn detector has something to
+detect. First run:
+
+```
+heard        input: What's the weather?
+answered     output: Please provide your location for the weather report.
+audio        72000 bytes back
+```
+
+So the loop is proven in both directions: speech in through the seam, transcribed by the provider, answered by
+the LLM, spoken back as 72,000 bytes (≈3 s at 24 kHz). The fixture is
+`packages/realtime-deepgram/fixtures/whats-the-weather.wav` — 16 kHz mono 16-bit, the format the Settings declare,
+because a mismatched file is a session that hears noise and reports nothing.
+
+## What still is not proven
+
+- **A live microphone.** The WAV proves the seam's `sendAudio` path and the provider's STT; a real capture device
+  additionally exercises frame pacing under load and device resampling, neither of which a file can show.
+- **Interruption / barge-in.** Nothing here speaks while the agent is speaking, so `UserStartedSpeaking` mid-turn
+  and any truncation behaviour remain unexercised.
 - **Prompt updates.** `promptUpdate` remains `'unknown'` — the replace-vs-append question this pathway has been
   carrying since P1. The cheapest remaining route is to point `UpdateThink` at the delegate shim (which now
   exists, P4) through a public URL and read the prompt the provider sends.

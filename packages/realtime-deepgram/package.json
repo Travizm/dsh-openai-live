@@ -2,7 +2,7 @@
   "name": "dsh-realtime-deepgram",
   "version": "0.1.0",
   "private": true,
-  "description": "P5a — Deepgram Voice Agent: the Settings builder and the event translation, grounded in a recorded live session.",
+  "description": "P5a \u2014 Deepgram Voice Agent: the Settings builder and the event translation, grounded in a recorded live session.",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -33,7 +33,9 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "dsh-realtime": "workspace:^"
+    "dsh-realtime": "workspace:^",
+    "@deepseek-ai/schemastery": "^3.18.3",
+    "ws": "^8.22.0"
   },
   "peerDependencies": {
     "dsh": ">=0.2.0"

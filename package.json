@@ -64,6 +64,7 @@
     "probe:delegation": "node scripts/probe-delegation-path.mjs",
     "probe:open": "node spike/open-failure-probe.mjs",
     "self-test": "node scripts/self-test.mjs",
+    "timings": "node scripts/timings.mjs",
     "leakscan": "node scripts/leak-scan.mjs",
     "declared-deps": "node scripts/declared-dependencies.mjs",
     "canary": "node scripts/protocol-canary.mjs",

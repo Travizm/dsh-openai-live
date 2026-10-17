@@ -10,7 +10,8 @@
  * - `appendInstructions` sends `UpdatePrompt` and **resolves on `PromptUpdated`**, not on the write. P1 proved a
  *   turn started before the acknowledgement runs under the old prompt, so resolving on the write would let a
  *   caller believe a rule was in force while the next turn ignored it. Whether the update replaces or appends is
- *   still unresolved (`promptUpdate: 'unknown'`), so callers must budget as if it appends.
+ *   **appends** (P1c, proven from the provider's own outbound request), so a caller that wants replacement must
+ *   reconstruct the whole instruction in one update rather than layering rules.
  * - `muteInput` is **adapter-local**: this provider has no mute frame, so the session stops sending audio. The
  *   capability declares `inputMute: true` because the seam's method does what it says — the alternative would be
  *   refusing a call that works.

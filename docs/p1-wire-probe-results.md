@@ -1,7 +1,7 @@
 ---
 title: "P1 — Deepgram wire probe results"
 status: active
-version: 1.1.0
+version: 1.2.0
 created: 2026-10-17
 updated: 2026-10-17
 domain: architecture
@@ -27,7 +27,7 @@ listening, `open_ai / gpt-4o-mini` for thinking, Aura-2 for speaking.
 
 | # | Assumption (D-PS-005) | Verdict | Receipt |
 |---|---|---|---|
-| 1 | `UpdatePrompt` is **replace-only** | ⚠️ **UNRESOLVED** | four tests, all confounded; a client cannot observe the prompt the provider holds |
+| 1 | `UpdatePrompt` is **replace-only** | ❌ **CONTRADICTED — it APPENDS** (resolved 2026-10-17 by P1c) | the provider's own outbound request to a BYO LLM carries **both** instructions after an update |
 | 2 | `InjectAgentMessage` is accepted **mid-turn** | ✅ CONFIRMED | the injected sentence returned as assistant text, no `InjectionRefused` in 160–181 frames |
 | 3 | There is **no usage event** | ✅ CONFIRMED | no event carrying usage/billing/seconds in any run; observed vocabulary: `Welcome`, `SettingsApplied`, `UserStartedSpeaking`, `ConversationText`, `History`, `EndOfTurn`, `LatencyReport`, `AgentAudioDone`, `PromptUpdated`, `ThinkUpdated` |
 | 4 | `ConversationText` is **utterance-level**, not deltas | ✅ CONFIRMED | each frame carries `role` + a complete utterance, e.g. `role="assistant", content="probe one."` |
@@ -47,20 +47,36 @@ per-stage turn latency; on this provider part of that instrument is **reported r
 3. The documented 25,000-character prompt cap is **not enforced as a rejection** on this path: a single
    30,000-character prompt was accepted with no error.
 
-## Why #1 is unresolved: four tests, four confounds
+## How #1 was finally settled — P1c, reading the request instead of the answer
 
-Recorded in full, because each failure is a different way to build a test that cannot answer its question.
+Every earlier attempt asked the *model* something and drew a conclusion. P1c asked the **provider**:
 
-| Attempt | Design | Why it failed |
-|---|---|---|
-| 1 | Send the new prompt, immediately send the old one back, read the answer | **Could not discriminate** — reinstating the original makes replace and append produce the same output. It also re-fired every turn (54 turns, then a timeout). |
-| 2 | Update to "every reply ends with ZULU", ask, look for the marker | **Race, then sampling.** One run sent before the ack (both rules → false "append"); with the ack gate the marker was absent in another, because compliance with a mid-session rule is stochastic. |
-| 3 | Two ~15,000-character prompts against the 25,000 cap; accumulation would exceed it | **Vacuous.** The positive control — one 30,000-character prompt — was accepted with no error, so the check could not have failed. A pass condition that cannot fail reads as a pass and means nothing. |
-| 4 | Ask the model to enumerate its system-prompt rules verbatim | **Self-defeating.** The model refuses ("I can't disclose internal instructions"), and the ZULU in its refusal is *compliance with the new rule*, not a listed rule — so "ZULU present, original absent" was an artifact of the refusal. |
+`scripts/deepgram-prompt-capture.mjs` is a stub OpenAI-compatible endpoint that logs the `messages` it receives and
+answers with a fixed line. Pointed at it as `agent.think.endpoint`, the system message in each request *is* the
+prompt the provider currently holds — no model, no sampling, no interpretation.
 
-**There is no fifth behavioural test.** Under both semantics the model can answer identically: holding two
-conflicting instructions it picks one, holding one it follows it. Separating them needs the *provider's* view of
-the prompt, which a client cannot ask for.
+```
+1. userTurns=1  "You are a probe. Reply with exactly: probe one."
+2. userTurns=1  "You are a probe. Reply with exactly: probe one."
+3. userTurns=1  "You are a probe. Reply with exactly: probe one."
+4. userTurns=2  "You are a probe. Reply with exactly: probe one.
+                 You are a probe. Every reply must end with the token ZULU."
+```
+
+Request 4 is the turn after `UpdatePrompt`. It carries the original **and** the new rule, joined by a newline.
+**`UpdatePrompt` appends.** The four behavioural attempts below are kept because each failure is a lesson about
+testing, and because the answer they reached by accident is the answer the request confirms.
+
+Two incidental findings from the same run:
+
+- **`agent.think.endpoint` is on `think`, not on `think.provider`.** The nested form is rejected with "Check the
+  `agent.think` field against the API spec" — found here, after the unit tests had agreed with the wrong shape,
+  because a builder and its tests can share the same mistake.
+- **`UpdateThink` is not a reliable replace primitive for a BYO composition.** One run showed the post-update turn
+  never reaching our endpoint (the agent answered from Deepgram's managed LLM instead — the whole think config,
+  endpoint included, had been replaced). A second run, resending the endpoint, showed three requests all carrying
+  the original prompt. So the operational conclusion is: do not depend on `UpdateThink` to change the prompt, and
+  never send one without resending the endpoint.
 
 ## Design consequences
 

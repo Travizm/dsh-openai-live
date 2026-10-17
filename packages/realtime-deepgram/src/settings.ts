@@ -115,12 +115,11 @@ export function buildSettings(config: SettingsConfig): SettingsMessage {
         },
       },
       think: {
-        provider: {
-          type: 'open_ai',
-          model,
-          // Absent, never blank: an empty url is rejected and reads as "no endpoint" to nobody.
-          ...(config.think.endpoint === undefined ? {} : { endpoint: { url: absoluteHttpUrl(config.think.endpoint) } }),
-        },
+        provider: { type: 'open_ai', model },
+        // Absent, never blank — and on `think`, not on `provider`: the live provider rejected the nested form with
+        // "Check the agent.think field against the API spec". An empty url is rejected too, which is why the
+        // builder omits the field rather than blanking it.
+        ...(config.think.endpoint === undefined ? {} : { endpoint: { url: absoluteHttpUrl(config.think.endpoint) } }),
         prompt,
       },
       speak: { provider: { type: 'deepgram', model: speakModel } },

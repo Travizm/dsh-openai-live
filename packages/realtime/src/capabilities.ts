@@ -72,8 +72,9 @@ export interface RealtimeCapabilities {
  *   stopping its own audio writes, so the seam's `muteInput()` does exactly what it says. It was declared `false`
  *   here first, which would have made `requireCapability(..., 'inputMute')` refuse a call that works — the
  *   capability matrix has to describe the seam's method, not the provider's vocabulary.
- * - `promptUpdate: 'unknown'` — four tests, four confounds; the docs contradict each other. See the results
- *   file. Callers must budget as if it appends, which is safe under either semantics.
+ * - `promptUpdate: 'append'` — **resolved by P1c.** Reading the provider's own outbound request to a BYO LLM shows
+ *   a mid-session update leaves the original instruction in place: the prompt after an update carries both, joined
+ *   by a newline. Budget as if appending, because it does.
  */
 export const DEEPGRAM_CAPABILITIES: RealtimeCapabilities = Object.freeze({
   appendThinking: false,
@@ -82,7 +83,7 @@ export const DEEPGRAM_CAPABILITIES: RealtimeCapabilities = Object.freeze({
   usageReporting: false,
   transcriptDeltas: false,
   inputMute: true,
-  promptUpdate: 'unknown',
+  promptUpdate: 'append',
 })
 
 /**

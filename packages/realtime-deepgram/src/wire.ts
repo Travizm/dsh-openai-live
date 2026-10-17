@@ -42,12 +42,13 @@ export interface SettingsMessage {
       }
     }
     readonly think: {
-      readonly provider: {
-        readonly type: 'open_ai'
-        readonly model: string
-        /** Present only when the caller brings its own endpoint — absent means Deepgram's managed proxy. */
-        readonly endpoint?: { readonly url: string }
-      }
+      readonly provider: { readonly type: 'open_ai'; readonly model: string }
+      /**
+       * Present only when the caller brings its own LLM. **On `think`, not on `provider`**: the provider rejects a
+       * nested one with "Check the agent.think field against the API spec" — found on a live run, after the tests
+       * had happily agreed with the wrong shape.
+       */
+      readonly endpoint?: { readonly url: string; readonly headers?: Readonly<Record<string, string>> }
       readonly prompt: string
     }
     readonly speak: {

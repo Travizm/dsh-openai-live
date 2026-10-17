@@ -144,7 +144,7 @@ describe('the declarations themselves', () => {
     // where that probe result becomes something the code can act on.
     expect(DEEPGRAM_CAPABILITIES.usageReporting).toBe(false)
     expect(DEEPGRAM_CAPABILITIES.transcriptDeltas).toBe(false)
-    expect(DEEPGRAM_CAPABILITIES.promptUpdate).toBe('unknown')
+    expect(DEEPGRAM_CAPABILITIES.promptUpdate).toBe('append')
     // Muting is implemented adapter-side (the session stops writing audio). Declaring it false would refuse a
     // call that works — the declaration describes the seam's method, not the provider's vocabulary.
     expect(DEEPGRAM_CAPABILITIES.inputMute).toBe(true)
@@ -155,8 +155,9 @@ describe('the declarations themselves', () => {
   })
 
   it('audits clean against itself when nothing is exercised', () => {
+    // No unknowns any more: P1c settled the prompt-update question, so this declaration has no admitted gaps left.
     const audit = auditCapabilities(DEEPGRAM_CAPABILITIES, [])
     expect(audit.honoured).toBe(true)
-    expect(audit.unknowns).toHaveLength(1)
+    expect(audit.unknowns).toHaveLength(0)
   })
 })

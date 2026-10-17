@@ -145,6 +145,31 @@ what to render belongs in the client bundle, where CI can execute it.
 - The functional assertions (toggle state, list edit, the timeout pair written and re-read) go in the client
   spec, where they are executable.
 
+### The layout gate — containment, and what it does NOT prove
+
+A screenshot catches appearance; it does not prove geometry, and the person who reviewed the plate at 1200px
+is not the person who will see it at 900. The plate has a machine check now:
+
+- `scripts/plate-containment-sweep.mjs <url>` — opens the running page over CDP, opens the plate, and walks
+  the viewport down (1600→900 by default), reporting every text leaf whose box escapes the plate's own
+  border. Exit 2 if anything escapes.
+- `scripts/plate-containment-gate.py <dump.json> …` — turns one width's boxes into a Lean theorem
+  (`allInside box leaves = true := by decide`) and `~/.elan/bin/lean` decides it, axiom-free.
+
+Measured before the fix: clean at 1600 and 1400, then `SETTINGS ⌃` **82px** past the right edge at 1200,
+**58px** at 1000, and at 900 both `MIC` (**42px**) and `SETTINGS ⌃` (**158px**) escaped. The row had been
+built for the docked strip's full width: one non-wrapping flex line of fixed-width controls. After wrapping
+(`flex-wrap`, `height:auto`, `min-height:58px`, `flex-shrink:0` on children) every width is clean, with five
+theorems and no axioms.
+
+**Containment is not overlap.** The text-overlap predicate (`interW ≥ 2 && interH ≥ 2`) would have passed
+this defect — `SETTINGS ⌃` overlapped nothing, it left its container. Run both, or say which is claimed.
+And containment from `getBoundingClientRect` proves boxes, not pixels: no glyph overhang, no ancestor
+clipping, no occlusion, no scroll, nothing about contrast or touch targets. The generator's docstring
+carries the full list of limits and the extension each implies — one snapshot per theorem (coverage comes
+from the sweep, never the proof), the docked strip uncovered, the plate's drill levels unmeasured, and the
+runner outside CI because extraction needs a live page.
+
 ## 7. Sequencing
 
 **Build the GUI first, then do one in-app run that tests the GUI *and* the write path together.** Both need an

@@ -220,7 +220,7 @@ Deepgram's context is a cache. On reconnect the driver **rebuilds** `agent.conte
 | **P2** | Journal + per-stage instrumentation (roadmap Layer 1, unchanged scope) | as planned | P0 |
 | **P3** | Capability declaration + `CAPABILITY_UNSUPPORTED` + conformance suite skeleton. **DONE 2026-10-17** — `packages/realtime/src/capabilities.ts` (`RealtimeCapabilities`, `requireCapability`, `assertPromptUpdate`, `auditCapabilities`), the new code, and `tests/capabilities.spec.ts`. Deepgram is declared from probe evidence (`DEEPGRAM_CAPABILITIES`); OpenAI's declaration is deferred to a story that audits its adapter rather than guessed now. | ~0.5d | P0 |
 | **P4** | `dsh-delegate` completions shim over `SessionController['prompt']` | ~1d | — |
-| **P5** | `dsh-realtime-deepgram`: transport, `Settings` builder, event translation | ~2–3d | P1, P3, P4 |
+| **P5** | `dsh-realtime-deepgram`: transport, `Settings` builder, event translation. **P5a DONE 2026-10-17** — `packages/realtime-deepgram`: `settings.ts` (built from the probe's accepted frame; refuses a blank or loopback `think.endpoint` and an out-of-range EOT threshold instead of sending something the provider ignores) and `events.ts` (utterance transcripts marked `final`, `LatencyReport` → per-stage milliseconds, the `PromptUpdated`/`ThinkUpdated` acknowledgement as a first-class signal, refusals and provider errors surfaced). **P5b** — WebSocket transport and adapter registration — remains. | ~2–3d | P1, P3, P4 |
 | **P6** | Replay fixture + cost/latency measurement on a fixed workload | ~1.5d | P5 |
 | **P7** | *(deferred)* Pipecat sidecar — only if SIP/WebRTC becomes a requirement | — | a real requirement |
 

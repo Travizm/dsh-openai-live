@@ -52,7 +52,16 @@ provider changed its delta shape — the same class of mistake the metrics modul
 | **P4a** | Translation: OpenAI `messages` → `SessionPromptRequest`, and answer → completion response. Pure. | low — exhaustively testable, no clock, no socket |
 | **P4b** | Follow-stream assembly + the HTTP surface: correlate *this* request's committed record, serialise per session, handle abandons, serve `/v1/chat/completions`. | high — concurrency, cancellation, partial turns |
 
-P4a is **done** (`packages/dsh-delegate/src/protocol.ts`, 100% covered). P4b is designed below and not built.
+**Both halves are now built**, all files at 100% coverage:
+
+| File | What it owns |
+|---|---|
+| `packages/dsh-delegate/src/protocol.ts` | P4a — OpenAI messages ⇄ `SessionPromptRequest` ⇄ completion |
+| `packages/dsh-delegate/src/frames.ts` | P4b — reading the answer out of the follow stream |
+| `packages/dsh-delegate/src/settle.ts` | P4b — admit, follow, one turn at a time per session |
+| `packages/dsh-delegate/src/server.ts` | P4b — `POST /v1/chat/completions`, coded refusals, loopback by default |
+
+Hazards 1–3 below are handled; 4 and 5 remain open, and so does the end-to-end test against a live controller.
 
 ## P4a — what is shipped
 
@@ -67,21 +76,32 @@ P4a is **done** (`packages/dsh-delegate/src/protocol.ts`, 100% covered). P4b is 
 - `toCompletion(text, …)` omits `usage` rather than inventing token counts — the shim never sees them, and a
   fabricated figure is one a caller bills against.
 
-## P4b — the design, and the hazards to build against
+## P4b — the design, and how each hazard is handled
 
-1. **Correlate by record, not by chunk.** `follow({ address, assistantStream: true })`, then on
+1. ✅ **Correlate by record, not by chunk.** `follow({ address, assistantStream: true })`, then on
    `end → committed` read the durable record at `seq` and take its text. Provider-independent by construction.
-2. **Serialise per session.** Two completions admitted to one session produce one interleaved trajectory; the
+2. ✅ **Serialise per session** (`settle.ts`, proven by a concurrency counter, not by log order). Two completions admitted to one session produce one interleaved trajectory; the
    "next assistant message" is then not necessarily *this* request's. One in-flight completion per session, a
    queue behind it, and a documented refusal rather than a wrong answer when the queue is full.
-3. **Abandons are failures.** `{ kind: 'abandoned' }` means no committed message. Return a coded error; never a
+3. ✅ **Abandons are failures** (`ATTEMPT_ABANDONED`). `{ kind: 'abandoned' }` means no committed message. Return a coded error; never a
    completion with an empty `content`, which reads to a caller as "the model said nothing".
-4. **The endpoint must be reachable from the provider.** Deepgram's managed cloud cannot reach
+4. ⬜ **The endpoint must be reachable from the provider.** Deepgram's managed cloud cannot reach
    `127.0.0.1:…`. Pointing `agent.think.endpoint` at the shim for P1c requires a public URL (a tunnel or a
    deployed host). That is a deployment constraint for the probe, not a code one — but it is the reason P1c
    is "half a day with a capture" rather than twenty minutes.
-5. **`stream: true` is not implemented.** If the provider requires SSE, that is a third piece (chunk framing +
+5. ⬜ **`stream: true` is not implemented** — refused by name with `STREAM_UNSUPPORTED`. If the provider requires SSE, that is a third piece (chunk framing +
    `[DONE]`), and it should be built against a real client rather than guessed at.
+
+## One defect the tests caught in P4b
+
+The first implementation called `follow()` and then `prompt()`, with a comment claiming it subscribed first. It
+did not: an async generator executes on its **first `next()`**, so the subscription began *after* admission — the
+exact race the comment described. The failing test was the one asserting the order. The fix starts a pump
+before the prompt and awaits both, which is what the comment always said.
+
+A second test caught something subtler: asserting serialisation by log *order* passes under parallel execution
+too, because both designs log `follow` then `prompt` twice. It now counts turns in flight and asserts the
+maximum is 1 — a measurement, not an inference.
 
 ## Why the split is worth recording
 

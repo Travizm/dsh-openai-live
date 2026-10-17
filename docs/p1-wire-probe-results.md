@@ -1,93 +1,94 @@
 ---
 title: "P1 — Deepgram wire probe results"
 status: active
-version: 1.0.0
+version: 1.1.0
 created: 2026-10-17
+updated: 2026-10-17
 domain: architecture
 author: Travis Driessen (probe run by Tara, at the CEO's instruction)
-evidence: scripts/deepgram-probe.mjs, run 2026-10-17
+evidence: scripts/deepgram-probe.mjs, runs 2026-10-17
 ---
 
 # P1 — Deepgram wire probe results
 
-D-PS-005 said: run the one-day probe before any adapter work, because four load-bearing assumptions were
-**documented only** (❓). Three hold. **One does not**, and it is the one the design leans on hardest.
+D-PS-005 said: run the probe before any adapter work, because four load-bearing assumptions were **documented
+only** (❓). **Three hold. One is unresolved — and it took four attempts, each invalidated by its own control,
+to establish that a client cannot settle it behaviourally at all.**
 
-Probed against `wss://agent.deepgram.com/v1/agent/converse` with a live key, Flux (`flux-general-en`, v2) for
-listening, `open_ai / gpt-4o-mini` for thinking, Aura-2 for speaking. Every verdict below is a receipt from the
-recorded transcript, not a reading of the docs — because on the decisive question **the docs contradict
-themselves**.
+Probed against `wss://agent.deepgram.com/v1/agent/converse` with a live key: Flux (`flux-general-en`, v2) for
+listening, `open_ai / gpt-4o-mini` for thinking, Aura-2 for speaking.
+
+> **This file previously reported #1 as "CONTRADICTED — it appends".** That verdict came from a run whose
+> question was sent *before* the update's acknowledgement, so the turn was produced under the old prompt. It
+> is retracted: the receipt was a race, not semantics. The record of how it survived to a written verdict is
+> in "Why #1 is unresolved" below.
 
 ## Verdicts
 
-| # | Assumption (chamber, D-PS-005) | Verdict | Receipt |
+| # | Assumption (D-PS-005) | Verdict | Receipt |
 |---|---|---|---|
-| 1 | `UpdatePrompt` is **replace-only** | ❌ **CONTRADICTED — it appends** | `UpdatePrompt` acked with `PromptUpdated`, applied before the next turn; the following answer was `"probe one ZULU."` — the original instruction survived *and* the new rule arrived |
-| 2 | `InjectAgentMessage` is accepted **mid-turn** | ✅ CONFIRMED | the injected sentence came back as assistant text (`A step is running.`) with **no `InjectionRefused`** in 181 frames |
-| 3 | There is **no usage event** | ✅ CONFIRMED | 181 frames, no event carrying usage/billing/seconds; the server vocabulary observed was `Welcome`, `SettingsApplied`, `UserStartedSpeaking`, `ConversationText`, `History`, `EndOfTurn`, `LatencyReport`, `AgentAudioDone`, `PromptUpdated` |
+| 1 | `UpdatePrompt` is **replace-only** | ⚠️ **UNRESOLVED** | four tests, all confounded; a client cannot observe the prompt the provider holds |
+| 2 | `InjectAgentMessage` is accepted **mid-turn** | ✅ CONFIRMED | the injected sentence returned as assistant text, no `InjectionRefused` in 160–181 frames |
+| 3 | There is **no usage event** | ✅ CONFIRMED | no event carrying usage/billing/seconds in any run; observed vocabulary: `Welcome`, `SettingsApplied`, `UserStartedSpeaking`, `ConversationText`, `History`, `EndOfTurn`, `LatencyReport`, `AgentAudioDone`, `PromptUpdated`, `ThinkUpdated` |
 | 4 | `ConversationText` is **utterance-level**, not deltas | ✅ CONFIRMED | each frame carries `role` + a complete utterance, e.g. `role="assistant", content="probe one."` |
 
-**Bonus, unasked for:** `LatencyReport` arrives during every turn with **provider-reported stage timings** —
-`ttt_token_latency` ≈ 0.42–0.50 s, `tts_latency` ≈ 0.06 s, `total_latency` ≈ 0.48–0.50 s. ADR-012 wants
-per-stage turn latency; on this provider part of that instrument is **reported rather than reconstructed**,
-which is strictly better evidence than what the journal derives today.
+**Bonus:** `LatencyReport` arrives during every turn with **provider-reported stage timings** —
+`ttt_token_latency` ≈ 0.42–0.50 s, `tts_latency` ≈ 0.06 s, `total_latency` ≈ 0.48–0.51 s. ADR-012 wants
+per-stage turn latency; on this provider part of that instrument is **reported rather than reconstructed**.
 
-## The finding: there is no replace primitive
+## Established about prompt updates, whatever the semantics
 
-Deepgram's own documentation disagrees with itself on this exact point:
+1. **The update takes effect at the ack.** `UpdatePrompt` → `PromptUpdated`, `UpdateThink` → `ThinkUpdated`,
+   and a rule in the update is observably in force afterwards (a "end every reply with ZULU" rule appears in
+   the following answer).
+2. **There is a race, and it is an adapter hazard.** A turn sent *before* the ack is produced under the **old**
+   prompt. One run did exactly that and returned `"probe one ZULU."` — both rules live at once — which is what
+   a mid-flight update looks like. **Gate every turn on `PromptUpdated` / `ThinkUpdated`.**
+3. The documented 25,000-character prompt cap is **not enforced as a rejection** on this path: a single
+   30,000-character prompt was accepted with no error.
 
-- `developers.deepgram.com/docs/voice-agent-update-prompt` — *"`UpdatePrompt` will add to – not replace – the
-  current prompt."*
-- `developers.deepgram.com/docs/voice-agent-conversation-context` — *"The new prompt replaces the system
-  prompt for the rest of the session."*
+## Why #1 is unresolved: four tests, four confounds
 
-The wire settles it: **append**. This is precisely why D-PS-005 insisted on the probe, and it is worth stating
-plainly that reading either page alone would have produced a confident, wrong design.
+Recorded in full, because each failure is a different way to build a test that cannot answer its question.
 
-### What it costs the seam
+| Attempt | Design | Why it failed |
+|---|---|---|
+| 1 | Send the new prompt, immediately send the old one back, read the answer | **Could not discriminate** — reinstating the original makes replace and append produce the same output. It also re-fired every turn (54 turns, then a timeout). |
+| 2 | Update to "every reply ends with ZULU", ask, look for the marker | **Race, then sampling.** One run sent before the ack (both rules → false "append"); with the ack gate the marker was absent in another, because compliance with a mid-session rule is stochastic. |
+| 3 | Two ~15,000-character prompts against the 25,000 cap; accumulation would exceed it | **Vacuous.** The positive control — one 30,000-character prompt — was accepted with no error, so the check could not have failed. A pass condition that cannot fail reads as a pass and means nothing. |
+| 4 | Ask the model to enumerate its system-prompt rules verbatim | **Self-defeating.** The model refuses ("I can't disclose internal instructions"), and the ZULU in its refusal is *compliance with the new rule*, not a listed rule — so "ZULU present, original absent" was an artifact of the refusal. |
 
-1. **`promptUpdate` cannot be declared as `replace`.** The capability type must carry the mode
-   (`'append' | 'replace'`) and Deepgram declares `append` — the same treatment ADR-011 gives every other
-   place the providers differ.
-2. **DSH's session-prompt replacement has no direct expression here.** Appending per turn grows the prompt
-   monotonically, and managed LLMs cap the prompt at **25,000 characters** (BYO LLMs are uncapped). An adapter
-   that appends on every milestone would eventually fail a session that the OpenAI path runs indefinitely.
-3. **The chamber's "re-home `appendInstructions`" disposition (line 237) is now wrong** — it assumed the
-   provider gave a replace primitive and DSH had to move its append behaviour elsewhere. The reverse is true:
-   the provider only appends, so DSH's *replace* semantics are the part that needs re-homing.
-4. **Untested, and cheap to test next (P1b):** whether `UpdateThink` (the sibling of `UpdatePrompt`, which
-   carries a provider *and* a prompt) replaces rather than appends. If it does, the adapter has a path and the
-   consequence above collapses to a mapping. If it does not, Deepgram cannot host sessions that re-home their
-   prompt, and that belongs in the capability matrix as a hard limitation.
+**There is no fifth behavioural test.** Under both semantics the model can answer identically: holding two
+conflicting instructions it picks one, holding one it follows it. Separating them needs the *provider's* view of
+the prompt, which a client cannot ask for.
 
-## Method notes — two of this probe's own tests were invalid first
+## Design consequences
 
-Recorded because a probe that reports a false verdict is worse than no probe:
-
-1. **The first version of check 1 could not discriminate.** It sent `prompt: "…probe two."` and then
-   immediately `prompt: "…probe one."`, reinstating the original — so *replace and append both* produce
-   "probe one". It also re-fired the whole sequence on every `AgentAudioDone`, spending 54 turns before the
-   guard expired. Replaced with a single additive, detectable rule (`end ZULU`), which separates the cases.
-2. **Asking the model to report its own instructions was no better.** Asked what phrase its instructions
-   required, it answered "probe one." — indistinguishable from a model echoing its own earlier line from a
-   long history. Only a *behavioural* marker the old prompt does not contain distinguishes replace from append.
-
-Both are the same failure this repo keeps finding elsewhere: **a test whose pass condition is satisfiable by
-two different realities proves nothing.** The verdict above is the one that survived a test that can tell them
-apart.
+1. **Do not build on #1.** Declare `promptUpdate: 'unknown'`, not `'replace'`. The documentation contradicts
+   itself — `voice-agent-update-prompt`: *"add to – not replace"*; `voice-agent-conversation-context`:
+   *"replaces the system prompt"* — so neither page is authority. An unverified load-bearing fact inside a
+   capability declaration is worse than an admitted unknown.
+2. **Fence it instead of guessing.** Budget the prompt as if updates append: bound its length per session and
+   never rely on a prior rule disappearing. That is correct under either semantics.
+3. **Gate every turn on the ack** (above). The race is reproducible, and it is the class of defect that shows
+   up under load — when a voice session is least forgiving.
+4. **P1c, if it ever needs settling:** the only credible route is a BYO endpoint (`agent.think.endpoint`) the
+   probe controls, so the request the provider actually sends to the LLM can be read off the wire. Half a day
+   with a local HTTP capture — and the only test in this list capable of ending the question.
 
 ## Cost
 
-Four probe runs, roughly 110 agent turns in total (one of them the 54-turn erroneous run), on Flux + Aura-2
-with `gpt-4o-mini`. Fractions of a cent per turn; the whole session is well under a dollar.
+Six probe runs, roughly 120 agent turns (54 of them the erroneous first run), on Flux + Aura-2 with
+`gpt-4o-mini` — well under a dollar. The cap tests cost no model calls at all.
 
 ## Reproduce
 
 ```bash
 set -a; . ./.env; set +a
-pnpm probe:deepgram -- --plan                    # what it will send, no network
-pnpm probe:deepgram -- --out deepgram-probe.json # ~2 turns, verdicts + full transcript
+pnpm probe:deepgram -- --plan                       # what it will send, no network
+pnpm probe:deepgram -- --out deepgram-probe.json    # 2 turns: checks 2–4, and #1 as far as it goes
+pnpm probe:deepgram -- --cap-probe --oversize       # the positive control for the cap hypothesis
 ```
 
-Exit `0` = nothing contradicted · `1` = an assumption contradicted (today: `1`, on check 1) · `2` = the probe
-could not conclude.
+Exit `0` = nothing contradicted · `1` = an assumption contradicted · `2` = the probe could not conclude ·
+`3` = a control failed (the cap test cannot run on this path).

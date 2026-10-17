@@ -2,21 +2,31 @@
 /**
  * Deepgram Voice Agent — the four wire assumptions ADR-012 will not let us specify around.
  *
- * P1 of the chamber's pathway is a one-day probe, and this is it: four load-bearing facts about the second
- * provider that are **documented-only** today (❓), which this repo's own discipline says must become ✅ or ❌
- * before an adapter is written. A ❌ found here costs an afternoon; found in a sprint, it costs the sprint.
+ * P1 of the chamber's pathway: four load-bearing facts that are **documented-only** (❓) today, which this
+ * repo's own discipline says must become ✅ or ❌ before an adapter is written. A ❌ found here costs an
+ * afternoon; found in a sprint, it costs the sprint.
  *
- *   1. `UpdatePrompt` REPLACES rather than appends. If it appends, the prompt grows every turn and the
- *      "re-home appendInstructions" disposition in the chamber is wrong.
- *   2. `InjectAgentMessage` is accepted MID-TURN. If it is refused (`InjectionRefused`), narration during a
- *      tool loop is impossible and ADR-010's narration fallback needs rethinking.
- *   3. There is NO usage event. If one exists, `usageReporting: false` in ADR-011 is wrong before it ships.
- *   4. `ConversationText` is UTTERANCE-level, not deltas. If it is incremental, `transcriptDeltas: false` is
- *      wrong and the transcript handling of a second adapter is a different job.
+ *   1. `UpdatePrompt` REPLACES rather than appends — otherwise the prompt grows every turn and the chamber's
+ *      "re-home appendInstructions" disposition is wrong.
+ *   2. `InjectAgentMessage` is accepted MID-TURN — otherwise narration during a tool loop is impossible and
+ *      ADR-010's narration fallback needs rethinking.
+ *   3. There is NO usage event — otherwise `usageReporting: false` ships wrong.
+ *   4. `ConversationText` is UTTERANCE-level, not deltas — otherwise `transcriptDeltas: false` is wrong.
  *
- * Also recorded, because it is free and because ADR-012 wants per-stage latency: `LatencyReport`, if the
- * provider sends one. A provider that reports its own stage timings changes what the journal has to
- * reconstruct.
+ * Also recorded: `LatencyReport`. The provider sends per-stage timings (ttt / tts / total) as each turn runs,
+ * which is free evidence for ADR-012 — part of the instrument it asks for is *reported*, not reconstructed.
+ *
+ * **Check 1 needs a discriminating test, not just any update.** The first version of this file sent
+ * "probe two" and then immediately "probe one", which reinstated the original prompt — so replace and append
+ * both answered "probe one", the probe learned nothing, and it re-fired the sequence on every turn (54 turns,
+ * then a timeout). Now: one update to a *distinct* text, one more turn, and the answer is matched for it:
+ *
+ *     "probe two" only   → REPLACED (the update took effect)
+ *     "probe one" only   → CONTRADICTED (the update had no effect)
+ *     both               → CONTRADICTED (appended)
+ *
+ * A turn is opened by `InjectUserMessage`, which needs no audio and costs a fraction of a cent. The probe runs
+ * two turns at most and stops as soon as the verdicts it can reach are known.
  *
  * This probe NEVER runs in the PR gate: it touches a vendor, costs credit, and needs a key. Without
  * `DEEPGRAM_API_KEY` it prints the plan and exits 0 — a fork stays green, and the payloads stay reviewable.
@@ -36,40 +46,56 @@ const TIMEOUT_MS = Number(process.env.DEEPGRAM_PROBE_TIMEOUT_MS ?? 60_000)
 // The frame every claim in this file was read from — so a verdict can be dated.
 const DOCS = 'developers.deepgram.com — Configure the Voice Agent / Voice Agent architecture (accessed 2026-10-17)'
 
-/** The settings the probe asks for: Flux for ears, open_ai for the brain, Cartesia for the mouth. */
-const settings = endpoint => ({
-  type: 'Settings',
-  audio: { input: { encoding: 'linear16', sample_rate: 16000 }, output: { encoding: 'linear16', sample_rate: 24000 } },
-  agent: {
-    language: 'en',
-    listen: { provider: { type: 'flux', model: 'flux-general-en' } },
-    think: { provider: { type: 'open_ai', model: 'gpt-4o-mini', endpoint: { url: endpoint } }, prompt: 'You are a probe. Reply with exactly: probe one.' },
-    speak: { provider: { type: 'cartesia', model: 'sonic-2', voice_id: 'f786b574-daa5-4673-aa0c-cbe3e8534c02' } },
-  },
-})
+/**
+ * The settings the probe asks for: Flux for ears, open_ai for the brain, Deepgram for the mouth.
+ *
+ * `agent.listen.provider.type` is the **vendor**, and the docs say only `deepgram` is accepted — Flux is a
+ * *model*, not a provider, and needs `version: v2`. Sending `type: "flux"` connects and then errors with
+ * "Check the agent.listen.provider.type field against the API spec", applying nothing (learned the hard way).
+ * `agent.language` is deprecated; language now lives on the listen/speak providers.
+ *
+ * `endpoint` is included only when one is given: absent means Deepgram's managed OpenAI proxy, billed through
+ * Deepgram credit. An empty `endpoint.url` is not the same as absent, and the Settings are rejected.
+ */
+const settings = endpoint => {
+  const think = { type: 'open_ai', model: 'gpt-4o-mini' }
+  if (endpoint) think.endpoint = { url: endpoint }
+  return {
+    type: 'Settings',
+    audio: { input: { encoding: 'linear16', sample_rate: 16000 }, output: { encoding: 'linear16', sample_rate: 24000 } },
+    agent: {
+      listen: { provider: { type: 'deepgram', model: 'flux-general-en', version: 'v2' } },
+      think: { provider: think, prompt: 'You are a probe. Reply with exactly: probe one.' },
+      speak: { provider: { type: 'deepgram', model: 'aura-2-thalia-en' } },
+    },
+  }
+}
 
-const CHECKS = [
-  { id: '1', claim: 'UpdatePrompt REPLACES rather than appends', watch: 'the second turn answers "probe one" (replace) or both prompts (append)' },
-  { id: '2', claim: 'InjectAgentMessage is accepted MID-TURN', watch: 'no `InjectionRefused` while a turn is in progress' },
-  { id: '3', claim: 'there is NO usage event', watch: 'no server event carrying a usage/seconds field' },
-  { id: '4', claim: 'ConversationText is UTTERANCE-level, not deltas', watch: 'each ConversationText carries a whole utterance, not a fragment' },
-]
+const CHECKS = {
+  1: 'UpdatePrompt REPLACES rather than appends',
+  2: 'InjectAgentMessage is accepted MID-TURN',
+  3: 'there is NO usage event',
+  4: 'ConversationText is UTTERANCE-level, not deltas',
+}
+const INJECTED = 'A step is running.'
 
 if (PLAN || KEY === undefined) {
   console.log('Deepgram Voice Agent — P1 wire probe')
   console.log(`endpoint  ${ENDPOINT}`)
   console.log(`sources   ${DOCS}`)
   console.log(`key       ${KEY === undefined ? 'absent — nothing sent' : 'present'}`)
+  console.log(`think     ${process.env.DEEPGRAM_PROBE_ENDPOINT || "(absent — Deepgram's managed OpenAI proxy)"}`)
   console.log('')
-  console.log('assumptions to convert from ❓ to ✅/❌ (ADR-012):')
-  for (const check of CHECKS) console.log(`  ${check.id}. ${check.claim}\n     watched by: ${check.watch}`)
+  console.log('it would send, in this order:')
+  console.log('  1. Settings, then `InjectUserMessage` "Say exactly: probe one."')
+  console.log(`  2. \`InjectAgentMessage\` "${INJECTED}" as soon as a turn is under way`)
+  console.log('  3. `UpdatePrompt` to "reply with exactly: probe two", then `InjectUserMessage` "What do you say?"')
   console.log('')
-  console.log('it would send:')
-  console.log(JSON.stringify(settings(process.env.DEEPGRAM_PROBE_ENDPOINT ?? 'https://example.invalid/v1/chat/completions'), null, 1)
+  console.log('and convert these from ❓ to ✅/❌ (ADR-012):')
+  for (const [id, claim] of Object.entries(CHECKS)) console.log(`  ${id}. ${claim}`)
+  console.log('')
+  console.log(JSON.stringify(settings(process.env.DEEPGRAM_PROBE_ENDPOINT || undefined), null, 1)
     .split('\n').map(line => `  ${line}`).join('\n'))
-  console.log('')
-  console.log('then `InjectUserMessage` to open a turn, `InjectAgentMessage` during it, `UpdatePrompt` twice between two')
-  console.log('turns, and record every server frame to the output file for the record.')
   console.log('')
   console.log(KEY === undefined ? 'SKIPPED — set DEEPGRAM_API_KEY to run it. Nothing was sent.' : '')
   process.exit(0)
@@ -77,61 +103,102 @@ if (PLAN || KEY === undefined) {
 
 const transcript = []
 const verdicts = new Map()
+const note = (id, verdict, why) => { if (!verdicts.has(Number(id))) verdicts.set(Number(id), { verdict, why }) }
+
+const guard = setTimeout(() => { console.error('probe guard expired'); finish(2) }, TIMEOUT_MS)
 const ws = new WebSocket(ENDPOINT, { headers: { Authorization: `Token ${KEY}` } })
-const guard = setTimeout(() => { console.error('probe timed out'); finish(2) }, TIMEOUT_MS)
+const send = frame => { transcript.push({ sent: frame.type }); ws.send(JSON.stringify(frame)) }
 
-const send = frame => ws.send(JSON.stringify(frame))
-const note = (id, verdict, why) => { if (!verdicts.has(id)) verdicts.set(id, { verdict, why }) }
+let stage = 'settings' // settings → turn1 → updated → done
+let injectedMidTurn = false
 
-ws.on('open', () => send(settings(process.env.DEEPGRAM_PROBE_ENDPOINT ?? '')))
+ws.on('open', () => send(settings(process.env.DEEPGRAM_PROBE_ENDPOINT || undefined)))
 ws.on('error', error => { console.error(`socket error: ${error.message}`); finish(2) })
 ws.on('message', raw => {
   const text = raw.toString()
   let frame
   try { frame = JSON.parse(text) } catch { transcript.push({ binary: text.length }); return }
   transcript.push(frame)
+
+  // Check 3: a usage-shaped server event would be the contradiction. Nothing else in the vocabulary is about cost.
+  if (/usage|billing|"seconds"/i.test(text)) note(3, 'CONTRADICTED', `a server event mentioned usage: ${frame.type}`)
+
   switch (frame.type) {
     case 'SettingsApplied':
+      stage = 'turn1'
       // A text injection opens a turn without audio: the cheapest honest turn this probe can buy.
       send({ type: 'InjectUserMessage', content: 'Say exactly: probe one.' })
-      break
+      return
     case 'UserStartedSpeaking':
-      // Mid-turn injection: the question is whether the provider accepts it or refuses it.
-      send({ type: 'InjectAgentMessage', message: 'A step is running.' })
-      break
-    case 'InjectionRefused':
-      note('2', 'CONTRADICTED', 'the provider refused InjectAgentMessage mid-turn')
-      break
-    case 'ConversationText':
-      // Utterance-level would carry a complete `content`; a delta would carry a fragment.
-      if (typeof frame.content === 'string' && frame.content.trim().split(/\s+/).length >= 2) {
-        note('4', 'CONFIRMED', 'ConversationText carried a whole utterance')
+    case 'ConversationText': {
+      // A turn is under way — this is the mid-turn moment. A text injection raises UserStartedSpeaking too,
+      // and ConversationText is the fallback, so both are triggers and only one injection is ever sent.
+      if (stage === 'turn1' && !injectedMidTurn) {
+        injectedMidTurn = true
+        transcript.push({ note: 'InjectAgentMessage sent mid-turn' })
+        send({ type: 'InjectAgentMessage', message: INJECTED })
       }
-      break
-    case 'LatencyReport':
-      transcript.push({ latency: frame })
-      break
+      // Check 4: an utterance carries a role and a whole content string, not a fragment.
+      if (frame.type === 'ConversationText' && typeof frame.content === 'string' && frame.role !== undefined) {
+        note(4, 'CONFIRMED', `ConversationText carried role="${frame.role}" and a complete utterance`)
+      }
+      // Check 2: the injected sentence coming back as assistant text is the acceptance receipt. Absence of
+      // `InjectionRefused` alone is too weak a claim to make from a quiet log.
+      if (frame.role === 'assistant' && typeof frame.content === 'string' && /step is running/i.test(frame.content)) {
+        note(2, 'CONFIRMED', 'the injected sentence came back as assistant text, with no InjectionRefused')
+      }
+      // Check 1: the answer to the *updated* prompt. ZULU is the marker that the update was applied at all;
+      // "probe one" is the marker that the original instruction survived it.
+      if (stage === 'updated' && frame.role === 'assistant' && typeof frame.content === 'string') {
+        const zulu = /zulu/i.test(frame.content)
+        const one = /probe one/i.test(frame.content)
+        if (zulu && one) note(1, 'CONTRADICTED', `answered "${frame.content.trim()}" — the update was APPENDED, the original survived`)
+        else if (zulu && !one) note(1, 'CONFIRMED', `answered "${frame.content.trim()}" — the update REPLACED the prompt`)
+        else if (one && !zulu) note(1, 'CONTRADICTED', `answered "${frame.content.trim()}" — the update had NO effect`)
+        if (verdicts.has(1)) { stage = 'done'; setTimeout(() => finish(), 300) }
+      }
+      return
+    }
+    case 'InjectionRefused':
+      note(2, 'CONTRADICTED', 'the provider refused InjectAgentMessage mid-turn')
+      return
     case 'AgentAudioDone':
-      // Between turns: change the prompt twice, and see whether the first survives into the next answer.
-      send({ type: 'UpdatePrompt', prompt: 'Reply with exactly: probe two.' })
-      send({ type: 'UpdatePrompt', prompt: 'Reply with exactly: probe one.' })
-      send({ type: 'InjectUserMessage', content: 'What do you say?' })
-      break
+      if (stage === 'turn1') {
+        stage = 'updated'
+        transcript.push({ note: 'UpdatePrompt adding a detectable rule, then a second turn' })
+        // The discriminating update. A *replacement* instruction ("reply with probe two") cannot separate
+        // replace from append, because both would satisfy it; asking the model to report its rules cannot
+        // either, because a model in a long history reports what it likes. An **additive, detectable** rule
+        // can: if the answer still carries the original instruction AND the new token, the update was
+        // appended; if the original is gone, it replaced.
+        send({ type: 'UpdatePrompt', prompt: 'You are a probe. Every reply must end with the token ZULU.' })
+        send({ type: 'InjectUserMessage', content: 'What do you say?' })
+      }
+      return
     default:
-      if (/usage|seconds|billing/i.test(text)) note('3', 'CONTRADICTED', `a server event mentioned usage: ${frame.type}`)
+      return
   }
-  if (Object.keys(verdicts).length >= 2 && transcript.length > 40) finish()
 })
 
 function finish(code = 0) {
   clearTimeout(guard)
   try { ws.close() } catch { /* already closed */ }
+  // Check 3 is an absence, so it can only be concluded at the end, with the whole session in hand.
+  if (!verdicts.has(3)) note(3, 'CONFIRMED', `no usage-like event in ${transcript.length} frames`)
   const contradicted = [...verdicts.values()].filter(v => v.verdict === 'CONTRADICTED').length
   console.log('')
-  for (const check of CHECKS) {
-    const got = verdicts.get(check.id)
-    console.log(`  ${check.id}. ${got ? got.verdict : 'INCONCLUSIVE'} — ${check.claim}`)
+  for (const [id, claim] of Object.entries(CHECKS)) {
+    const got = verdicts.get(Number(id))
+    console.log(`  ${id}. ${got ? got.verdict : 'INCONCLUSIVE'} — ${claim}`)
     if (got) console.log(`     ${got.why}`)
+  }
+  const median = xs => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]
+  const pick = key => transcript.filter(f => typeof f[key] === 'number').map(f => f[key])
+  const ttt = pick('ttt_token_latency'); const tts = pick('tts_latency'); const total = pick('total_latency')
+  if (ttt.length + tts.length + total.length > 0) {
+    const show = xs => xs.length ? `${xs.length}× median ${median(xs).toFixed(3)}s` : 'none'
+    console.log(`\n  LatencyReport — ttt ${show(ttt)} · tts ${show(tts)} · total ${show(total)}`)
+    console.log('     (provider-reported stage timings — ADR-012 evidence that arrives rather than being derived)')
   }
   console.log('')
   if (OUT !== undefined) {

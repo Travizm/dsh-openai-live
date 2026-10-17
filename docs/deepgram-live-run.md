@@ -56,6 +56,29 @@ the LLM, spoken back as 72,000 bytes (≈3 s at 24 kHz). The fixture is
 `packages/realtime-deepgram/fixtures/whats-the-weather.wav` — 16 kHz mono 16-bit, the format the Settings declare,
 because a mismatched file is a session that hears noise and reports nothing.
 
+## Barge-in — interrupting the agent mid-sentence
+
+`scripts/deepgram-barge-in-smoke.mjs` asks the agent to count slowly to twenty, waits until it is audibly mid-line,
+then streams the user's speech into the socket.
+
+```
+detected   770 ms after the first frame of user speech
+window     600 ms before detection: 80640 bytes · 600 ms after: 0 bytes
+turns      "What's the weather?" · "Please specify a location for the weather update."
+```
+
+Three things follow, and the middle one is the measurement that matters:
+
+- the provider **registers** speech during its own turn — 770 ms after the first frame of it;
+- its audio **stops dead** at that moment: 80,640 bytes in the 600 ms before detection, **zero** in the 600 ms
+  after. Truncation, not talking over;
+- the interruption **becomes a turn** of its own, with the new question answered.
+
+An earlier version of this script compared total bytes before and after the interruption and reported "the agent
+kept speaking", which was wrong: a total cannot distinguish *stopping* from *finishing the sentence and then
+answering*. The window measurement is the one that separates them, and it is the only reason the result is a
+finding rather than an impression.
+
 ## What still is not proven
 
 - **A live microphone.** The WAV proves the seam's `sendAudio` path and the provider's STT; a real capture device

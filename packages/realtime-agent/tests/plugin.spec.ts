@@ -65,6 +65,13 @@ class RecordingAdapter extends RealtimeAdapter {
         if (adapter.refuseAppend) return Promise.reject(new Error('the provider refused the append'))
         return Promise.resolve()
       },
+      // A spoken milestone now arrives as an injected line, and the substitute records it under the same kind so
+      // the assertions keep describing what a user hears rather than which method carried it.
+      injectLine(text, delegationId) {
+        appends.push({ kind: 'commentary', text, delegationId })
+        if (adapter.refuseAppend) return Promise.reject(new Error('the provider refused the append'))
+        return Promise.resolve()
+      },
       appendThinking(text, delegationId) {
         appends.push({ kind: 'thinking', text, delegationId })
         if (adapter.refuseAppend) return Promise.reject(new Error('the provider refused the append'))

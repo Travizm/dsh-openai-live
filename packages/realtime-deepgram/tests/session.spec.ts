@@ -102,17 +102,29 @@ describe('openSession', () => {
     return expect(session.appendThinking('a step')).rejects.toMatchObject({ code: REALTIME_ERROR_CODES.CAPABILITY_UNSUPPORTED })
   })
 
-  it('speaks commentary by injecting an agent message', async () => {
+  it('says an injected line by asking the agent to speak it', async () => {
     const wire = transport()
     const session = openSession({ provider: 'd', settings: settings(), transport: wire, handlers: recorder() })
-    await session.appendCommentary('one moment')
+    await session.injectLine('one moment')
     expect(wire.frames.at(-1)).toEqual({ type: 'InjectAgentMessage', message: 'one moment' })
   })
 
-  it('refuses an empty or oversized append locally, rather than halfway through a conversation', async () => {
+  it('refuses app-authored speech outright, because this provider speaks its own words', async () => {
+    // Issue #120: this used to resolve while sending `InjectAgentMessage`, which is a silent degradation — the
+    // caller asked for its own wording and got the agent's. A refusal is the honest answer, and the capability
+    // that *is* honour-able is named in the message so the fix is a one-word change at the call site.
+    const wire = transport()
+    const session = openSession({ provider: 'd', settings: settings(), transport: wire, handlers: recorder() })
+    await expect(session.appendCommentary('one moment')).rejects.toMatchObject({
+      code: REALTIME_ERROR_CODES.CAPABILITY_UNSUPPORTED,
+    })
+    expect(wire.frames.some(frame => (frame as { type?: string }).type === 'InjectAgentMessage')).toBe(false)
+  })
+
+  it('refuses an empty or oversized injected line locally, rather than halfway through a conversation', async () => {
     const session = openSession({ provider: 'd', settings: settings(), transport: transport(), handlers: recorder() })
-    await expect(session.appendCommentary('   ')).rejects.toMatchObject({ code: REALTIME_ERROR_CODES.INVALID_APPEND })
-    await expect(session.appendCommentary('x'.repeat(5000))).rejects.toMatchObject({ code: REALTIME_ERROR_CODES.INVALID_APPEND })
+    await expect(session.injectLine('   ')).rejects.toMatchObject({ code: REALTIME_ERROR_CODES.INVALID_APPEND })
+    await expect(session.injectLine('x'.repeat(5000))).rejects.toMatchObject({ code: REALTIME_ERROR_CODES.INVALID_APPEND })
   })
 
   it('resolves appendInstructions only on the acknowledgement, not on the write', async () => {

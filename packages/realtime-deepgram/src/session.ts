@@ -147,11 +147,21 @@ export function openSession(options: SessionOptions): DeepgramSession {
     },
     muteInput() { muted = true },
     unmuteInput() { muted = false },
-    async appendCommentary(content, _delegationId) {
+    async appendCommentary() {
+      // Refused rather than degraded (issue #120, ADR-011). This provider speaks a line but on its own words, so
+      // the seam's "the application authored this and its wording will be spoken" cannot be honoured here — and a
+      // method that resolves while quietly providing something weaker is the failure the declaration exists to
+      // prevent. Spelled at the call site, as `appendThinking` below already was; `requireCapability` serves
+      // callers that hold a route's info *before* opening a session, which is not this one.
+      throw new RealtimeError(
+        `${options.provider} cannot author the agent's speech: it declares appAuthoredSpeech = false; use injectLine`,
+        REALTIME_ERROR_CODES.CAPABILITY_UNSUPPORTED,
+      )
+    },
+    async injectLine(content, _delegationId) {
       const text = requireAppend(content)
-      // `InjectAgentMessage` is how the application asks the agent to say something. It resolves on the write,
-      // not on `AgentAudioDone`: the seam's contract ties acknowledgement to a delegation, and this provider's
-      // audio completion is not tied to one.
+      // `InjectAgentMessage` asks the agent to say this line. It resolves on the write, not on `AgentAudioDone`:
+      // the seam ties acknowledgement to a delegation, and this provider's audio completion is not tied to one.
       send({ type: 'InjectAgentMessage', message: text })
     },
     async appendThinking() {

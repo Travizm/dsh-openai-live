@@ -213,10 +213,21 @@ architecture document that forbids a thing and does not test the absence is a co
 
 ## ADR-011 — Capability is declared, and an unsupported call is refused by code
 
-**Decision.** `RealtimeProviderInfo` gains `capabilities`: six booleans
-(`appendThinking`, `appAuthoredSpeech`, `functionCalls`, `usageReporting`, `transcriptDeltas`,
-`inputMute`). A call into a capability declared `false` throws a **new**
+**Decision.** `RealtimeProviderInfo` gains `capabilities`: seven booleans
+(`appendThinking`, `appAuthoredSpeech`, `injectLine`, `functionCalls`, `usageReporting`,
+`transcriptDeltas`, `inputMute`). A call into a capability declared `false` throws a **new**
 `REALTIME_ERROR_CODES.CAPABILITY_UNSUPPORTED`. No existing code is widened to mean it. (D-PS-003.)
+
+**Amended 2026-10-17 — the seventh row, and a split rather than a relabel (issue #120).** The conformance
+suite's first run found `appAuthoredSpeech` declared `false` on Deepgram while `appendCommentary` resolved: the
+call succeeded and quietly provided the agent's wording instead of the application's, which is this ADR's own
+failure mode wearing a passing test. The two tempting fixes were both wrong. Flipping the declaration to `true`
+buys a green suite by relabelling a degradation. Widening the refusal without a replacement deletes narration.
+So the capability split in two: `appAuthoredSpeech` keeps its strong promise and its refusal, and `injectLine`
+carries the weaker one a provider that owns its own model can actually honour — *the agent says a line the
+application chose, in its own words*. Narration moved to `injectLine`; the delegation answer stayed on
+`appendCommentary`, where the application really is the author. The deciding precedent is `inputMute`'s: the
+matrix describes the seam's method, and a method whose contract is unmet must refuse rather than resolve.
 
 **Why.** ADR-008 says a file nothing reads is not a contract; the converse is the one that bites here —
 an affordance the protocol cannot honour is worse than no affordance, because it fails *silently*.
@@ -226,9 +237,11 @@ positive the quality lens exists to reject: a suite that is green while the feat
 
 **Consequence.** The seam does not split into a duplex interface and a cascade interface. One surface,
 honest about its edges, beats two surfaces that each claim to be the real one — and the alternative
-would have doubled every call site to buy a distinction the capability table already carries. Under the
-cheap route, `appendThinking` degrades to `InjectAgentMessage`; the silent narration channel is
-declared missing rather than quietly dropped.
+would have doubled every call site to buy a distinction the capability table already carries. A single
+capability may still split when two genuinely different promises are hiding under one name, which is what
+`injectLine` exists for; the test is whether a caller could be misled by the merger, not whether the names
+differ. Under the cheap route, `appendThinking` remains declared missing (there is no silent channel to
+degrade to), and spoken narration uses `injectLine` rather than being quietly dropped.
 
 **Cost.** Every capability is declared, and every `false` owes a test asserting the refusal rather than
 the absence. A new provider now costs a table, not just an adapter.

@@ -123,6 +123,19 @@ export class OpenAiLiveSession implements RealtimeSession {
   }
 
   /**
+   * Ask the agent to say a line the application chose, in its own words.
+   *
+   * The same append as commentary on this provider: client delegation already makes the application the author,
+   * so the weaker promise costs nothing here. It exists as its own method so narration is portable to a provider
+   * that cannot author speech.
+   * @param content - plain text, non-empty and within the seam's character bound.
+   * @param delegationId - omit for session-wide injection.
+   */
+  async injectLine(content: string, delegationId?: string): Promise<void> {
+    await this.append('commentary', content, delegationId)
+  }
+
+  /**
    * Add context the model may use without speaking it — progress, facts, intermediate state.
    * @param content - plain text, non-empty and within the seam's character bound.
    * @param delegationId - the delegation this relates to; omit for session-wide context.

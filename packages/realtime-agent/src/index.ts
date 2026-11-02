@@ -535,8 +535,11 @@ export function apply(ctx: Context, config: RealtimeAgentConfig): void {
       // append for an id it does not know, and a finished turn's words must not be spoken into the next one.
       const current = waiting.get(progress.id)
       if (current === undefined) return
+      // Narration asks the agent to *say this line*, not to speak words the application authored: a provider
+      // that owns its own model paraphrases, so `appendCommentary` would be the wrong promise here and is now
+      // refused outright on such a provider. `injectLine` is the honest name for what a milestone needs.
       const append = progress.channel === 'commentary'
-        ? current.appendCommentary(progress.text, progress.id)
+        ? current.injectLine(progress.text, progress.id)
         : current.appendThinking(progress.text, progress.id)
       void append
         .then(() => { onAcknowledged(progress.channel, progress.id) })

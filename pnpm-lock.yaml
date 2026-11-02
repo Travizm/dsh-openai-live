@@ -126,6 +126,9 @@ importers:
       dsh-realtime-deepgram:
         specifier: workspace:^
         version: link:../realtime-deepgram
+      dsh-realtime-openai:
+        specifier: workspace:^
+        version: link:../realtime-openai
 
   packages/realtime-deepgram:
     dependencies:

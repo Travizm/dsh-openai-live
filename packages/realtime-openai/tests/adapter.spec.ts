@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer'
 import { describe, expect, it, vi } from 'vitest'
 import type { RealtimeSessionHandlers, RealtimeSessionStarted } from 'dsh-realtime'
 import { hasApiKey, OpenAiLiveAdapter, resolveApiKey } from '../src/adapter.ts'
+import { OPENAI_CAPABILITIES } from '../src/capabilities.ts'
 import { OpenAiLiveSession } from '../src/session.ts'
 import type {
   OpenAiLiveConfig,
@@ -157,8 +158,16 @@ describe('OpenAiLiveAdapter metadata', () => {
       id: 'openai-live',
       name: 'OpenAI Live',
       description: 'GPT-Live-1 full-duplex voice with client delegation',
+      capabilities: OPENAI_CAPABILITIES,
       configured: true,
     })
+  })
+
+  it('carries the declaration itself, not a copy that could drift from it', () => {
+    // Identity, because the failure this catches is silent: a spread or a structuredClone here would leave the
+    // route on a snapshot that stops tracking the constant, and every reader would keep getting yesterday's answer.
+    const adapter = new OpenAiLiveAdapter(config(), new FakeFactory())
+    expect(adapter.providerInfo('openai-live').capabilities).toBe(OPENAI_CAPABILITIES)
   })
 
   it('reports a route with no credential as unconfigured rather than failing to describe itself', () => {

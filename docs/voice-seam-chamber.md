@@ -110,6 +110,12 @@ Senge: the boundary is drawn one level too low, which is why every addition feel
 Quinn: without a conformance suite over a declared contract, "swappable" cannot be tested.
 Haggai: model and harness layers are conflated; the interface must state which it is speaking to.
 
+**Satisfied 2026-10-17.** `packages/realtime-conformance` runs one specification against two providers —
+Deepgram Voice Agent and GPT-Live-1 — with both subjects held to the same six invariants on the same fake-wire
+discipline. GPT-Live-1 passes all six; Deepgram passes all but `refusal-parity`, whose single divergence
+(`appAuthoredSpeech`, declared `false` while `appendCommentary` resolves) is tracked as issue #120. A failure
+specific to one provider, under one suite, is the property the word "swappable" was standing in for.
+
 ### C-2: Capability gaps must be declared and refused, never silently degraded — UNANIMOUS
 Senge: a deceptive interface is worse than a narrower one.
 Quinn: a silent no-op passes every coverage gate and is undetectable from outside.

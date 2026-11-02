@@ -117,6 +117,16 @@ importers:
         specifier: ^8.18.2
         version: 8.18.2
 
+  packages/realtime-conformance:
+    dependencies:
+      dsh-realtime:
+        specifier: workspace:^
+        version: link:../realtime
+    devDependencies:
+      dsh-realtime-deepgram:
+        specifier: workspace:^
+        version: link:../realtime-deepgram
+
   packages/realtime-deepgram:
     dependencies:
       '@deepseek-ai/schemastery':

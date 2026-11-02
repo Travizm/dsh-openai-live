@@ -1,0 +1,29 @@
+{
+  "name": "dsh-realtime-conformance",
+  "version": "0.1.0",
+  "private": true,
+  "description": "One suite, run against every registered adapter: holds each capability declaration against what the adapter actually does.",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "dsh-realtime": "workspace:^"
+  },
+  "devDependencies": {
+    "dsh-realtime-deepgram": "workspace:^"
+  }
+}

@@ -101,6 +101,12 @@ const CALL_BASED: readonly {
     },
   },
   {
+    capability: 'injectLine',
+    call: async wire => {
+      await wire.session.injectLine('conformance probe')
+    },
+  },
+  {
     capability: 'inputMute',
     call: async wire => {
       wire.session.muteInput()

@@ -122,6 +122,7 @@ function fakeSubject(options: {
   const capabilities = options.capabilities ?? {
     appendThinking: true,
     appAuthoredSpeech: true,
+    injectLine: true,
     functionCalls: false,
     usageReporting: false,
     transcriptDeltas: false,
@@ -148,6 +149,7 @@ function fakeSubject(options: {
     muteInput: () => (declared('inputMute') ? refuse() : undefined),
     unmuteInput: () => {},
     appendCommentary: async () => (declared('appAuthoredSpeech') ? refuse() : undefined),
+    injectLine: async () => (declared('injectLine') ? refuse() : undefined),
     appendThinking: async () => (declared('appendThinking') ? refuse() : undefined),
     appendInstructions: async () => {},
     close: async () => {},
@@ -182,17 +184,11 @@ function fakeSubject(options: {
 describe('conformance — Deepgram', () => {
   it('honours its declaration on every check it can exercise, except one it cannot yet', async () => {
     const failures = await runConformance(deepgramSubject())
-    // The finding, not a pass: `appAuthoredSpeech` is declared `false` while `appendCommentary` resolves.
-    // Under Deepgram that call sends `InjectAgentMessage`, so the agent says a line the application did not
-    // author — a silent degradation of the C-2 class, surfaced here rather than in a user's session. Disposing
-    // of it is a decision (refuse the call, or narrow the declaration), and it is deliberately NOT made in the
-    // commit that adds this suite.
-    expect(failures).toEqual([
-      {
-        check: 'refusal-parity',
-        detail: 'appAuthoredSpeech: declared false, but the adapter used it',
-      },
-    ])
+    // This run reported one divergence until issue #120: `appendCommentary` resolved while the declaration said
+    // the application cannot author speech — the C-2 silent degradation. The ruling was to split the capability,
+    // so the call now refuses and `injectLine` carries narration. The expectation changed because the *behaviour*
+    // changed; the assertion was not moved to make it pass.
+    expect(failures).toEqual([])
   })
 })
 
@@ -256,6 +252,7 @@ describe('conformance — the harness bites', () => {
         capabilities: {
           appendThinking: false,
           appAuthoredSpeech: true,
+          injectLine: true,
           functionCalls: false,
           usageReporting: false,
           transcriptDeltas: false,
@@ -308,6 +305,7 @@ describe('conformance — the harness bites', () => {
         capabilities: {
           appendThinking: true,
           appAuthoredSpeech: true,
+          injectLine: true,
           functionCalls: false,
           usageReporting: false,
           transcriptDeltas: false,
@@ -329,6 +327,7 @@ describe('conformance — the harness bites', () => {
         capabilities: {
           appendThinking: true,
           appAuthoredSpeech: true,
+          injectLine: true,
           functionCalls: false,
           usageReporting: false,
           transcriptDeltas: false,
@@ -347,6 +346,7 @@ describe('conformance — the harness bites', () => {
         capabilities: {
           appendThinking: true,
           appAuthoredSpeech: true,
+          injectLine: true,
           functionCalls: false,
           usageReporting: false,
           transcriptDeltas: false,
@@ -368,6 +368,7 @@ describe('conformance — the harness bites', () => {
         capabilities: {
           appendThinking: true,
           appAuthoredSpeech: true,
+          injectLine: true,
           functionCalls: false,
           usageReporting: false,
           transcriptDeltas: true,
@@ -386,6 +387,7 @@ describe('conformance — the harness bites', () => {
         capabilities: {
           appendThinking: true,
           appAuthoredSpeech: true,
+          injectLine: true,
           functionCalls: false,
           usageReporting: false,
           transcriptDeltas: false,

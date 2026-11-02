@@ -196,6 +196,10 @@ class FakeProvider extends RealtimeAdapter {
         provider.appends.push({ kind: 'commentary', text, delegationId })
         return Promise.resolve()
       },
+      injectLine(text: string, delegationId: string | undefined) {
+        provider.appends.push({ kind: 'commentary', text, delegationId })
+        return Promise.resolve()
+      },
       appendThinking(text: string, delegationId: string | undefined) {
         provider.appends.push({ kind: 'thinking', text, delegationId })
         return Promise.resolve()

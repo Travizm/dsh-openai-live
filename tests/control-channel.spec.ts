@@ -138,6 +138,7 @@ class FakeProvider extends RealtimeAdapter {
       muteInput(): void {},
       unmuteInput(): void {},
       appendCommentary: () => Promise.resolve(),
+      injectLine: () => Promise.resolve(),
       appendThinking: () => Promise.resolve(),
       appendInstructions: () => Promise.resolve(),
       close: () => {

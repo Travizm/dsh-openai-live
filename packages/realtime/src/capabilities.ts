@@ -28,6 +28,7 @@ export type PromptUpdateMode = 'replace' | 'append' | 'unknown'
 export const BOOLEAN_CAPABILITIES = [
   'appendThinking',
   'appAuthoredSpeech',
+  'injectLine',
   'functionCalls',
   'usageReporting',
   'transcriptDeltas',
@@ -43,6 +44,14 @@ export interface RealtimeCapabilities {
   readonly appendThinking: boolean
   /** The application can write the words the assistant speaks, rather than steering it. */
   readonly appAuthoredSpeech: boolean
+  /**
+   * The agent will say a line the application chose, in its own words.
+   *
+   * The weaker promise next to {@link appAuthoredSpeech}, and deliberately a separate one: a provider that
+   * cannot guarantee the wording can still be asked to speak, and a caller that needs its exact words must be
+   * able to tell the two apart rather than discover the difference in a transcript.
+   */
+  readonly injectLine: boolean
   /** The provider executes function calls in-band, so a tool result can enter its own loop. */
   readonly functionCalls: boolean
   /** The provider reports token or second usage during the session. */
@@ -64,7 +73,11 @@ export interface RealtimeCapabilities {
  * - `appendThinking: false` — the seam's append is file-context; Deepgram's mid-session lever is
  *   `InjectAgentMessage`, which speaks rather than thinks, and aborts the in-flight response when it does.
  * - `appAuthoredSpeech: false` — `InjectAgentMessage` makes the agent say a line, but the *agent* says it; the
- *   application does not author speech and cannot guarantee the wording survives the model.
+ *   application does not author speech and cannot guarantee the wording survives the model. **Resolved
+ *   2026-10-17 (issue #120):** the seam no longer leaves this as a note beside a method that resolves anyway.
+ *   `appendCommentary` now refuses here, and the capability that this provider *can* honour is `injectLine`.
+ * - `injectLine: true` — the agent says a line the application chose, in its own words. This is what narration
+ *   uses, and it is the honest name for what `InjectAgentMessage` does.
  * - `functionCalls: false` — A′ by design (D-PS-001): DSH is the only brain, so there is no `functions` array
  *   for the provider to call into.
  * - `usageReporting: false` — **probed, not assumed**: no usage-like event in 160–181 frames across runs.
@@ -81,6 +94,7 @@ export interface RealtimeCapabilities {
 export const DEEPGRAM_CAPABILITIES: RealtimeCapabilities = Object.freeze({
   appendThinking: false,
   appAuthoredSpeech: false,
+  injectLine: true,
   functionCalls: false,
   usageReporting: false,
   transcriptDeltas: false,

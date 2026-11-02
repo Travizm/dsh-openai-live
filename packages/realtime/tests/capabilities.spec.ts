@@ -16,6 +16,7 @@ const route = (capabilities?: RealtimeCapabilities): RealtimeProviderInfo =>
 const all = (over: Partial<RealtimeCapabilities> = {}): RealtimeCapabilities => ({
   appendThinking: true,
   appAuthoredSpeech: true,
+  injectLine: true,
   functionCalls: true,
   usageReporting: true,
   transcriptDeltas: true,
@@ -134,7 +135,8 @@ describe('auditCapabilities', () => {
 describe('the declarations themselves', () => {
   it('lists every boolean capability once, so an audit cannot silently skip one', () => {
     expect([...BOOLEAN_CAPABILITIES]).toEqual([
-      'appendThinking', 'appAuthoredSpeech', 'functionCalls', 'usageReporting', 'transcriptDeltas', 'inputMute',
+      'appendThinking', 'appAuthoredSpeech', 'injectLine', 'functionCalls', 'usageReporting', 'transcriptDeltas',
+      'inputMute',
     ])
     expect(new Set(BOOLEAN_CAPABILITIES).size).toBe(BOOLEAN_CAPABILITIES.length)
   })

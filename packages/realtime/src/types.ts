@@ -195,6 +195,21 @@ export interface RealtimeSession {
   appendCommentary(content: string, delegationId?: string): Promise<void>
 
   /**
+   * Ask the agent to **say this line now**, in its own voice and its own words.
+   *
+   * The honest counterpart to {@link appendCommentary}: that method promises the application authored the
+   * speech and its wording will be spoken, which a provider that owns its own model cannot guarantee. This one
+   * promises only that the agent says something recognisably this, which is what such a provider can actually
+   * do — so narration uses it, and `appendCommentary` refuses rather than degrade silently.
+   *
+   * Best-effort by contract, like a session-wide append: there is no delegation to acknowledge it, so it
+   * resolves on the write and the seam cannot say when it took effect.
+   * @param content - plain text, non-empty and within {@link MAX_APPEND_CHARS}.
+   * @param delegationId - omit for session-wide injection.
+   */
+  injectLine(content: string, delegationId?: string): Promise<void>
+
+  /**
    * Add context the model may use **without speaking it** — progress, facts, intermediate state.
    *
    * With no `delegationId` this resolves on the write and is best-effort, for the reason recorded on

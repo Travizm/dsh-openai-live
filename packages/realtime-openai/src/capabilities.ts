@@ -11,6 +11,8 @@
  * - `appAuthoredSpeech: true` — client delegation is exactly the mode in which the application writes the words
  *   the model speaks (ADR-001). The app is the author here, which is why this is `true` on this provider and
  *   `false` on Deepgram.
+ * - `injectLine: true` — a line the application chose is appended as commentary, which this provider then speaks.
+ *   The weaker promise is available too, so narration is portable across both routes.
  * - `functionCalls: false` — there is no function channel in client mode, and `response.item.create` is refused
  *   outright: *"requires Responses delegation"*. That family is a separate capability, never switched on here.
  * - `usageReporting: true` — `session.usage.updated` arrives every ~15 s with cumulative audio-seconds (measured
@@ -28,6 +30,7 @@ import type { RealtimeCapabilities } from 'dsh-realtime'
 export const OPENAI_CAPABILITIES: RealtimeCapabilities = Object.freeze({
   appendThinking: true,
   appAuthoredSpeech: true,
+  injectLine: true,
   functionCalls: false,
   usageReporting: true,
   transcriptDeltas: true,

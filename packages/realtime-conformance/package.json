@@ -24,6 +24,7 @@
     "dsh-realtime": "workspace:^"
   },
   "devDependencies": {
-    "dsh-realtime-deepgram": "workspace:^"
+    "dsh-realtime-deepgram": "workspace:^",
+    "dsh-realtime-openai": "workspace:^"
   }
 }

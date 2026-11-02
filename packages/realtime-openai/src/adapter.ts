@@ -6,6 +6,7 @@
 
 import { RealtimeAdapter, RealtimeError } from 'dsh-realtime'
 import type { Journal, RealtimeModelInfo, RealtimeProviderInfo, RealtimeSession } from 'dsh-realtime'
+import { OPENAI_CAPABILITIES } from './capabilities.ts'
 import { OpenAiLiveSession } from './session.ts'
 import { API_KEYS_URL, toStarted, toProviderError } from './translate.ts'
 import { isKnownServerEvent, parseServerEvent, sessionStart } from './wire.ts'
@@ -89,6 +90,10 @@ export class OpenAiLiveAdapter extends RealtimeAdapter {
       id: provider,
       name: PROVIDER_NAME,
       description: 'GPT-Live-1 full-duplex voice with client delegation',
+      // The declaration travels with the route so a caller can read what this provider cannot do *before*
+      // opening anything. It was deferred until an audit of this adapter's own methods could support each
+      // value; a guessed matrix is worse than none, because downstream code trusts it.
+      capabilities: OPENAI_CAPABILITIES,
       // Whether, not which: the seam is readable by every plugin in the bundle, and a reader only ever needs
       // to tell "nothing is configured" — the failure with no other symptom — from everything else.
       configured: hasApiKey(this.config),

@@ -12,8 +12,9 @@ evidence: scripts/deepgram-probe.mjs, runs 2026-10-17
 # P1 — Deepgram wire probe results
 
 D-PS-005 said: run the probe before any adapter work, because four load-bearing assumptions were **documented
-only** (❓). **Three hold. One is unresolved — and it took four attempts, each invalidated by its own control,
-to establish that a client cannot settle it behaviourally at all.**
+only** (❓). **Three hold. One was contradicted — the update appends rather than replaces — and settling it
+took four attempts: three behavioural tests each invalidated by its own control, then one that asked the
+provider directly (P1c).**
 
 Probed against `wss://agent.deepgram.com/v1/agent/converse` with a live key: Flux (`flux-general-en`, v2) for
 listening, `open_ai / gpt-4o-mini` for thinking, Aura-2 for speaking.

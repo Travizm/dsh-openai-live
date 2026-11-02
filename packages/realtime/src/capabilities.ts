@@ -11,10 +11,12 @@
  *
  * 1. **A `false` must throw.** A capability declared unavailable and then called is the exact failure this
  *    declaration prevents, so the check runs at the call site, not in a test nobody runs.
- * 2. **An unknown must be sayable.** `promptUpdate` is tri-state because P1 left replace-vs-append genuinely
- *    unresolved after four confounded tests (`docs/p1-wire-probe-results.md`). Forcing it into a boolean would
- *    have required guessing, and a guess inside a capability declaration is worse than an admitted unknown —
- *    it is a guess that downstream code will trust.
+ * 2. **An unknown must be sayable.** `promptUpdate` is tri-state because an adapter may not have established
+ *    replace-vs-append for *its* provider: P1 needed three behavioural tests — each invalidated by its own
+ *    control — before P1c settled Deepgram by reading the provider's own outbound request
+ *    (`docs/p1-wire-probe-results.md`). Forcing the question into a boolean would require guessing for the next
+ *    provider, and a guess inside a capability declaration is worse than an admitted unknown — it is a guess
+ *    that downstream code will trust.
  */
 import { REALTIME_ERROR_CODES, RealtimeError } from './error.ts'
 import type { RealtimeProviderInfo } from './types.ts'
@@ -163,6 +165,9 @@ export function auditCapabilities(
     }
   }
   const unknowns: string[] = []
-  if (declared.promptUpdate === 'unknown') unknowns.push('promptUpdate: not established (docs contradict; P1 unresolved)')
+  if (declared.promptUpdate === 'unknown')
+    unknowns.push(
+      'promptUpdate: not established for this adapter (P1c settled append for Deepgram from the provider request; this declaration is unverified)',
+    )
   return { honoured: divergences.length === 0, divergences, unknowns }
 }
